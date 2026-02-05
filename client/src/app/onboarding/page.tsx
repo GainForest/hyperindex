@@ -3,20 +3,8 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import {
-  Rocket,
-  Globe,
-  Upload,
-  UserPlus,
-  ArrowRight,
-  ArrowLeft,
-  Check,
-  Loader2,
-  FileText,
-} from "lucide-react";
 import { graphqlClient } from "@/lib/graphql/client";
 import { UPDATE_SETTINGS, UPLOAD_LEXICONS, ADD_ADMIN } from "@/lib/graphql/mutations";
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Alert } from "@/components/ui/Alert";
@@ -28,11 +16,11 @@ interface OnboardingState {
 }
 
 const STEPS = [
-  { id: "welcome", title: "Welcome", icon: Rocket },
-  { id: "domain", title: "Domain", icon: Globe },
-  { id: "admin", title: "Admin", icon: UserPlus },
-  { id: "lexicons", title: "Lexicons", icon: FileText },
-  { id: "complete", title: "Complete", icon: Check },
+  { id: "welcome", title: "Welcome" },
+  { id: "domain", title: "Domain" },
+  { id: "admin", title: "Admin" },
+  { id: "lexicons", title: "Lexicons" },
+  { id: "complete", title: "Complete" },
 ];
 
 export default function OnboardingPage() {
@@ -71,9 +59,7 @@ export default function OnboardingPage() {
   const handleNext = async () => {
     setError(null);
 
-    // Validate and save on step transitions
     if (currentStep === 1) {
-      // Domain step
       if (!state.domainAuthority.trim()) {
         setError("Please enter a domain authority");
         return;
@@ -86,7 +72,6 @@ export default function OnboardingPage() {
         return;
       }
     } else if (currentStep === 2) {
-      // Admin step
       if (!state.adminDid.trim()) {
         setError("Please enter an admin DID");
         return;
@@ -139,12 +124,11 @@ export default function OnboardingPage() {
     uploadLexiconsMutation.isPending;
 
   return (
-    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-6">
-      <div className="w-full max-w-2xl">
+    <div className="min-h-screen bg-white flex items-center justify-center p-6">
+      <div className="w-full max-w-lg">
         {/* Progress Steps */}
-        <div className="flex items-center justify-center mb-8">
+        <div className="flex items-center justify-center mb-10">
           {STEPS.map((step, index) => {
-            const StepIcon = step.icon;
             const isActive = index === currentStep;
             const isComplete = index < currentStep;
 
@@ -152,23 +136,25 @@ export default function OnboardingPage() {
               <div key={step.id} className="flex items-center">
                 <div
                   className={`
-                    flex items-center justify-center w-10 h-10 rounded-full
+                    flex items-center justify-center w-8 h-8 rounded-full text-sm font-medium
                     transition-colors duration-200
-                    ${isActive ? "bg-purple-600 text-white" : ""}
-                    ${isComplete ? "bg-green-600 text-white" : ""}
-                    ${!isActive && !isComplete ? "bg-gray-800 text-gray-500" : ""}
+                    ${isActive ? "bg-emerald-600 text-white" : ""}
+                    ${isComplete ? "bg-emerald-100 text-emerald-600" : ""}
+                    ${!isActive && !isComplete ? "bg-zinc-100 text-zinc-400" : ""}
                   `}
                 >
                   {isComplete ? (
-                    <Check className="h-5 w-5" />
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+                    </svg>
                   ) : (
-                    <StepIcon className="h-5 w-5" />
+                    index + 1
                   )}
                 </div>
                 {index < STEPS.length - 1 && (
                   <div
                     className={`w-12 h-0.5 mx-2 ${
-                      isComplete ? "bg-green-600" : "bg-gray-800"
+                      isComplete ? "bg-emerald-200" : "bg-zinc-100"
                     }`}
                   />
                 )}
@@ -178,9 +164,9 @@ export default function OnboardingPage() {
         </div>
 
         {/* Step Content */}
-        <Card className="border-gray-800">
+        <div className="rounded-xl border border-zinc-200/60 bg-white shadow-sm">
           {error && (
-            <div className="p-4 border-b border-gray-800">
+            <div className="p-4 border-b border-zinc-100">
               <Alert variant="error" onClose={() => setError(null)}>
                 {error}
               </Alert>
@@ -189,149 +175,149 @@ export default function OnboardingPage() {
 
           {/* Welcome Step */}
           {currentStep === 0 && (
-            <>
-              <CardHeader className="text-center">
-                <div className="mx-auto w-16 h-16 bg-purple-600/20 rounded-full flex items-center justify-center mb-4">
-                  <Rocket className="h-8 w-8 text-purple-400" />
-                </div>
-                <CardTitle className="text-2xl">Welcome to Hypergoat</CardTitle>
-                <CardDescription className="text-base mt-2">
-                  Let's set up your AT Protocol AppView server. This wizard will guide you
-                  through the initial configuration.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="text-center pb-8">
-                <div className="space-y-3 text-gray-400 mb-6">
-                  <p>You'll configure:</p>
-                  <ul className="space-y-2">
-                    <li className="flex items-center justify-center gap-2">
-                      <Globe className="h-4 w-4 text-purple-400" />
-                      Your domain authority
-                    </li>
-                    <li className="flex items-center justify-center gap-2">
-                      <UserPlus className="h-4 w-4 text-purple-400" />
-                      An admin account
-                    </li>
-                    <li className="flex items-center justify-center gap-2">
-                      <FileText className="h-4 w-4 text-purple-400" />
-                      Your lexicon definitions
-                    </li>
-                  </ul>
-                </div>
-              </CardContent>
-            </>
+            <div className="p-8 text-center">
+              <div className="mx-auto w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mb-6">
+                <svg className="h-8 w-8 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 0 1-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 0 0 6.16-12.12A14.98 14.98 0 0 0 9.631 8.41m5.96 5.96a14.926 14.926 0 0 1-5.841 2.58m-.119-8.54a6 6 0 0 0-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 0 0-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 0 1-2.448-2.448 14.9 14.9 0 0 1 .06-.312m-2.24 2.39a4.493 4.493 0 0 0-1.757 4.306 4.493 4.493 0 0 0 4.306-1.758M16.5 9a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z" />
+                </svg>
+              </div>
+              <h2 className="font-[family-name:var(--font-garamond)] text-2xl text-zinc-900 mb-2">
+                Welcome to Hypergoat
+              </h2>
+              <p className="text-zinc-500 mb-8">
+                Let&apos;s set up your AT Protocol AppView server. This wizard will guide you
+                through the initial configuration.
+              </p>
+              <div className="space-y-3 text-sm text-zinc-500">
+                <p>You&apos;ll configure:</p>
+                <ul className="space-y-2">
+                  <li className="flex items-center justify-center gap-2">
+                    <svg className="h-4 w-4 text-emerald-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
+                    </svg>
+                    Your domain authority
+                  </li>
+                  <li className="flex items-center justify-center gap-2">
+                    <svg className="h-4 w-4 text-emerald-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 9.374 21c-2.331 0-4.512-.645-6.374-1.766Z" />
+                    </svg>
+                    An admin account
+                  </li>
+                  <li className="flex items-center justify-center gap-2">
+                    <svg className="h-4 w-4 text-emerald-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                    </svg>
+                    Your lexicon definitions
+                  </li>
+                </ul>
+              </div>
+            </div>
           )}
 
           {/* Domain Step */}
           {currentStep === 1 && (
-            <>
-              <CardHeader>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-purple-600/20 rounded-full flex items-center justify-center">
-                    <Globe className="h-5 w-5 text-purple-400" />
-                  </div>
-                  <div>
-                    <CardTitle>Domain Authority</CardTitle>
-                    <CardDescription>
-                      The domain where your AppView will be hosted
-                    </CardDescription>
-                  </div>
+            <div className="p-8">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 bg-emerald-50 rounded-full flex items-center justify-center">
+                  <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
+                  </svg>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                  <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
                     Domain Authority
-                  </label>
-                  <Input
-                    type="text"
-                    placeholder="appview.example.com"
-                    value={state.domainAuthority}
-                    onChange={(e) =>
-                      setState((s) => ({ ...s, domainAuthority: e.target.value }))
-                    }
-                  />
-                  <p className="text-xs text-gray-500 mt-2">
-                    This should be the public domain where your AppView is accessible.
-                    It's used for OAuth and federation.
+                  </h3>
+                  <p className="text-sm text-zinc-400">
+                    The domain where your AppView will be hosted
                   </p>
                 </div>
-              </CardContent>
-            </>
+              </div>
+              <div className="space-y-4">
+                <Input
+                  label="Domain Authority"
+                  placeholder="appview.example.com"
+                  value={state.domainAuthority}
+                  onChange={(e) =>
+                    setState((s) => ({ ...s, domainAuthority: e.target.value }))
+                  }
+                  hint="This should be the public domain where your AppView is accessible. It's used for OAuth and federation."
+                />
+              </div>
+            </div>
           )}
 
           {/* Admin Step */}
           {currentStep === 2 && (
-            <>
-              <CardHeader>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-purple-600/20 rounded-full flex items-center justify-center">
-                    <UserPlus className="h-5 w-5 text-purple-400" />
-                  </div>
-                  <div>
-                    <CardTitle>Admin Account</CardTitle>
-                    <CardDescription>
-                      Add the first administrator for your AppView
-                    </CardDescription>
-                  </div>
+            <div className="p-8">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 bg-emerald-50 rounded-full flex items-center justify-center">
+                  <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 9.374 21c-2.331 0-4.512-.645-6.374-1.766Z" />
+                  </svg>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                    Admin DID
-                  </label>
-                  <Input
-                    type="text"
-                    placeholder="did:plc:..."
-                    value={state.adminDid}
-                    onChange={(e) =>
-                      setState((s) => ({ ...s, adminDid: e.target.value }))
-                    }
-                    className="font-mono"
-                  />
-                  <p className="text-xs text-gray-500 mt-2">
-                    Enter your AT Protocol DID. This account will have full admin access.
-                    You can find your DID in your Bluesky profile settings.
+                  <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+                    Admin Account
+                  </h3>
+                  <p className="text-sm text-zinc-400">
+                    Add the first administrator for your AppView
                   </p>
                 </div>
-              </CardContent>
-            </>
+              </div>
+              <div className="space-y-4">
+                <Input
+                  label="Admin DID"
+                  placeholder="did:plc:..."
+                  value={state.adminDid}
+                  onChange={(e) =>
+                    setState((s) => ({ ...s, adminDid: e.target.value }))
+                  }
+                  hint="Enter your AT Protocol DID. This account will have full admin access. You can find your DID in your Bluesky profile settings."
+                  className="font-mono"
+                />
+              </div>
+            </div>
           )}
 
           {/* Lexicons Step */}
           {currentStep === 3 && (
-            <>
-              <CardHeader>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-purple-600/20 rounded-full flex items-center justify-center">
-                    <FileText className="h-5 w-5 text-purple-400" />
-                  </div>
-                  <div>
-                    <CardTitle>Lexicons</CardTitle>
-                    <CardDescription>
-                      Upload your AT Protocol lexicon definitions
-                    </CardDescription>
-                  </div>
+            <div className="p-8">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 bg-emerald-50 rounded-full flex items-center justify-center">
+                  <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                  </svg>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
+                <div>
+                  <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+                    Lexicons
+                  </h3>
+                  <p className="text-sm text-zinc-400">
+                    Upload your AT Protocol lexicon definitions
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-4">
                 {state.lexiconsUploaded ? (
-                  <div className="flex items-center gap-3 p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
-                    <Check className="h-5 w-5 text-green-400" />
+                  <div className="flex items-center gap-3 p-4 bg-emerald-50/50 border border-emerald-200/60 rounded-lg">
+                    <svg className="h-5 w-5 text-emerald-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                    </svg>
                     <div>
-                      <div className="font-medium text-green-400">
+                      <div className="font-medium text-emerald-700">
                         Lexicons uploaded successfully
                       </div>
-                      <div className="text-sm text-gray-400">
+                      <div className="text-sm text-emerald-600/70">
                         You can upload more lexicons later from the Lexicons page
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="border-2 border-dashed border-gray-700 rounded-lg p-8 text-center">
-                    <Upload className="h-10 w-10 text-gray-500 mx-auto mb-4" />
-                    <p className="text-gray-400 mb-4">
+                  <div className="border-2 border-dashed border-zinc-200 rounded-lg p-8 text-center">
+                    <svg className="h-10 w-10 text-zinc-300 mx-auto mb-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                    </svg>
+                    <p className="text-zinc-500 mb-4">
                       Upload a ZIP file containing your lexicon JSON files
                     </p>
                     <input
@@ -344,106 +330,97 @@ export default function OnboardingPage() {
                     <label htmlFor="lexicon-upload">
                       <Button
                         as="span"
+                        variant="primary"
                         disabled={uploadLexiconsMutation.isPending}
+                        loading={uploadLexiconsMutation.isPending}
                         className="cursor-pointer"
                       >
-                        {uploadLexiconsMutation.isPending ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Uploading...
-                          </>
-                        ) : (
-                          <>
-                            <Upload className="h-4 w-4 mr-2" />
-                            Choose File
-                          </>
-                        )}
+                        {uploadLexiconsMutation.isPending ? "Uploading..." : "Choose File"}
                       </Button>
                     </label>
                   </div>
                 )}
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-zinc-400">
                   You can skip this step and upload lexicons later. Your AppView will only
                   index records matching your installed lexicons.
                 </p>
-              </CardContent>
-            </>
+              </div>
+            </div>
           )}
 
           {/* Complete Step */}
           {currentStep === 4 && (
-            <>
-              <CardHeader className="text-center">
-                <div className="mx-auto w-16 h-16 bg-green-600/20 rounded-full flex items-center justify-center mb-4">
-                  <Check className="h-8 w-8 text-green-400" />
-                </div>
-                <CardTitle className="text-2xl">Setup Complete!</CardTitle>
-                <CardDescription className="text-base mt-2">
-                  Your Hypergoat AppView is ready to go.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="text-center pb-8">
-                <div className="bg-gray-900 rounded-lg p-4 mb-6 text-left">
-                  <h4 className="text-sm font-medium text-gray-300 mb-3">Configuration Summary</h4>
-                  <dl className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <dt className="text-gray-500">Domain:</dt>
-                      <dd className="font-mono text-white">{state.domainAuthority || "Not set"}</dd>
-                    </div>
-                    <div className="flex justify-between">
-                      <dt className="text-gray-500">Admin:</dt>
-                      <dd className="font-mono text-white truncate max-w-[200px]">
-                        {state.adminDid || "Not set"}
-                      </dd>
-                    </div>
-                    <div className="flex justify-between">
-                      <dt className="text-gray-500">Lexicons:</dt>
-                      <dd className="text-white">
-                        {state.lexiconsUploaded ? "Uploaded" : "Skipped"}
-                      </dd>
-                    </div>
-                  </dl>
-                </div>
-                <p className="text-gray-400 text-sm">
-                  You can modify these settings anytime from the Settings page.
-                </p>
-              </CardContent>
-            </>
+            <div className="p-8 text-center">
+              <div className="mx-auto w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mb-6">
+                <svg className="h-8 w-8 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                </svg>
+              </div>
+              <h2 className="font-[family-name:var(--font-garamond)] text-2xl text-zinc-900 mb-2">
+                Setup Complete!
+              </h2>
+              <p className="text-zinc-500 mb-8">
+                Your Hypergoat AppView is ready to go.
+              </p>
+              <div className="bg-zinc-50 rounded-lg p-4 mb-6 text-left">
+                <h4 className="text-sm font-medium text-zinc-600 mb-3">Configuration Summary</h4>
+                <dl className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <dt className="text-zinc-400">Domain:</dt>
+                    <dd className="font-mono text-zinc-800">{state.domainAuthority || "Not set"}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-zinc-400">Admin:</dt>
+                    <dd className="font-mono text-zinc-800 truncate max-w-[200px]">
+                      {state.adminDid || "Not set"}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-zinc-400">Lexicons:</dt>
+                    <dd className="text-zinc-800">
+                      {state.lexiconsUploaded ? "Uploaded" : "Skipped"}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+              <p className="text-zinc-400 text-sm">
+                You can modify these settings anytime from the Settings page.
+              </p>
+            </div>
           )}
 
           {/* Navigation */}
-          <div className="flex items-center justify-between p-6 border-t border-gray-800">
+          <div className="flex items-center justify-between p-6 border-t border-zinc-100">
             <Button
-              variant="secondary"
+              variant="outline"
               onClick={handleBack}
               disabled={currentStep === 0 || isLoading}
             >
-              <ArrowLeft className="h-4 w-4 mr-2" />
+              <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+              </svg>
               Back
             </Button>
 
             {currentStep === STEPS.length - 1 ? (
-              <Button onClick={handleComplete}>
+              <Button variant="primary" onClick={handleComplete}>
                 Go to Dashboard
-                <ArrowRight className="h-4 w-4 ml-2" />
+                <svg className="h-4 w-4 ml-2" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+                </svg>
               </Button>
             ) : (
-              <Button onClick={handleNext} disabled={isLoading}>
-                {isLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    {currentStep === 3 ? "Finish" : "Next"}
-                    <ArrowRight className="h-4 w-4 ml-2" />
-                  </>
+              <Button variant="primary" onClick={handleNext} disabled={isLoading} loading={isLoading}>
+                {isLoading ? "Saving..." : currentStep === 3 ? "Finish" : "Next"}
+                {!isLoading && (
+                  <svg className="h-4 w-4 ml-2" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+                  </svg>
                 )}
               </Button>
             )}
           </div>
-        </Card>
+        </div>
       </div>
     </div>
   );

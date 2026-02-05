@@ -120,3 +120,21 @@ export const REMOVE_ADMIN = gql`
     removeAdmin(did: $did)
   }
 `;
+
+// Register Lexicon (resolves via DNS)
+export const REGISTER_LEXICON = gql`
+  mutation RegisterLexicon($nsid: String!) {
+    registerLexicon(nsid: $nsid) {
+      id
+      json
+      createdAt
+    }
+  }
+`;
+
+// Delete Lexicon
+export const DELETE_LEXICON = gql`
+  mutation DeleteLexicon($nsid: String!) {
+    deleteLexicon(nsid: $nsid)
+  }
+`;

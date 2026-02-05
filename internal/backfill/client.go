@@ -6,9 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+
+	"github.com/bluesky-social/indigo/repo"
+	"github.com/fxamacker/cbor/v2"
+	"github.com/hashicorp/go-retryablehttp"
+	"github.com/ipfs/go-cid"
 )
 
 const (
@@ -18,8 +25,11 @@ const (
 	// DefaultPLCURL is the default PLC directory.
 	DefaultPLCURL = "https://plc.directory"
 
-	// DefaultTimeout is the default HTTP timeout.
-	DefaultTimeout = 30 * time.Second
+	// DefaultTimeout is the default HTTP timeout for individual requests.
+	DefaultTimeout = 60 * time.Second
+
+	// DefaultRepoTimeout is the timeout for fetching large repos.
+	DefaultRepoTimeout = 120 * time.Second
 )
 
 // Client handles HTTP requests to AT Protocol services.
@@ -29,8 +39,92 @@ type Client struct {
 	plcURL     string
 }
 
-// NewClient creates a new backfill client.
-func NewClient(relayURL, plcURL string) *Client {
+// newTransport creates a connection-pooling HTTP transport with dynamic limits.
+// The limits are scaled based on maxConcurrent to optimize for the workload.
+func newTransport(maxConcurrent int) *http.Transport {
+	// Scale pool limits based on max concurrent requests
+	maxIdle := maxConcurrent * 2
+	if maxIdle < 10 {
+		maxIdle = 10
+	}
+	if maxIdle > 200 {
+		maxIdle = 200
+	}
+
+	maxPerHost := maxConcurrent / 5
+	if maxPerHost < 2 {
+		maxPerHost = 2
+	}
+	if maxPerHost > 20 {
+		maxPerHost = 20
+	}
+
+	maxConns := maxConcurrent / 3
+	if maxConns < 4 {
+		maxConns = 4
+	}
+	if maxConns > 30 {
+		maxConns = 30
+	}
+
+	return &http.Transport{
+		MaxIdleConns:        maxIdle,
+		MaxIdleConnsPerHost: maxPerHost,
+		MaxConnsPerHost:     maxConns,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+		ForceAttemptHTTP2:   true,
+	}
+}
+
+// defaultTransport is used when no maxConcurrent is specified.
+var defaultTransport = newTransport(50)
+
+// retryPolicy is a custom retry policy that only retries on specific status codes:
+// - 429 (Too Many Requests) - rate limiting
+// - 503 (Service Unavailable) - temporary outage
+// - 504 (Gateway Timeout) - upstream timeout
+func retryPolicy(ctx context.Context, resp *http.Response, err error) (bool, error) {
+	// Don't retry on context cancellation
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+
+	// Retry on connection errors
+	if err != nil {
+		return true, nil
+	}
+
+	// Only retry on specific status codes
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests, // 429
+		http.StatusServiceUnavailable, // 503
+		http.StatusGatewayTimeout:     // 504
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// leveledLogger adapts slog to retryablehttp's LeveledLogger interface.
+type leveledLogger struct{}
+
+func (l leveledLogger) Error(msg string, keysAndValues ...interface{}) {
+	slog.Error("[backfill/http] "+msg, keysAndValues...)
+}
+func (l leveledLogger) Info(msg string, keysAndValues ...interface{}) {
+	slog.Info("[backfill/http] "+msg, keysAndValues...)
+}
+func (l leveledLogger) Debug(msg string, keysAndValues ...interface{}) {
+	slog.Debug("[backfill/http] "+msg, keysAndValues...)
+}
+func (l leveledLogger) Warn(msg string, keysAndValues ...interface{}) {
+	slog.Warn("[backfill/http] "+msg, keysAndValues...)
+}
+
+// NewClient creates a new backfill client with connection pooling and retry support.
+// The maxConcurrent parameter controls HTTP connection pool sizing (0 uses default of 50).
+func NewClient(relayURL, plcURL string, maxConcurrent ...int) *Client {
 	if relayURL == "" {
 		relayURL = DefaultRelayURL
 	}
@@ -38,12 +132,28 @@ func NewClient(relayURL, plcURL string) *Client {
 		plcURL = DefaultPLCURL
 	}
 
+	// Use provided maxConcurrent or default
+	transport := defaultTransport
+	if len(maxConcurrent) > 0 && maxConcurrent[0] > 0 {
+		transport = newTransport(maxConcurrent[0])
+	}
+
+	// Create retryable client with exponential backoff
+	retryClient := retryablehttp.NewClient()
+	retryClient.RetryMax = 3
+	retryClient.RetryWaitMin = 100 * time.Millisecond
+	retryClient.RetryWaitMax = 2 * time.Second
+	retryClient.CheckRetry = retryPolicy
+	retryClient.Logger = leveledLogger{}
+	retryClient.HTTPClient = &http.Client{
+		Timeout:   DefaultTimeout,
+		Transport: transport,
+	}
+
 	return &Client{
-		httpClient: &http.Client{
-			Timeout: DefaultTimeout,
-		},
-		relayURL: relayURL,
-		plcURL:   plcURL,
+		httpClient: retryClient.StandardClient(),
+		relayURL:   relayURL,
+		plcURL:     plcURL,
 	}
 }
 
@@ -270,4 +380,136 @@ func (c *Client) listRecordsPage(ctx context.Context, pdsURL, repo, collection, 
 	}
 
 	return result.Records, result.Cursor, nil
+}
+
+// CARRecord represents a record extracted from a CAR file.
+type CARRecord struct {
+	URI        string
+	CID        string
+	Collection string
+	RKey       string
+	Value      []byte // CBOR bytes, will be converted to JSON
+}
+
+// GetRepo fetches an entire repo as a CAR file and extracts records.
+// This is much more efficient than calling listRecords per collection.
+// Uses a longer timeout (DefaultRepoTimeout) for large repos.
+func (c *Client) GetRepo(ctx context.Context, pdsURL, did string, collections []string) ([]CARRecord, error) {
+	// Use longer timeout for repo fetches (large repos can take a while)
+	ctx, cancel := context.WithTimeout(ctx, DefaultRepoTimeout)
+	defer cancel()
+
+	// Build collection filter set
+	collectionSet := make(map[string]bool)
+	for _, col := range collections {
+		collectionSet[col] = true
+	}
+
+	// Fetch CAR file
+	u := pdsURL + "/xrpc/com.atproto.sync.getRepo?did=" + url.QueryEscape(did)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Read the CAR file using indigo's repo package
+	r, err := repo.ReadRepoFromCar(ctx, resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse CAR: %w", err)
+	}
+
+	// Extract records from the repo
+	var records []CARRecord
+
+	err = r.ForEach(ctx, "", func(path string, recordCid cid.Cid) error {
+		// Path format: "collection/rkey"
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) != 2 {
+			return nil // Skip invalid paths
+		}
+
+		collection := parts[0]
+		rkey := parts[1]
+
+		// Filter by target collections
+		if len(collectionSet) > 0 && !collectionSet[collection] {
+			return nil // Skip collections we don't care about
+		}
+
+		// Get record bytes
+		recCid, recordBytes, err := r.GetRecordBytes(ctx, path)
+		if err != nil {
+			return nil // Skip records we can't read
+		}
+		if recordBytes == nil {
+			return nil
+		}
+
+		records = append(records, CARRecord{
+			URI:        "at://" + did + "/" + collection + "/" + rkey,
+			CID:        recCid.String(),
+			Collection: collection,
+			RKey:       rkey,
+			Value:      *recordBytes,
+		})
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to iterate repo: %w", err)
+	}
+
+	return records, nil
+}
+
+// CBORToJSON converts CBOR bytes to JSON string.
+func CBORToJSON(data []byte) (string, error) {
+	// Decode CBOR to generic interface
+	var v interface{}
+	if err := cbor.Unmarshal(data, &v); err != nil {
+		return "", fmt.Errorf("failed to decode CBOR: %w", err)
+	}
+
+	// Convert to JSON
+	jsonBytes, err := json.Marshal(convertCBORTypes(v))
+	if err != nil {
+		return "", fmt.Errorf("failed to encode JSON: %w", err)
+	}
+
+	return string(jsonBytes), nil
+}
+
+// convertCBORTypes converts CBOR-specific types to JSON-compatible types.
+func convertCBORTypes(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[interface{}]interface{}:
+		// Convert to map[string]interface{}
+		result := make(map[string]interface{})
+		for k, v := range val {
+			keyStr := fmt.Sprintf("%v", k)
+			result[keyStr] = convertCBORTypes(v)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(val))
+		for i, v := range val {
+			result[i] = convertCBORTypes(v)
+		}
+		return result
+	default:
+		return val
+	}
 }

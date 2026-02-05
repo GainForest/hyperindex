@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/GainForest/hypergoat/internal/database"
@@ -35,14 +36,14 @@ func (r *ActorsRepository) Upsert(ctx context.Context, did, handle string) error
 	var sqlStr string
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
-		sqlStr = fmt.Sprintf(`INSERT INTO actor (did, handle)
-			VALUES (%s, %s)
+		sqlStr = fmt.Sprintf(`INSERT INTO actor (did, handle, indexed_at)
+			VALUES (%s, %s, NOW())
 			ON CONFLICT(did) DO UPDATE SET
 				handle = EXCLUDED.handle,
 				indexed_at = NOW()`, p1, p2)
 	default:
-		sqlStr = fmt.Sprintf(`INSERT INTO actor (did, handle)
-			VALUES (%s, %s)
+		sqlStr = fmt.Sprintf(`INSERT INTO actor (did, handle, indexed_at)
+			VALUES (%s, %s, datetime('now'))
 			ON CONFLICT(did) DO UPDATE SET
 				handle = excluded.handle,
 				indexed_at = datetime('now')`, p1, p2)
@@ -52,6 +53,81 @@ func (r *ActorsRepository) Upsert(ctx context.Context, did, handle string) error
 		database.Text(did),
 		database.Text(handle),
 	})
+	return err
+}
+
+// ActorData holds DID and Handle for batch operations.
+type ActorData struct {
+	DID    string
+	Handle string
+}
+
+// BatchUpsert inserts or updates multiple actors efficiently.
+func (r *ActorsRepository) BatchUpsert(ctx context.Context, actors []ActorData) error {
+	if len(actors) == 0 {
+		return nil
+	}
+
+	// Process in batches of 100 (2 params per actor)
+	batchSize := 100
+	for i := 0; i < len(actors); i += batchSize {
+		end := i + batchSize
+		if end > len(actors) {
+			end = len(actors)
+		}
+		batch := actors[i:end]
+
+		if err := r.batchUpsertChunk(ctx, batch); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *ActorsRepository) batchUpsertChunk(ctx context.Context, actors []ActorData) error {
+	// Build value placeholders
+	var valueSets []string
+	var params []database.Value
+
+	for i, actor := range actors {
+		base := i * 2
+		var valueSet string
+
+		if r.db.Dialect() == database.PostgreSQL {
+			valueSet = fmt.Sprintf("(%s, %s, NOW())",
+				r.db.Placeholder(base+1),
+				r.db.Placeholder(base+2))
+		} else {
+			valueSet = fmt.Sprintf("(%s, %s, datetime('now'))",
+				r.db.Placeholder(base+1),
+				r.db.Placeholder(base+2))
+		}
+		valueSets = append(valueSets, valueSet)
+
+		params = append(params,
+			database.Text(actor.DID),
+			database.Text(actor.Handle),
+		)
+	}
+
+	var sqlStr string
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		sqlStr = fmt.Sprintf(`INSERT INTO actor (did, handle, indexed_at)
+			VALUES %s
+			ON CONFLICT(did) DO UPDATE SET
+				handle = EXCLUDED.handle,
+				indexed_at = NOW()`, strings.Join(valueSets, ", "))
+	default:
+		sqlStr = fmt.Sprintf(`INSERT INTO actor (did, handle, indexed_at)
+			VALUES %s
+			ON CONFLICT(did) DO UPDATE SET
+				handle = excluded.handle,
+				indexed_at = datetime('now')`, strings.Join(valueSets, ", "))
+	}
+
+	_, err := r.db.Exec(ctx, sqlStr, params)
 	return err
 }
 

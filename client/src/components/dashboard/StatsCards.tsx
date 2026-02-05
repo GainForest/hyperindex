@@ -1,8 +1,6 @@
 "use client";
 
-import { Card, CardContent } from "@/components/ui";
 import { formatNumber } from "@/lib/utils";
-import { Database, Users, FileJson } from "lucide-react";
 
 interface StatsCardsProps {
   recordCount: number;
@@ -21,50 +19,41 @@ export function StatsCards({
     {
       name: "Records",
       value: recordCount,
-      icon: Database,
-      color: "text-blue-600 dark:text-blue-400",
-      bg: "bg-blue-100 dark:bg-blue-900/30",
+      color: "text-emerald-600",
+      bg: "bg-emerald-50",
     },
     {
       name: "Actors",
       value: actorCount,
-      icon: Users,
-      color: "text-green-600 dark:text-green-400",
-      bg: "bg-green-100 dark:bg-green-900/30",
+      color: "text-blue-600",
+      bg: "bg-blue-50",
     },
     {
       name: "Lexicons",
       value: lexiconCount,
-      icon: FileJson,
-      color: "text-purple-600 dark:text-purple-400",
-      bg: "bg-purple-100 dark:bg-purple-900/30",
+      color: "text-purple-600",
+      bg: "bg-purple-50",
     },
   ];
 
   return (
-    <div className="grid gap-4 sm:grid-cols-3">
-      {stats.map((stat) => (
-        <Card key={stat.name}>
-          <CardContent className="p-6">
-            <div className="flex items-center gap-4">
-              <div className={`rounded-lg p-3 ${stat.bg}`}>
-                <stat.icon className={`h-6 w-6 ${stat.color}`} />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-                  {stat.name}
-                </p>
-                {isLoading ? (
-                  <div className="h-8 w-20 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
-                ) : (
-                  <p className="text-2xl font-bold text-zinc-900 dark:text-white">
-                    {formatNumber(stat.value)}
-                  </p>
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+      {stats.map((stat, index) => (
+        <div key={stat.name} className="flex items-center gap-2">
+          {isLoading ? (
+            <div className="h-5 w-16 animate-pulse rounded bg-zinc-100" />
+          ) : (
+            <>
+              <span className={`font-medium tabular-nums ${stat.color}`}>
+                {formatNumber(stat.value)}
+              </span>
+              <span className="text-zinc-400">{stat.name}</span>
+            </>
+          )}
+          {index < stats.length - 1 && (
+            <span className="text-zinc-200 ml-4">&middot;</span>
+          )}
+        </div>
       ))}
     </div>
   );

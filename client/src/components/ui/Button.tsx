@@ -1,14 +1,31 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { Loader2 } from "lucide-react";
-import { ButtonHTMLAttributes, forwardRef } from "react";
+import { ButtonHTMLAttributes, forwardRef, ElementType, ComponentPropsWithoutRef } from "react";
 
-interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: "default" | "outline" | "ghost" | "destructive";
+type ButtonBaseProps = {
+  variant?: "default" | "outline" | "ghost" | "destructive" | "primary";
   size?: "sm" | "md" | "lg";
   loading?: boolean;
-}
+  as?: ElementType;
+};
+
+type ButtonProps<T extends ElementType = "button"> = ButtonBaseProps &
+  Omit<ComponentPropsWithoutRef<T>, keyof ButtonBaseProps>;
+
+const buttonVariants = {
+  default: "bg-zinc-900 text-white hover:bg-zinc-800",
+  primary: "bg-emerald-600 text-white hover:bg-emerald-700",
+  outline: "border border-zinc-200/60 bg-transparent text-zinc-600 hover:bg-zinc-50",
+  ghost: "bg-transparent text-zinc-600 hover:bg-zinc-50",
+  destructive: "bg-red-600 text-white hover:bg-red-700",
+};
+
+const buttonSizes = {
+  sm: "h-8 px-3 text-sm",
+  md: "h-10 px-4 text-sm",
+  lg: "h-12 px-6",
+};
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   (
@@ -19,40 +36,33 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       loading,
       disabled,
       children,
+      as,
       ...props
     },
     ref
   ) => {
-    const variants = {
-      default: "bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200",
-      outline: "border border-zinc-300 bg-transparent hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800",
-      ghost: "bg-transparent hover:bg-zinc-100 dark:hover:bg-zinc-800",
-      destructive: "bg-red-600 text-white hover:bg-red-700",
-    };
-
-    const sizes = {
-      sm: "h-8 px-3 text-sm",
-      md: "h-10 px-4",
-      lg: "h-12 px-6 text-lg",
-    };
+    const Component = as || "button";
+    const isButton = Component === "button";
 
     return (
-      <button
+      <Component
         ref={ref}
         className={cn(
-          "inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500",
-          "disabled:pointer-events-none disabled:opacity-50",
-          variants[variant],
-          sizes[size],
+          "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30 focus-visible:border-emerald-400",
+          "disabled:opacity-50 disabled:cursor-not-allowed",
+          buttonVariants[variant],
+          buttonSizes[size],
           className
         )}
-        disabled={disabled || loading}
+        {...(isButton ? { disabled: disabled || loading } : {})}
         {...props}
       >
-        {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+        {loading && (
+          <div className="w-4 h-4 rounded-full border-2 border-current border-t-transparent animate-spin" />
+        )}
         {children}
-      </button>
+      </Component>
     );
   }
 );

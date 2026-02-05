@@ -101,20 +101,23 @@ export default function SettingsPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
+      <div className="pt-8 sm:pt-12 space-y-6">
         {[...Array(3)].map((_, i) => (
-          <div key={i} className="h-48 animate-pulse rounded-lg bg-zinc-200 dark:bg-zinc-800" />
+          <div key={i} className="h-48 animate-pulse rounded-xl bg-zinc-100" />
         ))}
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">Settings</h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Configure your Hypergoat instance
+    <div className="pt-8 sm:pt-12 space-y-10">
+      {/* Hero Section */}
+      <div className="max-w-md">
+        <h2 className="font-[family-name:var(--font-garamond)] text-3xl sm:text-4xl text-zinc-900 leading-tight">
+          Settings
+        </h2>
+        <p className="text-zinc-500 mt-3 leading-relaxed">
+          Configure your Hypergoat AppView instance
         </p>
       </div>
 
@@ -125,36 +128,36 @@ export default function SettingsPage() {
       )}
 
       {/* Basic Settings */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Basic Settings</CardTitle>
-          <CardDescription>Configure the core settings for your instance</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <div className="space-y-4">
+        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+          Basic Settings
+        </h3>
+        <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-4">
           <Input
             label="Domain Authority"
             placeholder="your-domain.com"
             value={domainAuthority}
             onChange={(e) => setDomainAuthority(e.target.value)}
+            hint="The domain that owns this AppView instance"
           />
-          <div className="flex justify-end">
+          <div className="flex justify-end pt-2">
             <Button
+              variant="primary"
               onClick={handleSaveSettings}
               loading={updateMutation.isPending}
             >
               Save Settings
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* External Services */}
-      <Card>
-        <CardHeader>
-          <CardTitle>External Services</CardTitle>
-          <CardDescription>Configure external service URLs</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <div className="space-y-4">
+        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+          External Services
+        </h3>
+        <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-4">
           <Input
             label="Relay URL"
             placeholder="https://relay1.us-west.bsky.network"
@@ -179,63 +182,62 @@ export default function SettingsPage() {
             value={oauthScopes}
             onChange={(e) => setOauthScopes(e.target.value)}
           />
-          <div className="flex justify-end">
+          <div className="flex justify-end pt-2">
             <Button
+              variant="primary"
               onClick={handleSaveSettings}
               loading={updateMutation.isPending}
             >
               Save Settings
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Admin DIDs */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Administrators</CardTitle>
-          <CardDescription>Manage admin access to this instance</CardDescription>
-        </CardHeader>
-        <CardContent>
+      <div className="space-y-4">
+        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+          Administrators
+        </h3>
+        <div className="rounded-xl border border-zinc-200/60 bg-white p-6">
           {settings?.adminDids.length === 0 ? (
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            <p className="text-sm text-zinc-400">
               No administrators configured
             </p>
           ) : (
-            <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
+            <ul className="divide-y divide-zinc-100">
               {settings?.adminDids.map((did) => (
-                <li key={did} className="flex items-center justify-between py-3">
-                  <code className="text-sm">{did}</code>
+                <li key={did} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+                  <code className="text-sm text-zinc-600 font-mono">{did}</code>
                 </li>
               ))}
             </ul>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* OAuth Clients */}
-      <Card>
-        <CardHeader>
-          <CardTitle>OAuth Clients</CardTitle>
-          <CardDescription>Manage registered OAuth clients</CardDescription>
-        </CardHeader>
-        <CardContent>
+      <div className="space-y-4">
+        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+          OAuth Clients
+        </h3>
+        <div className="rounded-xl border border-zinc-200/60 bg-white p-6">
           {oauthClients.length === 0 ? (
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            <p className="text-sm text-zinc-400">
               No OAuth clients registered
             </p>
           ) : (
-            <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
+            <ul className="divide-y divide-zinc-100">
               {oauthClients.map((client) => (
-                <li key={client.clientId} className="py-3">
+                <li key={client.clientId} className="py-3 first:pt-0 last:pb-0">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="font-medium text-zinc-900 dark:text-white">
+                      <p className="font-medium text-zinc-800">
                         {client.clientName}
                       </p>
-                      <code className="text-xs text-zinc-500">{client.clientId}</code>
+                      <code className="text-xs text-zinc-400 font-mono">{client.clientId}</code>
                     </div>
-                    <span className="rounded-full bg-zinc-100 px-2 py-1 text-xs dark:bg-zinc-800">
+                    <span className="rounded-full bg-zinc-100 px-2 py-1 text-xs text-zinc-600">
                       {client.clientType}
                     </span>
                   </div>
@@ -243,27 +245,27 @@ export default function SettingsPage() {
               ))}
             </ul>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {/* Danger Zone */}
-      <Card className="border-red-200 dark:border-red-900">
-        <CardHeader>
-          <CardTitle className="text-red-600">Danger Zone</CardTitle>
-          <CardDescription>Destructive actions - proceed with caution</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+      <div className="space-y-4">
+        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-red-600">
+          Danger Zone
+        </h3>
+        <div className="rounded-xl border border-red-200/60 bg-red-50/30 p-6 space-y-4">
+          <p className="text-sm text-zinc-600">
             Reset all data including records, actors, and activity. This action cannot be undone.
           </p>
-          <div className="flex items-end gap-4">
-            <Input
-              label="Type RESET to confirm"
-              placeholder="RESET"
-              value={resetConfirmation}
-              onChange={(e) => setResetConfirmation(e.target.value)}
-              className="max-w-xs"
-            />
+          <div className="flex flex-col sm:flex-row items-start sm:items-end gap-4">
+            <div className="w-full sm:w-auto">
+              <Input
+                label="Type RESET to confirm"
+                placeholder="RESET"
+                value={resetConfirmation}
+                onChange={(e) => setResetConfirmation(e.target.value)}
+              />
+            </div>
             <Button
               variant="destructive"
               onClick={handleReset}
@@ -273,8 +275,8 @@ export default function SettingsPage() {
               Reset All Data
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

@@ -109,10 +109,18 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 }
 
 // BatchInsert inserts multiple records efficiently.
+// Wraps all batch inserts in a single transaction for better performance.
 func (r *RecordsRepository) BatchInsert(ctx context.Context, records []*Record) error {
 	if len(records) == 0 {
 		return nil
 	}
+
+	// Start transaction for all batches
+	tx, err := r.db.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Rollback is a no-op if Commit succeeds
 
 	// Process in batches of 100 (5 params per record)
 	batchSize := 100
@@ -123,18 +131,23 @@ func (r *RecordsRepository) BatchInsert(ctx context.Context, records []*Record) 
 		}
 		batch := records[i:end]
 
-		if err := r.insertBatch(ctx, batch); err != nil {
+		if err := r.insertBatchTx(ctx, tx, batch); err != nil {
 			return err
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil
 }
 
-func (r *RecordsRepository) insertBatch(ctx context.Context, records []*Record) error {
+// insertBatchTx inserts a batch of records within a transaction.
+func (r *RecordsRepository) insertBatchTx(ctx context.Context, tx *sql.Tx, records []*Record) error {
 	// Build value placeholders
 	var valueSets []string
-	var params []database.Value
+	var args []any
 
 	for i, rec := range records {
 		base := i * 5
@@ -157,13 +170,7 @@ func (r *RecordsRepository) insertBatch(ctx context.Context, records []*Record) 
 		}
 		valueSets = append(valueSets, valueSet)
 
-		params = append(params,
-			database.Text(rec.URI),
-			database.Text(rec.CID),
-			database.Text(rec.DID),
-			database.Text(rec.Collection),
-			database.Text(rec.JSON),
-		)
+		args = append(args, rec.URI, rec.CID, rec.DID, rec.Collection, rec.JSON)
 	}
 
 	var sqlStr string
@@ -184,7 +191,7 @@ func (r *RecordsRepository) insertBatch(ctx context.Context, records []*Record) 
 				indexed_at = datetime('now')`, strings.Join(valueSets, ", "))
 	}
 
-	_, err := r.db.Exec(ctx, sqlStr, params)
+	_, err := tx.ExecContext(ctx, sqlStr, args...)
 	return err
 }
 
@@ -297,6 +304,104 @@ func (r *RecordsRepository) GetCollectionStats(ctx context.Context) ([]Collectio
 	}
 
 	return stats, rows.Err()
+}
+
+// GetCIDsByURIs returns a map of URI -> CID for records that exist.
+// Used for deduplication before batch insert.
+func (r *RecordsRepository) GetCIDsByURIs(ctx context.Context, uris []string) (map[string]string, error) {
+	if len(uris) == 0 {
+		return make(map[string]string), nil
+	}
+
+	result := make(map[string]string)
+
+	// Process in batches of 900 to avoid SQL parameter limits
+	batchSize := 900
+	for i := 0; i < len(uris); i += batchSize {
+		end := i + batchSize
+		if end > len(uris) {
+			end = len(uris)
+		}
+		batch := uris[i:end]
+
+		placeholders := r.db.Placeholders(len(batch), 1)
+		sqlStr := fmt.Sprintf("SELECT uri, cid FROM record WHERE uri IN (%s)", placeholders)
+
+		params := make([]database.Value, len(batch))
+		for j, uri := range batch {
+			params[j] = database.Text(uri)
+		}
+
+		rows, err := r.db.DB().QueryContext(ctx, sqlStr, convertToAny(params)...)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			var uri, cid string
+			if err := rows.Scan(&uri, &cid); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			result[uri] = cid
+		}
+		rows.Close()
+
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}
+
+// GetExistingCIDs returns a set of CIDs that already exist in the database.
+// Used to detect duplicate content across different URIs.
+func (r *RecordsRepository) GetExistingCIDs(ctx context.Context, cids []string) (map[string]bool, error) {
+	if len(cids) == 0 {
+		return make(map[string]bool), nil
+	}
+
+	result := make(map[string]bool)
+
+	// Process in batches of 900 to avoid SQL parameter limits
+	batchSize := 900
+	for i := 0; i < len(cids); i += batchSize {
+		end := i + batchSize
+		if end > len(cids) {
+			end = len(cids)
+		}
+		batch := cids[i:end]
+
+		placeholders := r.db.Placeholders(len(batch), 1)
+		sqlStr := fmt.Sprintf("SELECT cid FROM record WHERE cid IN (%s)", placeholders)
+
+		params := make([]database.Value, len(batch))
+		for j, cid := range batch {
+			params[j] = database.Text(cid)
+		}
+
+		rows, err := r.db.DB().QueryContext(ctx, sqlStr, convertToAny(params)...)
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			var cid string
+			if err := rows.Scan(&cid); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			result[cid] = true
+		}
+		rows.Close()
+
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
 }
 
 // Helper functions

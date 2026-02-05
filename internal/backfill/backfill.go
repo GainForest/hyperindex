@@ -2,13 +2,17 @@ package backfill
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/GainForest/hypergoat/internal/database/repositories"
+	"github.com/GainForest/hypergoat/internal/oauth"
 )
 
 // Config configures the backfill operation.
@@ -22,21 +26,68 @@ type Config struct {
 	// Collections to backfill.
 	Collections []string
 
-	// MaxConcurrentRepos is the max concurrent repo fetches.
-	MaxConcurrentRepos int
+	// MaxHTTPConcurrent is the global max concurrent HTTP requests (semaphore).
+	// This prevents overwhelming the network or running out of file descriptors.
+	MaxHTTPConcurrent int
+
+	// MaxPDSWorkers is the max concurrent PDS endpoints being processed.
+	// Uses sliding window pattern to maintain constant throughput.
+	MaxPDSWorkers int
 
 	// MaxConcurrentPerPDS is the max concurrent requests per PDS.
 	MaxConcurrentPerPDS int
+
+	// MaxConcurrentRepos is the max concurrent repo fetches (DID resolution phase).
+	MaxConcurrentRepos int
 }
 
 // DefaultConfig returns a default backfill configuration.
+// Configuration can be overridden via environment variables:
+//   - BACKFILL_RELAY_URL: Relay URL (default: https://relay1.us-west.bsky.network)
+//   - BACKFILL_PLC_URL: PLC directory URL (default: https://plc.directory)
+//   - BACKFILL_MAX_HTTP: Global max concurrent HTTP requests (default: 50)
+//   - BACKFILL_MAX_PDS_WORKERS: Max concurrent PDS workers (default: 10)
+//   - BACKFILL_MAX_PER_PDS: Max concurrent requests per PDS (default: 6)
+//   - BACKFILL_MAX_REPOS: Max concurrent DID resolutions (default: 50)
 func DefaultConfig() Config {
-	return Config{
+	config := Config{
 		RelayURL:            DefaultRelayURL,
 		PLCURL:              DefaultPLCURL,
-		MaxConcurrentRepos:  10,
-		MaxConcurrentPerPDS: 4,
+		MaxHTTPConcurrent:   50,
+		MaxPDSWorkers:       10,
+		MaxConcurrentPerPDS: 6,
+		MaxConcurrentRepos:  50,
 	}
+
+	// Override with environment variables
+	if v := os.Getenv("BACKFILL_RELAY_URL"); v != "" {
+		config.RelayURL = v
+	}
+	if v := os.Getenv("BACKFILL_PLC_URL"); v != "" {
+		config.PLCURL = v
+	}
+	if v := os.Getenv("BACKFILL_MAX_HTTP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			config.MaxHTTPConcurrent = n
+		}
+	}
+	if v := os.Getenv("BACKFILL_MAX_PDS_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			config.MaxPDSWorkers = n
+		}
+	}
+	if v := os.Getenv("BACKFILL_MAX_PER_PDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			config.MaxConcurrentPerPDS = n
+		}
+	}
+	if v := os.Getenv("BACKFILL_MAX_REPOS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			config.MaxConcurrentRepos = n
+		}
+	}
+
+	return config
 }
 
 // Stats tracks backfill statistics.
@@ -44,6 +95,7 @@ type Stats struct {
 	ReposDiscovered int64
 	ReposProcessed  int64
 	RecordsInserted int64
+	RecordsSkipped  int64 // Records filtered out by CID deduplication
 	Errors          int64
 	StartTime       time.Time
 	EndTime         time.Time
@@ -64,6 +116,14 @@ type Backfiller struct {
 	recordsRepo *repositories.RecordsRepository
 	actorsRepo  *repositories.ActorsRepository
 
+	// httpSem is a global semaphore limiting concurrent HTTP requests.
+	// This prevents overwhelming the network and running out of file descriptors.
+	httpSem chan struct{}
+
+	// didCache caches DID document resolutions to avoid redundant PLC lookups.
+	didCache         *oauth.DIDCache
+	stopCacheCleanup func()
+
 	stats Stats
 }
 
@@ -73,11 +133,36 @@ func NewBackfiller(
 	recordsRepo *repositories.RecordsRepository,
 	actorsRepo *repositories.ActorsRepository,
 ) *Backfiller {
+	// Create DID resolver with custom PLC URL
+	didResolver := oauth.NewDIDResolver(
+		oauth.WithPLCDirectoryURL(config.PLCURL),
+	)
+
+	// Create DID cache with 1 hour TTL
+	didCache := oauth.NewDIDCache(
+		oauth.WithResolver(didResolver),
+		oauth.WithCacheTTL(time.Hour),
+	)
+
+	// Start cleanup routine (every 5 minutes)
+	stopCleanup := didCache.StartCleanupRoutine(5 * time.Minute)
+
 	return &Backfiller{
-		config:      config,
-		client:      NewClient(config.RelayURL, config.PLCURL),
-		recordsRepo: recordsRepo,
-		actorsRepo:  actorsRepo,
+		config:           config,
+		client:           NewClient(config.RelayURL, config.PLCURL, config.MaxHTTPConcurrent),
+		recordsRepo:      recordsRepo,
+		actorsRepo:       actorsRepo,
+		httpSem:          make(chan struct{}, config.MaxHTTPConcurrent),
+		didCache:         didCache,
+		stopCacheCleanup: stopCleanup,
+	}
+}
+
+// Close stops the DID cache cleanup routine.
+// Should be called when the Backfiller is no longer needed.
+func (b *Backfiller) Close() {
+	if b.stopCacheCleanup != nil {
+		b.stopCacheCleanup()
 	}
 }
 
@@ -88,6 +173,9 @@ func (b *Backfiller) Run(ctx context.Context) (*Stats, error) {
 	slog.Info("[backfill] Starting backfill operation",
 		"collections", b.config.Collections,
 		"relay", b.config.RelayURL,
+		"max_http_concurrent", b.config.MaxHTTPConcurrent,
+		"max_pds_workers", b.config.MaxPDSWorkers,
+		"max_per_pds", b.config.MaxConcurrentPerPDS,
 	)
 
 	// Step 1: Discover all repos for all collections
@@ -147,6 +235,7 @@ func (b *Backfiller) Run(ctx context.Context) (*Stats, error) {
 		"repos_discovered", b.stats.ReposDiscovered,
 		"repos_processed", b.stats.ReposProcessed,
 		"records_inserted", b.stats.RecordsInserted,
+		"records_skipped", b.stats.RecordsSkipped,
 		"errors", b.stats.Errors,
 		"duration", b.stats.Duration(),
 	)
@@ -155,9 +244,16 @@ func (b *Backfiller) Run(ctx context.Context) (*Stats, error) {
 }
 
 // resolveAndGroupByPDS resolves DIDs and groups repos by their PDS.
+// Uses DID caching to avoid redundant PLC lookups and batch upsert for actors.
 func (b *Backfiller) resolveAndGroupByPDS(ctx context.Context, repos []string) map[string][]*AtprotoData {
 	result := make(map[string][]*AtprotoData)
 	var mu sync.Mutex
+
+	// Collect all resolved actors for batch upsert
+	var allResolved []*AtprotoData
+
+	// Track cache hits for logging
+	var cacheHits, cacheMisses int64
 
 	// Use a semaphore to limit concurrent DID resolutions
 	sem := make(chan struct{}, b.config.MaxConcurrentRepos)
@@ -171,53 +267,143 @@ func (b *Backfiller) resolveAndGroupByPDS(ctx context.Context, repos []string) m
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			data, err := b.client.ResolveDID(ctx, did)
+			// Try DID cache first (internally handles HTTP if not cached)
+			doc, err := b.didCache.Get(did)
 			if err != nil {
-				slog.Debug("[backfill] Failed to resolve DID",
-					"did", did,
-					"error", err,
-				)
-				atomic.AddInt64(&b.stats.Errors, 1)
-				return
+				// Cache miss - need to use HTTP semaphore for rate limiting
+				b.httpSem <- struct{}{}
+				doc, err = b.didCache.GetWithInvalidate(did, true)
+				<-b.httpSem
+
+				if err != nil {
+					slog.Debug("[backfill] Failed to resolve DID",
+						"did", did,
+						"error", err,
+					)
+					atomic.AddInt64(&b.stats.Errors, 1)
+					return
+				}
+				atomic.AddInt64(&cacheMisses, 1)
+			} else {
+				atomic.AddInt64(&cacheHits, 1)
 			}
 
-			// Ensure actor exists in database
-			if err := b.actorsRepo.Upsert(ctx, data.DID, data.Handle); err != nil {
-				slog.Debug("[backfill] Failed to upsert actor",
-					"did", data.DID,
-					"error", err,
-				)
+			// Convert oauth.DIDDocument to AtprotoData
+			data := &AtprotoData{
+				DID:    did,
+				Handle: doc.GetHandle(),
+				PDS:    doc.GetPDSEndpoint(),
+			}
+
+			// Default handle to DID if not found
+			if data.Handle == "" {
+				data.Handle = did
+			}
+			// Default PDS if not found
+			if data.PDS == "" {
+				data.PDS = "https://bsky.social"
 			}
 
 			mu.Lock()
 			result[data.PDS] = append(result[data.PDS], data)
+			allResolved = append(allResolved, data)
 			mu.Unlock()
 		}(repo)
 	}
 
 	wg.Wait()
 
+	// Log cache statistics
+	slog.Info("[backfill] DID resolution complete",
+		"total", len(repos),
+		"resolved", len(allResolved),
+		"cache_hits", cacheHits,
+		"cache_misses", cacheMisses,
+		"cache_size", b.didCache.Size(),
+	)
+
+	// Batch upsert all actors at once
+	if len(allResolved) > 0 {
+		actors := make([]repositories.ActorData, len(allResolved))
+		for i, data := range allResolved {
+			actors[i] = repositories.ActorData{
+				DID:    data.DID,
+				Handle: data.Handle,
+			}
+		}
+
+		if err := b.actorsRepo.BatchUpsert(ctx, actors); err != nil {
+			slog.Warn("[backfill] Failed to batch upsert actors",
+				"count", len(actors),
+				"error", err,
+			)
+		} else {
+			slog.Info("[backfill] Batch upserted actors", "count", len(actors))
+		}
+	}
+
 	return result
 }
 
-// processReposByPDS processes repos grouped by PDS.
-func (b *Backfiller) processReposByPDS(ctx context.Context, reposByPDS map[string][]*AtprotoData) {
-	// Process PDS endpoints concurrently, but limit per-PDS concurrency
-	var wg sync.WaitGroup
-
-	for pdsURL, repos := range reposByPDS {
-		wg.Add(1)
-		go func(pds string, repoList []*AtprotoData) {
-			defer wg.Done()
-			b.processPDS(ctx, pds, repoList)
-		}(pdsURL, repos)
-	}
-
-	wg.Wait()
+// pdsEntry holds PDS URL and its repos for sliding window processing.
+type pdsEntry struct {
+	pdsURL string
+	repos  []*AtprotoData
 }
 
-// processPDS processes all repos for a single PDS.
-func (b *Backfiller) processPDS(ctx context.Context, pdsURL string, repos []*AtprotoData) {
+// processReposByPDS processes repos grouped by PDS using sliding window pattern.
+// This limits the number of concurrent PDS workers to maintain consistent throughput.
+func (b *Backfiller) processReposByPDS(ctx context.Context, reposByPDS map[string][]*AtprotoData) {
+	// Convert map to slice for ordered processing
+	entries := make([]pdsEntry, 0, len(reposByPDS))
+	for pdsURL, repos := range reposByPDS {
+		entries = append(entries, pdsEntry{pdsURL: pdsURL, repos: repos})
+	}
+
+	totalPDS := len(entries)
+	if totalPDS == 0 {
+		return
+	}
+
+	// Use sliding window: limit concurrent PDS workers
+	pdsSem := make(chan struct{}, b.config.MaxPDSWorkers)
+	results := make(chan int, totalPDS)
+	var wg sync.WaitGroup
+
+	// Start all workers (they'll block on the semaphore)
+	for _, entry := range entries {
+		wg.Add(1)
+		go func(e pdsEntry) {
+			defer wg.Done()
+
+			// Acquire PDS slot
+			pdsSem <- struct{}{}
+			defer func() { <-pdsSem }()
+
+			count := b.processPDS(ctx, e.pdsURL, e.repos)
+			results <- count
+		}(entry)
+	}
+
+	// Collect results and log progress
+	go func() {
+		completed := 0
+		for count := range results {
+			completed++
+			slog.Info("[backfill] PDS worker completed",
+				"progress", fmt.Sprintf("%d/%d", completed, totalPDS),
+				"records", count,
+			)
+		}
+	}()
+
+	wg.Wait()
+	close(results)
+}
+
+// processPDS processes all repos for a single PDS and returns the total records processed.
+func (b *Backfiller) processPDS(ctx context.Context, pdsURL string, repos []*AtprotoData) int {
+	startTime := time.Now()
 	slog.Debug("[backfill] Processing PDS",
 		"pds", pdsURL,
 		"repo_count", len(repos),
@@ -226,6 +412,7 @@ func (b *Backfiller) processPDS(ctx context.Context, pdsURL string, repos []*Atp
 	// Use a semaphore to limit concurrent requests to this PDS
 	sem := make(chan struct{}, b.config.MaxConcurrentPerPDS)
 	var wg sync.WaitGroup
+	var totalRecords int64
 
 	for _, repo := range repos {
 		wg.Add(1)
@@ -235,17 +422,210 @@ func (b *Backfiller) processPDS(ctx context.Context, pdsURL string, repos []*Atp
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			b.processRepo(ctx, pdsURL, data)
+			count := b.safeProcessRepo(ctx, pdsURL, data)
+			atomic.AddInt64(&totalRecords, int64(count))
 		}(repo)
 	}
 
 	wg.Wait()
+
+	slog.Debug("[backfill] Finished PDS",
+		"pds", pdsURL,
+		"repos", len(repos),
+		"records", totalRecords,
+		"duration", time.Since(startTime),
+	)
+
+	return int(totalRecords)
 }
 
-// processRepo processes a single repo, fetching all collections.
-func (b *Backfiller) processRepo(ctx context.Context, pdsURL string, data *AtprotoData) {
+// safeProcessRepo wraps processRepo with panic recovery.
+// This prevents a single repo from crashing the entire backfill operation.
+func (b *Backfiller) safeProcessRepo(ctx context.Context, pdsURL string, data *AtprotoData) (count int) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("[backfill] Worker panic recovered",
+				"did", data.DID,
+				"pds", pdsURL,
+				"error", fmt.Sprintf("%v", r),
+			)
+			atomic.AddInt64(&b.stats.Errors, 1)
+			count = 0
+		}
+	}()
+	return b.processRepo(ctx, pdsURL, data)
+}
+
+// processRepo processes a single repo using CAR-based fetching.
+// This fetches the entire repo in a single HTTP request and filters locally.
+// Returns the number of records inserted.
+func (b *Backfiller) processRepo(ctx context.Context, pdsURL string, data *AtprotoData) int {
+	totalStart := time.Now()
+
+	// Phase 1: Fetch CAR
+	fetchStart := time.Now()
+
+	// Acquire global HTTP semaphore
+	b.httpSem <- struct{}{}
+	carRecords, err := b.client.GetRepo(ctx, pdsURL, data.DID, b.config.Collections)
+	<-b.httpSem // Release immediately after HTTP completes
+
+	fetchMs := time.Since(fetchStart).Milliseconds()
+
+	if err != nil {
+		slog.Debug("[backfill] Failed to get repo via CAR",
+			"did", data.DID,
+			"error", err,
+		)
+		// Fallback to listRecords approach
+		return b.processRepoLegacy(ctx, pdsURL, data)
+	}
+
+	// Phase 2: Parse/Convert CBOR to JSON
+	parseStart := time.Now()
+	dbRecords := make([]*repositories.Record, 0, len(carRecords))
+	for _, rec := range carRecords {
+		jsonStr, err := CBORToJSON(rec.Value)
+		if err != nil {
+			slog.Debug("[backfill] Failed to convert CBOR to JSON",
+				"uri", rec.URI,
+				"error", err,
+			)
+			continue
+		}
+
+		dbRecords = append(dbRecords, &repositories.Record{
+			URI:        rec.URI,
+			CID:        rec.CID,
+			DID:        data.DID,
+			Collection: rec.Collection,
+			JSON:       jsonStr,
+			RKey:       rec.RKey,
+		})
+	}
+	parseMs := time.Since(parseStart).Milliseconds()
+
+	if len(dbRecords) == 0 {
+		atomic.AddInt64(&b.stats.ReposProcessed, 1)
+		return 0
+	}
+
+	// Phase 3: CID deduplication
+	dedupStart := time.Now()
+	filteredRecords, skipped := b.filterByExistingCIDs(ctx, dbRecords)
+	atomic.AddInt64(&b.stats.RecordsSkipped, int64(skipped))
+	dedupMs := time.Since(dedupStart).Milliseconds()
+
+	// Phase 4: Batch insert
+	insertStart := time.Now()
+	insertedCount := 0
+	if len(filteredRecords) > 0 {
+		if err := b.recordsRepo.BatchInsert(ctx, filteredRecords); err != nil {
+			slog.Warn("[backfill] Failed to batch insert records",
+				"did", data.DID,
+				"count", len(filteredRecords),
+				"error", err,
+			)
+			atomic.AddInt64(&b.stats.Errors, 1)
+		} else {
+			insertedCount = len(filteredRecords)
+			atomic.AddInt64(&b.stats.RecordsInserted, int64(insertedCount))
+		}
+	}
+	insertMs := time.Since(insertStart).Milliseconds()
+
+	atomic.AddInt64(&b.stats.ReposProcessed, 1)
+	totalMs := time.Since(totalStart).Milliseconds()
+
+	slog.Debug("[backfill] Processed repo",
+		"did", data.DID,
+		"fetch_ms", fetchMs,
+		"parse_ms", parseMs,
+		"dedup_ms", dedupMs,
+		"insert_ms", insertMs,
+		"total_ms", totalMs,
+		"records", insertedCount,
+		"skipped", skipped,
+	)
+
+	return insertedCount
+}
+
+// filterByExistingCIDs filters out records that already exist with the same CID.
+// Returns the filtered records and the count of skipped records.
+func (b *Backfiller) filterByExistingCIDs(ctx context.Context, records []*repositories.Record) ([]*repositories.Record, int) {
+	if len(records) == 0 {
+		return records, 0
+	}
+
+	// Collect URIs and CIDs
+	uris := make([]string, len(records))
+	cids := make([]string, 0, len(records))
+	cidSet := make(map[string]bool)
+
+	for i, rec := range records {
+		uris[i] = rec.URI
+		if !cidSet[rec.CID] {
+			cids = append(cids, rec.CID)
+			cidSet[rec.CID] = true
+		}
+	}
+
+	// Get existing URI->CID mappings
+	existingByCID, err := b.recordsRepo.GetCIDsByURIs(ctx, uris)
+	if err != nil {
+		slog.Debug("[backfill] Failed to get existing CIDs by URI, skipping dedup", "error", err)
+		return records, 0
+	}
+
+	// Get existing CIDs (for content dedup)
+	existingCIDs, err := b.recordsRepo.GetExistingCIDs(ctx, cids)
+	if err != nil {
+		slog.Debug("[backfill] Failed to get existing CIDs, skipping content dedup", "error", err)
+		existingCIDs = make(map[string]bool)
+	}
+
+	// Filter records
+	filtered := make([]*repositories.Record, 0, len(records))
+	skipped := 0
+
+	for _, rec := range records {
+		// Check if URI exists with same CID (unchanged)
+		if existingCID, ok := existingByCID[rec.URI]; ok {
+			if existingCID == rec.CID {
+				skipped++
+				continue
+			}
+			// URI exists with different CID - check if new CID exists elsewhere
+			if existingCIDs[rec.CID] {
+				skipped++
+				continue
+			}
+		} else {
+			// URI doesn't exist - check if CID exists elsewhere (duplicate content)
+			if existingCIDs[rec.CID] {
+				skipped++
+				continue
+			}
+		}
+
+		filtered = append(filtered, rec)
+	}
+
+	return filtered, skipped
+}
+
+// processRepoLegacy processes a repo using per-collection listRecords (fallback).
+// Returns the number of records inserted.
+func (b *Backfiller) processRepoLegacy(ctx context.Context, pdsURL string, data *AtprotoData) int {
+	var totalInserted int
+
 	for _, collection := range b.config.Collections {
+		// Acquire global HTTP semaphore for each request
+		b.httpSem <- struct{}{}
 		records, err := b.client.ListRecords(ctx, pdsURL, data.DID, collection)
+		<-b.httpSem
+
 		if err != nil {
 			slog.Debug("[backfill] Failed to list records",
 				"did", data.DID,
@@ -268,17 +648,20 @@ func (b *Backfiller) processRepo(ctx context.Context, pdsURL string, data *Atpro
 			}
 
 			if result == repositories.Inserted {
+				totalInserted++
 				atomic.AddInt64(&b.stats.RecordsInserted, 1)
 			}
 		}
 	}
 
 	atomic.AddInt64(&b.stats.ReposProcessed, 1)
+	return totalInserted
 }
 
-// BackfillActor backfills all collections for a single actor.
+// BackfillActor backfills all collections for a single actor using CAR-based fetching.
 func (b *Backfiller) BackfillActor(ctx context.Context, did string) (int, error) {
 	slog.Info("[backfill] Starting actor backfill", "did", did)
+	startTime := time.Now()
 
 	// Resolve DID
 	data, err := b.client.ResolveDID(ctx, did)
@@ -291,13 +674,75 @@ func (b *Backfiller) BackfillActor(ctx context.Context, did string) (int, error)
 		slog.Warn("[backfill] Failed to upsert actor", "did", did, "error", err)
 	}
 
-	// Fetch records for all collections
+	// Try CAR-based approach first
+	carRecords, err := b.client.GetRepo(ctx, data.PDS, data.DID, b.config.Collections)
+	if err != nil {
+		slog.Warn("[backfill] CAR fetch failed, falling back to listRecords",
+			"did", did,
+			"error", err,
+		)
+		return b.backfillActorLegacy(ctx, data)
+	}
+
+	// Convert CAR records to database records
+	dbRecords := make([]*repositories.Record, 0, len(carRecords))
+	for _, rec := range carRecords {
+		// Convert CBOR to JSON
+		jsonStr, err := CBORToJSON(rec.Value)
+		if err != nil {
+			slog.Debug("[backfill] Failed to convert CBOR to JSON",
+				"uri", rec.URI,
+				"error", err,
+			)
+			continue
+		}
+
+		dbRecords = append(dbRecords, &repositories.Record{
+			URI:        rec.URI,
+			CID:        rec.CID,
+			DID:        data.DID,
+			Collection: rec.Collection,
+			JSON:       jsonStr,
+			RKey:       rec.RKey,
+		})
+	}
+
+	if len(dbRecords) == 0 {
+		slog.Info("[backfill] Actor backfill complete (CAR) - no records",
+			"did", did,
+			"duration", time.Since(startTime),
+		)
+		return 0, nil
+	}
+
+	// CID deduplication: filter out unchanged records before insert
+	filteredRecords, skipped := b.filterByExistingCIDs(ctx, dbRecords)
+
+	// Batch insert filtered records
+	if len(filteredRecords) > 0 {
+		if err := b.recordsRepo.BatchInsert(ctx, filteredRecords); err != nil {
+			return 0, fmt.Errorf("batch insert failed: %w", err)
+		}
+	}
+
+	slog.Info("[backfill] Actor backfill complete (CAR)",
+		"did", did,
+		"records", len(filteredRecords),
+		"skipped", skipped,
+		"duration", time.Since(startTime),
+	)
+
+	return len(filteredRecords), nil
+}
+
+// backfillActorLegacy uses per-collection listRecords (fallback).
+func (b *Backfiller) backfillActorLegacy(ctx context.Context, data *AtprotoData) (int, error) {
 	var totalRecords int
 	for _, collection := range b.config.Collections {
 		records, err := b.client.ListRecords(ctx, data.PDS, data.DID, collection)
 		if err != nil {
 			slog.Warn("[backfill] Failed to list records for actor",
-				"did", did,
+				"did", data.DID,
 				"collection", collection,
 				"error", err,
 			)
@@ -317,8 +762,8 @@ func (b *Backfiller) BackfillActor(ctx context.Context, did string) (int, error)
 		}
 	}
 
-	slog.Info("[backfill] Actor backfill complete",
-		"did", did,
+	slog.Info("[backfill] Actor backfill complete (legacy)",
+		"did", data.DID,
 		"records", totalRecords,
 	)
 

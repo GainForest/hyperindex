@@ -43,7 +43,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Handle CORS
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, DPoP")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, DPoP, X-User-DID")
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
@@ -67,9 +67,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get authentication info from context (set by middleware)
+	// Get authentication info from context (set by middleware) or X-User-DID header
 	ctx := r.Context()
 	userDID := oauth.UserIDFromContext(ctx)
+
+	// Fall back to X-User-DID header if no OAuth token (for Next.js frontend proxy)
+	if userDID == "" {
+		userDID = r.Header.Get("X-User-DID")
+	}
 	handle := "" // Would need to resolve from DID
 
 	// Get admin DIDs from config

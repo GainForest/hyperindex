@@ -1,7 +1,5 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui";
-import { Button } from "@/components/ui";
 import type { ActivityBucket, TimeRange } from "@/types";
 import {
   AreaChart,
@@ -44,47 +42,63 @@ export function ActivityChart({
   }));
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle>Activity</CardTitle>
-        <div className="flex gap-1">
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+          Activity
+        </h3>
+        <div className="flex items-center gap-1">
           {timeRanges.map((range) => (
-            <Button
+            <button
               key={range.value}
-              variant={timeRange === range.value ? "default" : "ghost"}
-              size="sm"
               onClick={() => onTimeRangeChange(range.value)}
+              className={`px-2 py-0.5 rounded text-xs transition-colors cursor-pointer ${
+                timeRange === range.value
+                  ? "bg-emerald-50 text-emerald-600 font-medium"
+                  : "text-zinc-400 hover:text-zinc-600"
+              }`}
             >
               {range.label}
-            </Button>
+            </button>
           ))}
         </div>
-      </CardHeader>
-      <CardContent>
+      </div>
+
+      <div className="rounded-xl border border-zinc-200/60 bg-white p-4">
         {isLoading ? (
-          <div className="h-64 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
+          <div className="h-48 animate-pulse rounded-lg bg-zinc-50" />
         ) : data.length === 0 ? (
-          <div className="flex h-64 items-center justify-center text-zinc-500 dark:text-zinc-400">
+          <div className="flex h-48 items-center justify-center text-sm text-zinc-400">
             No activity data available
           </div>
         ) : (
-          <div className="h-64">
+          <div className="h-48">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-zinc-200 dark:stroke-zinc-700" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
                 <XAxis
                   dataKey="timestamp"
                   tickFormatter={(value) =>
                     format(new Date(value), timeRange === "SEVEN_DAYS" ? "MMM d" : "HH:mm")
                   }
-                  className="text-xs"
+                  fontSize={11}
+                  stroke="#a1a1aa"
+                  tickLine={false}
+                  axisLine={false}
                 />
-                <YAxis className="text-xs" />
+                <YAxis
+                  fontSize={11}
+                  stroke="#a1a1aa"
+                  tickLine={false}
+                  axisLine={false}
+                />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: "var(--color-zinc-900)",
-                    border: "1px solid var(--color-zinc-700)",
-                    borderRadius: "0.5rem",
+                    backgroundColor: "#fff",
+                    border: "1px solid #e4e4e7",
+                    borderRadius: "0.75rem",
+                    fontSize: "12px",
+                    boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.05)",
                   }}
                   labelFormatter={(value) =>
                     format(new Date(value), "MMM d, yyyy HH:mm")
@@ -94,9 +108,9 @@ export function ActivityChart({
                   type="monotone"
                   dataKey="creates"
                   stackId="1"
-                  stroke="#22c55e"
-                  fill="#22c55e"
-                  fillOpacity={0.6}
+                  stroke="#10b981"
+                  fill="#10b981"
+                  fillOpacity={0.4}
                   name="Creates"
                 />
                 <Area
@@ -105,23 +119,23 @@ export function ActivityChart({
                   stackId="1"
                   stroke="#3b82f6"
                   fill="#3b82f6"
-                  fillOpacity={0.6}
+                  fillOpacity={0.4}
                   name="Updates"
                 />
                 <Area
                   type="monotone"
                   dataKey="deletes"
                   stackId="1"
-                  stroke="#ef4444"
-                  fill="#ef4444"
-                  fillOpacity={0.6}
+                  stroke="#f59e0b"
+                  fill="#f59e0b"
+                  fillOpacity={0.4}
                   name="Deletes"
                 />
               </AreaChart>
             </ResponsiveContainer>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/GainForest/hypergoat/internal/database/repositories"
+	"github.com/GainForest/hypergoat/internal/lexicon"
 	"github.com/GainForest/hypergoat/internal/oauth"
 )
 
@@ -452,6 +453,79 @@ func (r *Resolver) RemoveAdmin(ctx context.Context, did string) (bool, error) {
 	newAdminDidsStr := strings.Join(newAdminDids, ",")
 	if err := r.repos.Config.Set(ctx, "admin_dids", newAdminDidsStr); err != nil {
 		return false, fmt.Errorf("failed to update admin_dids: %w", err)
+	}
+
+	return true, nil
+}
+
+// RegisterLexicon resolves an NSID via DNS and registers the lexicon schema.
+func (r *Resolver) RegisterLexicon(ctx context.Context, nsid string) (map[string]interface{}, error) {
+	// Validate NSID format (at least 3 dot-separated segments)
+	parts := strings.Split(nsid, ".")
+	if len(parts) < 3 {
+		return nil, fmt.Errorf("invalid NSID format: must have at least 3 segments (e.g., app.bsky.feed.post)")
+	}
+
+	// Check if lexicon already exists
+	exists, err := r.repos.Lexicons.Exists(ctx, nsid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check existing lexicon: %w", err)
+	}
+	if exists {
+		return nil, fmt.Errorf("lexicon %s is already registered", nsid)
+	}
+
+	// Resolve lexicon via DNS and PDS
+	resolver := lexicon.NewResolver()
+	resolved, err := resolver.ResolveLexicon(ctx, nsid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve lexicon: %w", err)
+	}
+
+	// Store the lexicon schema
+	schemaJSON := string(resolved.Schema)
+	if err := r.repos.Lexicons.Upsert(ctx, nsid, schemaJSON); err != nil {
+		return nil, fmt.Errorf("failed to save lexicon: %w", err)
+	}
+
+	// Parse schema to extract description
+	var schema struct {
+		ID          string `json:"id"`
+		Description string `json:"description"`
+		Defs        map[string]struct {
+			Description string `json:"description"`
+		} `json:"defs"`
+	}
+	_ = json.Unmarshal(resolved.Schema, &schema)
+
+	description := schema.Description
+	if description == "" && schema.Defs != nil {
+		if main, ok := schema.Defs["main"]; ok {
+			description = main.Description
+		}
+	}
+
+	return map[string]interface{}{
+		"id":          nsid,
+		"json":        schemaJSON,
+		"createdAt":   time.Now().Format(time.RFC3339),
+		"did":         resolved.DID,
+		"description": description,
+	}, nil
+}
+
+// DeleteLexicon removes a registered lexicon by NSID.
+func (r *Resolver) DeleteLexicon(ctx context.Context, nsid string) (bool, error) {
+	exists, err := r.repos.Lexicons.Exists(ctx, nsid)
+	if err != nil {
+		return false, fmt.Errorf("failed to check lexicon: %w", err)
+	}
+	if !exists {
+		return false, fmt.Errorf("lexicon %s not found", nsid)
+	}
+
+	if err := r.repos.Lexicons.Delete(ctx, nsid); err != nil {
+		return false, fmt.Errorf("failed to delete lexicon: %w", err)
 	}
 
 	return true, nil

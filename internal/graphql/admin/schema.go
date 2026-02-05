@@ -612,6 +612,40 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 					return b.resolver.RemoveAdmin(p.Context, did)
 				},
 			},
+			"registerLexicon": &graphql.Field{
+				Type:        graphql.NewNonNull(LexiconType),
+				Description: "Register a lexicon by NSID (resolves via DNS and fetches from PDS)",
+				Args: graphql.FieldConfigArgument{
+					"nsid": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "The NSID of the lexicon to register (e.g., org.hypercerts.claim.activity)",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					nsid, _ := p.Args["nsid"].(string)
+					return b.resolver.RegisterLexicon(p.Context, nsid)
+				},
+			},
+			"deleteLexicon": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Boolean),
+				Description: "Delete a registered lexicon by NSID (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"nsid": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "The NSID of the lexicon to delete",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					nsid, _ := p.Args["nsid"].(string)
+					return b.resolver.DeleteLexicon(p.Context, nsid)
+				},
+			},
 		},
 	})
 }

@@ -2,11 +2,9 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, User, Play, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { graphqlClient } from "@/lib/graphql/client";
 import { IS_BACKFILLING } from "@/lib/graphql/queries";
 import { TRIGGER_BACKFILL, BACKFILL_ACTOR } from "@/lib/graphql/mutations";
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Alert } from "@/components/ui/Alert";
@@ -22,7 +20,7 @@ export default function BackfillPage() {
   const { data: backfillStatus, isLoading: statusLoading } = useQuery({
     queryKey: ["backfillStatus"],
     queryFn: () => graphqlClient.request<IsBackfillingResponse>(IS_BACKFILLING),
-    refetchInterval: 5000, // Poll every 5 seconds
+    refetchInterval: 5000,
   });
 
   // Trigger full backfill mutation
@@ -72,11 +70,13 @@ export default function BackfillPage() {
   const isBackfilling = backfillStatus?.isBackfilling ?? false;
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-white">Backfill</h1>
-        <p className="text-gray-400 mt-1">
+    <div className="pt-8 sm:pt-12 space-y-10">
+      {/* Hero Section */}
+      <div className="max-w-md">
+        <h2 className="font-[family-name:var(--font-garamond)] text-3xl sm:text-4xl text-zinc-900 leading-tight">
+          Backfill
+        </h2>
+        <p className="text-zinc-500 mt-3 leading-relaxed">
           Sync historical data from the AT Protocol relay
         </p>
       </div>
@@ -93,151 +93,137 @@ export default function BackfillPage() {
         </Alert>
       )}
 
-      {/* Status Card */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <RefreshCw className={`h-5 w-5 ${isBackfilling ? "animate-spin" : ""}`} />
-            Backfill Status
-          </CardTitle>
-          <CardDescription>
-            Current status of the background backfill process
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      {/* Status */}
+      <div className="space-y-4">
+        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+          Status
+        </h3>
+        <div className="rounded-xl border border-zinc-200/60 bg-white p-6">
           {statusLoading ? (
-            <div className="flex items-center gap-2 text-gray-500">
-              <Loader2 className="h-4 w-4 animate-spin" />
+            <div className="flex items-center gap-2 text-zinc-400">
+              <div className="w-4 h-4 rounded-full border-2 border-zinc-200 border-t-zinc-400 animate-spin" />
               Checking status...
             </div>
           ) : isBackfilling ? (
-            <div className="flex items-center gap-3 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-              <Loader2 className="h-5 w-5 animate-spin text-blue-400" />
+            <div className="flex items-center gap-3 p-4 bg-blue-50/50 border border-blue-200/60 rounded-lg">
+              <div className="w-5 h-5 rounded-full border-2 border-blue-300 border-t-blue-500 animate-spin" />
               <div>
-                <div className="font-medium text-blue-400">Backfill in progress</div>
-                <div className="text-sm text-gray-400">
+                <div className="font-medium text-blue-700">Backfill in progress</div>
+                <div className="text-sm text-blue-600/70">
                   Syncing records from the relay. This may take a while.
                 </div>
               </div>
             </div>
           ) : (
-            <div className="flex items-center gap-3 p-4 bg-gray-800 rounded-lg">
-              <CheckCircle2 className="h-5 w-5 text-green-400" />
+            <div className="flex items-center gap-3 p-4 bg-emerald-50/50 border border-emerald-200/60 rounded-lg">
+              <svg className="h-5 w-5 text-emerald-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              </svg>
               <div>
-                <div className="font-medium text-white">Idle</div>
-                <div className="text-sm text-gray-400">
+                <div className="font-medium text-emerald-700">Idle</div>
+                <div className="text-sm text-emerald-600/70">
                   No backfill currently running
                 </div>
               </div>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      {/* Full Backfill Card */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <RefreshCw className="h-5 w-5" />
-            Full Backfill
-          </CardTitle>
-          <CardDescription>
+      {/* Full Backfill */}
+      <div className="space-y-4">
+        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+          Full Backfill
+        </h3>
+        <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-4">
+          <p className="text-sm text-zinc-500">
             Trigger a complete backfill of all known actors from the relay.
             This will fetch all historical records for actors that have been seen.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
           <div className="flex items-center gap-4">
             <Button
+              variant="primary"
               onClick={() => triggerBackfillMutation.mutate()}
               disabled={triggerBackfillMutation.isPending || isBackfilling}
-              variant={isBackfilling ? "secondary" : "primary"}
+              loading={triggerBackfillMutation.isPending}
             >
               {triggerBackfillMutation.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Starting...
-                </>
+                "Starting..."
               ) : isBackfilling ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin mr-2" />
                   Backfill Running
                 </>
               ) : (
                 <>
-                  <Play className="h-4 w-4 mr-2" />
+                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
+                  </svg>
                   Start Full Backfill
                 </>
               )}
             </Button>
             {isBackfilling && (
-              <span className="text-sm text-gray-500">
+              <span className="text-sm text-zinc-400">
                 A backfill is already in progress
               </span>
             )}
           </div>
 
-          <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+          <div className="p-4 bg-amber-50/50 border border-amber-200/60 rounded-lg">
             <div className="flex items-start gap-2">
-              <AlertCircle className="h-4 w-4 text-amber-400 mt-0.5" />
-              <div className="text-sm text-amber-200">
+              <svg className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+              <div className="text-sm text-amber-700">
                 <strong>Note:</strong> Full backfill can take a long time depending on the number
                 of actors and records. The process runs in the background and will continue
                 even if you navigate away from this page.
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      {/* Actor Backfill Card */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <User className="h-5 w-5" />
-            Backfill Single Actor
-          </CardTitle>
-          <CardDescription>
+      {/* Actor Backfill */}
+      <div className="space-y-4">
+        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+          Backfill Single Actor
+        </h3>
+        <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-4">
+          <p className="text-sm text-zinc-500">
             Fetch all historical records for a specific actor by their DID.
             Useful for quickly syncing a single user.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
           <form onSubmit={handleActorBackfill} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">
-                Actor DID
-              </label>
-              <Input
-                type="text"
-                placeholder="did:plc:..."
-                value={actorDid}
-                onChange={(e) => setActorDid(e.target.value)}
-                className="font-mono"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Enter the full DID of the actor (e.g., did:plc:z72i7hdynmk6r22z27h6tvur)
-              </p>
-            </div>
+            <Input
+              label="Actor DID"
+              placeholder="did:plc:..."
+              value={actorDid}
+              onChange={(e) => setActorDid(e.target.value)}
+              hint="Enter the full DID of the actor (e.g., did:plc:z72i7hdynmk6r22z27h6tvur)"
+              className="font-mono"
+            />
             <Button
               type="submit"
+              variant="primary"
               disabled={backfillActorMutation.isPending || !actorDid.trim()}
+              loading={backfillActorMutation.isPending}
             >
               {backfillActorMutation.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Starting...
-                </>
+                "Starting..."
               ) : (
                 <>
-                  <Play className="h-4 w-4 mr-2" />
+                  <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
+                  </svg>
                   Backfill Actor
                 </>
               )}
             </Button>
           </form>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }

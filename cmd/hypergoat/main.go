@@ -120,6 +120,18 @@ func run() error {
 		slog.Warn("Failed to initialize config defaults", "error", err)
 	}
 
+	// Initialize admin DIDs from environment if not already set in database
+	if adminDIDs := os.Getenv("ADMIN_DIDS"); adminDIDs != "" {
+		existingAdmins := configRepo.GetAdminDIDs(ctx)
+		if len(existingAdmins) == 0 {
+			if err := configRepo.Set(ctx, "admin_dids", adminDIDs); err != nil {
+				slog.Warn("Failed to set admin_dids from environment", "error", err)
+			} else {
+				slog.Info("Initialized admin DIDs from environment", "dids", adminDIDs)
+			}
+		}
+	}
+
 	// Create router
 	r := chi.NewRouter()
 
@@ -285,6 +297,26 @@ func run() error {
 	if err != nil {
 		slog.Error("Failed to create admin GraphQL handler", "error", err)
 	} else {
+		// Wire up backfill callback for single-actor backfill from admin UI
+		backfillConfig := backfill.DefaultConfig()
+		backfillConfig.Collections = backfill.ParseCollections(os.Getenv("BACKFILL_COLLECTIONS"))
+		if backfillConfig.Collections == nil {
+			backfillConfig.Collections = backfill.ParseCollections(os.Getenv("JETSTREAM_COLLECTIONS"))
+		}
+		if relayURL := os.Getenv("BACKFILL_RELAY_URL"); relayURL != "" {
+			backfillConfig.RelayURL = relayURL
+		}
+		if plcURL := os.Getenv("BACKFILL_PLC_URL"); plcURL != "" {
+			backfillConfig.PLCURL = plcURL
+		}
+
+		actorBackfiller := backfill.NewBackfiller(backfillConfig, recordsRepo, actorsRepo)
+		adminHandler.Resolver().SetBackfillCallback(func(ctx context.Context, did string) error {
+			_, err := actorBackfiller.BackfillActor(ctx, did)
+			return err
+		})
+		slog.Info("Backfill callback configured for admin UI")
+
 		// Admin endpoint with optional auth (allows introspection without auth)
 		r.Handle("/admin/graphql", adminHandler.OptionalAuth())
 		r.Handle("/admin/graphql/", adminHandler.OptionalAuth())

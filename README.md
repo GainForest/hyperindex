@@ -139,6 +139,8 @@ hypergoat/
 
 Environment variables (see `.env.example`):
 
+### Server Configuration
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DATABASE_URL` | Database connection string | `sqlite:data/hypergoat.db` |
@@ -148,6 +150,17 @@ Environment variables (see `.env.example`):
 | `EXTERNAL_BASE_URL` | Public URL for OAuth redirects | `http://{HOST}:{PORT}` |
 | `OAUTH_SIGNING_KEY` | JWT signing key (multibase) | Optional |
 | `OAUTH_LOOPBACK_MODE` | Enable loopback OAuth for local dev | `false` |
+
+### Backfill Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `BACKFILL_RELAY_URL` | AT Protocol relay for repo discovery | `https://relay1.us-west.bsky.network` |
+| `BACKFILL_PLC_URL` | PLC directory for DID resolution | `https://plc.directory` |
+| `BACKFILL_MAX_HTTP` | Global max concurrent HTTP requests | `50` |
+| `BACKFILL_MAX_PDS_WORKERS` | Max concurrent PDS workers | `10` |
+| `BACKFILL_MAX_PER_PDS` | Max concurrent requests per PDS | `6` |
+| `BACKFILL_MAX_REPOS` | Max concurrent DID resolutions | `50` |
 
 ## Database Schema
 
