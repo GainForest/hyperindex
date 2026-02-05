@@ -238,10 +238,30 @@ func (r *RecordsRepository) GetByURIs(ctx context.Context, uris []string) ([]*Re
 
 // GetByCollection retrieves records for a specific collection.
 func (r *RecordsRepository) GetByCollection(ctx context.Context, collection string, limit int) ([]*Record, error) {
-	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE collection = %s ORDER BY indexed_at DESC LIMIT %d",
-		r.recordColumns(), r.db.Placeholder(1), limit)
+	return r.GetByCollectionWithCursor(ctx, collection, limit, "")
+}
 
-	rows, err := r.db.DB().QueryContext(ctx, sqlStr, collection)
+// GetByCollectionWithCursor retrieves records for a specific collection with cursor-based pagination.
+// The cursor is the indexed_at timestamp of the last record from the previous page.
+// Records are ordered by indexed_at DESC (newest first) for chronological feed display.
+func (r *RecordsRepository) GetByCollectionWithCursor(ctx context.Context, collection string, limit int, afterTimestamp string) ([]*Record, error) {
+	var sqlStr string
+	var args []any
+
+	if afterTimestamp == "" {
+		// No cursor - get first page, ordered by indexed_at DESC (newest first)
+		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
+			r.recordColumns(), r.db.Placeholder(1), limit)
+		args = []any{collection}
+	} else {
+		// With cursor - get records older than the cursor timestamp
+		// Using indexed_at < cursor for "load more" (older posts)
+		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s AND indexed_at < %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
+			r.recordColumns(), r.db.Placeholder(1), r.db.Placeholder(2), limit)
+		args = []any{collection, afterTimestamp}
+	}
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -421,11 +441,8 @@ func scanRecords(rows *sql.Rows) ([]*Record, error) {
 		if err := rows.Scan(&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey); err != nil {
 			return nil, err
 		}
-		// Try RFC3339 first, then SQLite format
-		rec.IndexedAt, _ = time.Parse(time.RFC3339, indexedAtStr)
-		if rec.IndexedAt.IsZero() {
-			rec.IndexedAt, _ = time.Parse("2006-01-02 15:04:05", indexedAtStr)
-		}
+		// Try various timestamp formats
+		rec.IndexedAt = parseTimestamp(indexedAtStr)
 		records = append(records, &rec)
 	}
 	return records, rows.Err()
@@ -444,6 +461,29 @@ func convertToAny(params []database.Value) []any {
 		}
 	}
 	return args
+}
+
+// parseTimestamp tries various formats to parse a timestamp string
+func parseTimestamp(s string) time.Time {
+	formats := []string{
+		time.RFC3339,
+		time.RFC3339Nano,
+		"2006-01-02T15:04:05.999999Z07:00", // ISO with microseconds
+		"2006-01-02 15:04:05.999999-07",    // PostgreSQL with microseconds and timezone
+		"2006-01-02 15:04:05.999999+00",    // PostgreSQL with microseconds UTC
+		"2006-01-02 15:04:05.999999",       // PostgreSQL with microseconds no TZ
+		"2006-01-02 15:04:05-07",           // PostgreSQL with timezone
+		"2006-01-02 15:04:05+00",           // PostgreSQL UTC
+		"2006-01-02 15:04:05",              // SQLite format
+	}
+
+	for _, format := range formats {
+		if t, err := time.Parse(format, s); err == nil {
+			return t
+		}
+	}
+
+	return time.Time{} // Zero time if nothing matches
 }
 
 // IterateAll calls the provided function for each record in the database.

@@ -50,21 +50,22 @@ export default function RootLayout({
 
             {/* Footer */}
             <footer className="relative py-6 mt-auto">
-              <div className="max-w-3xl mx-auto px-4 sm:px-6 flex items-center justify-center gap-2">
-                <span className="text-[11px] text-zinc-400 tracking-wide">
-                  Made by
-                </span>
+              <div className="max-w-3xl mx-auto px-4 sm:px-6">
                 <a
                   href="https://gainforest.earth"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+                  className="flex items-center justify-center gap-1.5 hover:opacity-80 transition-opacity"
                 >
+                  <span className="text-[11px] text-zinc-400 tracking-wide">
+                    Made by
+                  </span>
                   <Image
                     src="/gainforest-logo.png"
                     alt="GainForest"
-                    width={16}
-                    height={16}
+                    width={14}
+                    height={14}
+                    className="inline-block"
                   />
                   <span className="text-[11px] text-emerald-600 font-medium tracking-wide">
                     GainForest

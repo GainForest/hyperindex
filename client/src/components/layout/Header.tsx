@@ -10,6 +10,7 @@ const navLinks = [
   { href: '/', label: 'Dashboard' },
   { href: '/lexicons', label: 'Lexicons' },
   { href: '/backfill', label: 'Backfill' },
+  { href: '/docs', label: 'API Docs' },
 ]
 
 export function Header() {
