@@ -26,6 +26,7 @@ import (
 	"github.com/GainForest/hypergoat/internal/atproto"
 	"github.com/GainForest/hypergoat/internal/backfill"
 	"github.com/GainForest/hypergoat/internal/config"
+	"github.com/GainForest/hypergoat/internal/database"
 	"github.com/GainForest/hypergoat/internal/database/migrations"
 	"github.com/GainForest/hypergoat/internal/database/repositories"
 	hgraphql "github.com/GainForest/hypergoat/internal/graphql"
@@ -46,30 +47,45 @@ func main() {
 	}
 }
 
-// loadLexiconsFromDir loads all lexicon JSON files from a directory tree.
-func loadLexiconsFromDir(dir string, registry *lexicon.Registry) error {
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || !strings.HasSuffix(path, ".json") {
-			return nil
-		}
+// services holds all shared repositories and infrastructure dependencies.
+// Created once in initServices and threaded through all setup functions,
+// eliminating duplicate repository instantiation.
+type services struct {
+	db               database.Executor
+	records          *repositories.RecordsRepository
+	actors           *repositories.ActorsRepository
+	lexicons         *repositories.LexiconsRepository
+	config           *repositories.ConfigRepository
+	activity         *repositories.JetstreamActivityRepository
+	oauthClients     *repositories.OAuthClientsRepository
+	labels           *repositories.LabelsRepository
+	labelDefinitions *repositories.LabelDefinitionsRepository
+	labelPreferences *repositories.LabelPreferencesRepository
+	reports          *repositories.ReportsRepository
+}
 
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
+// backgroundServices tracks cancellable background goroutines for clean shutdown.
+type backgroundServices struct {
+	oauthCleanupCancel context.CancelFunc
+	workersCancel      context.CancelFunc
+	jsConsumer         *jetstream.Consumer
+	jsCancel           context.CancelFunc
+}
 
-		lex, parseErr := lexicon.ParseBytes(data)
-		if parseErr != nil {
-			// Skip non-lexicon JSON files
-			return nil //nolint:nilerr // intentionally skip parse errors
-		}
-
-		registry.Register(lex)
-		return nil
-	})
+// Stop cleanly shuts down all background services.
+func (bg *backgroundServices) Stop() {
+	if bg.oauthCleanupCancel != nil {
+		bg.oauthCleanupCancel()
+	}
+	if bg.workersCancel != nil {
+		bg.workersCancel()
+	}
+	if bg.jsConsumer != nil {
+		bg.jsConsumer.Stop()
+	}
+	if bg.jsCancel != nil {
+		bg.jsCancel()
+	}
 }
 
 func run() error {
@@ -81,54 +97,97 @@ func run() error {
 
 	slog.Info("Starting Hypergoat - AT Protocol AppView Server")
 
-	// Load configuration
+	// Load and validate configuration
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-
 	cfg.LogConfig()
 
-	// Connect to database
-	db, err := server.ConnectDatabase(cfg.DatabaseURL)
+	// Initialize all services (DB, migrations, repositories)
+	svc, err := initServices(cfg)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer svc.db.Close()
 
+	// Set up HTTP router with middleware and basic endpoints
+	r := setupRouter(cfg, svc)
+
+	// Track background services for clean shutdown
+	bg := &backgroundServices{}
+	defer bg.Stop()
+
+	// Set up OAuth endpoints
+	setupOAuth(r, cfg, svc, bg)
+
+	// Set up admin GraphQL endpoint with backfill callbacks
+	adminHandler := setupAdmin(r, cfg, svc)
+
+	// Load lexicons and set up public GraphQL + subscriptions
+	pubsub := subscription.NewPubSub()
+	collections := setupGraphQL(r, cfg, svc, pubsub)
+
+	// Start background workers (activity cleanup)
+	startWorkers(svc, bg)
+
+	// Start Jetstream consumer for real-time events
+	startJetstream(cfg, svc, pubsub, collections, adminHandler, bg)
+
+	// Start backfill if configured
+	startBackfill(cfg, svc)
+
+	// Run HTTP server with graceful shutdown
+	return serve(r, cfg, bg)
+}
+
+// initServices connects to the database, runs migrations, and creates all
+// repository instances. JetstreamActivityRepository is created once here
+// instead of being duplicated across multiple call sites.
+func initServices(cfg *config.Config) (*services, error) {
+	db, err := server.ConnectDatabase(cfg.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
 	slog.Info("Database connected successfully", "dialect", db.Dialect().String())
 
-	// Run database migrations
 	slog.Info("Running database migrations...")
 	if err := migrations.Run(context.Background(), db); err != nil {
-		return err
+		return nil, err
 	}
 	slog.Info("Database migrations complete")
 
-	// Initialize repositories
-	recordsRepo := repositories.NewRecordsRepository(db)
-	actorsRepo := repositories.NewActorsRepository(db)
-	lexiconsRepo := repositories.NewLexiconsRepository(db)
-	configRepo := repositories.NewConfigRepository(db)
-	if cfg.PLCDirectoryURL != "" {
-		configRepo.SetPLCDirectoryOverride(cfg.PLCDirectoryURL)
+	svc := &services{
+		db:               db,
+		records:          repositories.NewRecordsRepository(db),
+		actors:           repositories.NewActorsRepository(db),
+		lexicons:         repositories.NewLexiconsRepository(db),
+		config:           repositories.NewConfigRepository(db),
+		activity:         repositories.NewJetstreamActivityRepository(db),
+		oauthClients:     repositories.NewOAuthClientsRepository(db),
+		labels:           repositories.NewLabelsRepository(db),
+		labelDefinitions: repositories.NewLabelDefinitionsRepository(db),
+		labelPreferences: repositories.NewLabelPreferencesRepository(db),
+		reports:          repositories.NewReportsRepository(db),
 	}
 
-	// Initialize config defaults
+	if cfg.PLCDirectoryURL != "" {
+		svc.config.SetPLCDirectoryOverride(cfg.PLCDirectoryURL)
+	}
+
+	// Initialize config defaults and admin DIDs
 	ctx := context.Background()
-	if err := configRepo.InitializeDefaults(ctx); err != nil {
+	if err := svc.config.InitializeDefaults(ctx); err != nil {
 		slog.Warn("Failed to initialize config defaults", "error", err)
 	}
 
-	// Initialize admin DIDs from environment if not already set in database
 	if adminDIDs := cfg.AdminDIDs; adminDIDs != "" {
-		existingAdmins := configRepo.GetAdminDIDs(ctx)
+		existingAdmins := svc.config.GetAdminDIDs(ctx)
 		if len(existingAdmins) == 0 {
-			if err := configRepo.Set(ctx, "admin_dids", adminDIDs); err != nil {
+			if err := svc.config.Set(ctx, "admin_dids", adminDIDs); err != nil {
 				slog.Warn("Failed to set admin_dids from environment", "error", err)
 			} else {
 				slog.Info("Initialized admin DIDs from environment", "dids", adminDIDs)
@@ -137,36 +196,44 @@ func run() error {
 	}
 
 	// Auto-populate activity from existing records if activity table is empty
-	activityRepo := repositories.NewJetstreamActivityRepository(db)
-	go func() {
-		recordCount, err := recordsRepo.GetCount(ctx)
-		if err != nil {
-			slog.Warn("Failed to get record count for activity population", "error", err)
-			return
-		}
-		if recordCount == 0 {
-			return // No records, nothing to populate
-		}
+	go populateActivityIfEmpty(ctx, svc)
 
-		activityCount, err := activityRepo.GetCount(ctx)
-		if err != nil {
-			slog.Warn("Failed to get activity count", "error", err)
-			return
-		}
-		if activityCount > 0 {
-			return // Activity already populated
-		}
+	return svc, nil
+}
 
-		slog.Info("Populating activity from existing records...", "record_count", recordCount)
-		populated, err := populateActivityFromRecords(ctx, recordsRepo, activityRepo)
-		if err != nil {
-			slog.Error("Failed to populate activity", "error", err)
-		} else {
-			slog.Info("Activity populated from existing records", "count", populated)
-		}
-	}()
+// populateActivityIfEmpty creates activity entries from existing records when
+// the activity table is empty but records exist (e.g., after a migration).
+func populateActivityIfEmpty(ctx context.Context, svc *services) {
+	recordCount, err := svc.records.GetCount(ctx)
+	if err != nil {
+		slog.Warn("Failed to get record count for activity population", "error", err)
+		return
+	}
+	if recordCount == 0 {
+		return
+	}
 
-	// Create router
+	activityCount, err := svc.activity.GetCount(ctx)
+	if err != nil {
+		slog.Warn("Failed to get activity count", "error", err)
+		return
+	}
+	if activityCount > 0 {
+		return
+	}
+
+	slog.Info("Populating activity from existing records...", "record_count", recordCount)
+	populated, err := populateActivityFromRecords(ctx, svc.records, svc.activity)
+	if err != nil {
+		slog.Error("Failed to populate activity", "error", err)
+	} else {
+		slog.Info("Activity populated from existing records", "count", populated)
+	}
+}
+
+// setupRouter creates the chi router with middleware and basic HTTP endpoints
+// (health, stats, root info, XRPC placeholder).
+func setupRouter(cfg *config.Config, svc *services) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -176,7 +243,7 @@ func run() error {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// Health check endpoint
+	// Health check
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -190,19 +257,19 @@ func run() error {
 	r.Get("/stats", func(w http.ResponseWriter, req *http.Request) {
 		reqCtx := req.Context()
 
-		recordCount, err := recordsRepo.GetCount(reqCtx)
+		recordCount, err := svc.records.GetCount(reqCtx)
 		if err != nil {
 			slog.Error("Failed to get record count", "error", err)
 			recordCount = -1
 		}
 
-		actorCount, err := actorsRepo.GetCount(reqCtx)
+		actorCount, err := svc.actors.GetCount(reqCtx)
 		if err != nil {
 			slog.Error("Failed to get actor count", "error", err)
 			actorCount = -1
 		}
 
-		lexiconCount, err := lexiconsRepo.GetCount(reqCtx)
+		lexiconCount, err := svc.lexicons.GetCount(reqCtx)
 		if err != nil {
 			slog.Error("Failed to get lexicon count", "error", err)
 			lexiconCount = -1
@@ -240,8 +307,14 @@ func run() error {
 		})
 	})
 
-	// OAuth endpoints
-	oauthSigningKey, _ := oauth.GenerateDPoPKeyPair() // Generate ephemeral key if not configured
+	return r
+}
+
+// setupOAuth registers all OAuth 2.0 endpoints (discovery, authorization flow,
+// token management, DPoP, client registration, PAR) and starts the token
+// cleanup worker.
+func setupOAuth(r *chi.Mux, cfg *config.Config, svc *services, bg *backgroundServices) {
+	oauthSigningKey, _ := oauth.GenerateDPoPKeyPair()
 	if cfg.OAuthSigningKey != "" {
 		if key, err := oauth.ParseDPoPKeyPair(cfg.OAuthSigningKey); err == nil {
 			oauthSigningKey = key
@@ -260,13 +333,13 @@ func run() error {
 		AccessTokenExpiration:       3600,    // 1 hour
 		RefreshTokenExpiration:      1209600, // 14 days
 		AuthorizationCodeExpiration: 600,     // 10 minutes
-	}, db)
+	}, svc.db)
 
-	// OAuth discovery endpoints (/.well-known/*)
+	// Discovery endpoints
 	r.Get("/.well-known/oauth-authorization-server", oauthHandlers.HandleAuthorizationServerMetadata)
 	r.Get("/.well-known/oauth-protected-resource", oauthHandlers.HandleProtectedResourceMetadata)
 
-	// OAuth client metadata (this server as an OAuth client)
+	// Client metadata (this server as an OAuth client)
 	r.Get("/oauth-client-metadata.json", server.HandleClientMetadata(server.ClientMetadataConfig{
 		ExternalBaseURL: cfg.ExternalBaseURL,
 		ClientName:      "Hypergoat",
@@ -281,119 +354,68 @@ func run() error {
 	r.Get("/oauth/jwks", oauthHandlers.HandleJWKS)
 	r.Post("/oauth/revoke", oauthHandlers.HandleRevoke)
 
-	slog.Info("OAuth endpoints enabled",
-		"authorization_server", cfg.ExternalBaseURL+"/.well-known/oauth-authorization-server",
-		"client_metadata", cfg.ExternalBaseURL+"/oauth-client-metadata.json",
-	)
-
 	// Additional OAuth endpoints
-	registerHandler := server.NewOAuthRegisterHandler(db)
+	registerHandler := server.NewOAuthRegisterHandler(svc.db)
 	r.Post("/oauth/register", registerHandler.HandleRegister)
 
-	parHandler := server.NewOAuthPARHandler(db)
+	parHandler := server.NewOAuthPARHandler(svc.db)
 	r.Post("/oauth/par", parHandler.HandlePAR)
 
 	r.Get("/oauth/dpop/nonce", server.HandleDPoPNonce)
 	r.Post("/oauth/dpop/nonce", server.HandleDPoPNonce)
 
-	// Start OAuth cleanup worker (clean up expired tokens every hour)
+	// Start cleanup worker
 	oauthCleanupCtx, oauthCleanupCancel := context.WithCancel(context.Background())
-	defer oauthCleanupCancel()
+	bg.oauthCleanupCancel = oauthCleanupCancel
 	oauthHandlers.StartCleanupWorker(oauthCleanupCtx, 1*time.Hour)
 
-	// Admin GraphQL endpoint
+	slog.Info("OAuth endpoints enabled",
+		"authorization_server", cfg.ExternalBaseURL+"/.well-known/oauth-authorization-server",
+		"client_metadata", cfg.ExternalBaseURL+"/oauth-client-metadata.json",
+	)
+}
+
+// setupAdmin creates the admin GraphQL handler with backfill callbacks and
+// registers admin routes + GraphiQL playgrounds. Returns the handler (or nil
+// if setup fails) so callers can wire up the lexicon change callback.
+func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 	adminRepos := &admin.Repositories{
-		Records:          recordsRepo,
-		Actors:           actorsRepo,
-		Lexicons:         lexiconsRepo,
-		Config:           configRepo,
-		OAuthClients:     repositories.NewOAuthClientsRepository(db),
-		Activity:         repositories.NewJetstreamActivityRepository(db),
-		Labels:           repositories.NewLabelsRepository(db),
-		LabelDefinitions: repositories.NewLabelDefinitionsRepository(db),
-		LabelPreferences: repositories.NewLabelPreferencesRepository(db),
-		Reports:          repositories.NewReportsRepository(db),
+		Records:          svc.records,
+		Actors:           svc.actors,
+		Lexicons:         svc.lexicons,
+		Config:           svc.config,
+		OAuthClients:     svc.oauthClients,
+		Activity:         svc.activity,
+		Labels:           svc.labels,
+		LabelDefinitions: svc.labelDefinitions,
+		LabelPreferences: svc.labelPreferences,
+		Reports:          svc.reports,
 	}
 
 	authMiddleware := oauth.NewAuthMiddleware(
-		repositories.NewOAuthAccessTokensRepository(db),
-		repositories.NewOAuthDPoPJTIRepository(db),
+		repositories.NewOAuthAccessTokensRepository(svc.db),
+		repositories.NewOAuthDPoPJTIRepository(svc.db),
 		cfg.ExternalBaseURL,
 	)
 
-	// Get domain DID from config or derive from host
 	domainDID := cfg.DomainDID
 	if domainDID == "" {
 		domainDID = "did:web:" + cfg.Host
 	}
 
-	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, configRepo, domainDID, cfg.TrustProxyHeaders)
+	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, svc.config, domainDID, cfg.TrustProxyHeaders)
 	if err != nil {
 		slog.Error("Failed to create admin GraphQL handler", "error", err)
-	} else {
-		// Wire up backfill callback for single-actor backfill from admin UI
-		backfillConfig := backfill.NewConfigFromApp(cfg)
-		if backfillConfig.Collections == nil {
-			backfillConfig.Collections = atproto.ParseCollections(cfg.JetstreamCollections)
-		}
-
-		backfillActivityRepo := repositories.NewJetstreamActivityRepository(db)
-		actorBackfiller := backfill.NewBackfiller(backfillConfig, recordsRepo, actorsRepo, backfillActivityRepo)
-
-		// Single actor backfill callback
-		adminHandler.Resolver().SetBackfillCallback(func(ctx context.Context, did string) error {
-			_, err := actorBackfiller.BackfillActor(ctx, did)
-			return err
-		})
-
-		// Full network backfill callback (runs in background)
-		adminHandler.Resolver().SetFullBackfillCallback(func(ctx context.Context) error {
-			// Get collections from registered lexicons if not configured via env
-			collections := backfillConfig.Collections
-			if len(collections) == 0 {
-				lexicons, err := lexiconsRepo.GetAll(ctx)
-				if err != nil {
-					slog.Error("[backfill] Failed to get lexicons", "error", err)
-					return err
-				}
-				for _, lex := range lexicons {
-					collections = append(collections, lex.ID)
-				}
-			}
-
-			if len(collections) == 0 {
-				slog.Warn("[backfill] No collections configured - register lexicons first or set BACKFILL_COLLECTIONS")
-				return nil
-			}
-
-			// Create a new backfiller with the discovered collections
-			bfConfig := backfillConfig
-			bfConfig.Collections = collections
-			bf := backfill.NewBackfiller(bfConfig, recordsRepo, actorsRepo, backfillActivityRepo)
-			defer bf.Close()
-
-			slog.Info("[backfill] Starting full network backfill", "collections", collections)
-			stats, err := bf.Run(ctx)
-			if err != nil {
-				slog.Error("[backfill] Full backfill failed", "error", err)
-				return err
-			}
-			slog.Info("[backfill] Full backfill completed",
-				"repos_discovered", stats.ReposDiscovered,
-				"repos_processed", stats.ReposProcessed,
-				"records_inserted", stats.RecordsInserted,
-				"duration", stats.Duration(),
-			)
-			return nil
-		})
-
-		slog.Info("Backfill callbacks configured for admin UI")
-
-		// Admin endpoint with optional auth (allows introspection without auth)
-		r.Handle("/admin/graphql", adminHandler.OptionalAuth())
-		r.Handle("/admin/graphql/", adminHandler.OptionalAuth())
-		slog.Info("Admin GraphQL endpoint enabled", "path", "/admin/graphql")
+		return nil
 	}
+
+	// Wire up backfill callbacks for the admin UI
+	configureBackfillCallbacks(adminHandler, cfg, svc)
+
+	// Admin endpoint with optional auth (allows introspection without auth)
+	r.Handle("/admin/graphql", adminHandler.OptionalAuth())
+	r.Handle("/admin/graphql/", adminHandler.OptionalAuth())
+	slog.Info("Admin GraphQL endpoint enabled", "path", "/admin/graphql")
 
 	// GraphiQL playgrounds
 	r.Get("/graphiql", server.HandleGraphiQL(server.GraphiQLConfig{
@@ -440,19 +462,75 @@ func run() error {
 		"admin", cfg.ExternalBaseURL+"/graphiql/admin",
 	)
 
-	// Start background workers
-	activityCleanupWorker := workers.NewActivityCleanupWorker(
-		repositories.NewJetstreamActivityRepository(db),
-	)
-	workersCtx, workersCancel := context.WithCancel(context.Background())
-	defer workersCancel()
-	activityCleanupWorker.Start(workersCtx)
+	return adminHandler
+}
 
-	// Load lexicons and set up GraphQL endpoint
+// configureBackfillCallbacks sets up single-actor and full-network backfill
+// callbacks on the admin handler's resolver, used by the admin UI.
+func configureBackfillCallbacks(adminHandler *admin.Handler, cfg *config.Config, svc *services) {
+	bfConfig := backfill.NewConfigFromApp(cfg)
+	if bfConfig.Collections == nil {
+		bfConfig.Collections = atproto.ParseCollections(cfg.JetstreamCollections)
+	}
+
+	actorBackfiller := backfill.NewBackfiller(bfConfig, svc.records, svc.actors, svc.activity)
+
+	// Single actor backfill
+	adminHandler.Resolver().SetBackfillCallback(func(ctx context.Context, did string) error {
+		_, err := actorBackfiller.BackfillActor(ctx, did)
+		return err
+	})
+
+	// Full network backfill (runs in background)
+	adminHandler.Resolver().SetFullBackfillCallback(func(ctx context.Context) error {
+		collections := bfConfig.Collections
+		if len(collections) == 0 {
+			lexicons, err := svc.lexicons.GetAll(ctx)
+			if err != nil {
+				slog.Error("[backfill] Failed to get lexicons", "error", err)
+				return err
+			}
+			for _, lex := range lexicons {
+				collections = append(collections, lex.ID)
+			}
+		}
+
+		if len(collections) == 0 {
+			slog.Warn("[backfill] No collections configured - register lexicons first or set BACKFILL_COLLECTIONS")
+			return nil
+		}
+
+		fullConfig := bfConfig
+		fullConfig.Collections = collections
+		bf := backfill.NewBackfiller(fullConfig, svc.records, svc.actors, svc.activity)
+		defer bf.Close()
+
+		slog.Info("[backfill] Starting full network backfill", "collections", collections)
+		stats, err := bf.Run(ctx)
+		if err != nil {
+			slog.Error("[backfill] Full backfill failed", "error", err)
+			return err
+		}
+		slog.Info("[backfill] Full backfill completed",
+			"repos_discovered", stats.ReposDiscovered,
+			"repos_processed", stats.ReposProcessed,
+			"records_inserted", stats.RecordsInserted,
+			"duration", stats.Duration(),
+		)
+		return nil
+	})
+
+	slog.Info("Backfill callbacks configured for admin UI")
+}
+
+// setupGraphQL loads lexicons from disk and database, creates the public GraphQL
+// handler with WebSocket subscriptions, and returns the resolved collection list
+// for Jetstream configuration.
+func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscription.PubSub) []string {
+	// Load lexicons from filesystem
 	registry := lexicon.NewRegistry()
 	lexiconDir := cfg.LexiconDir
 	if lexiconDir == "" {
-		// Default to testdata/lexicons for development
 		lexiconDir = "testdata/lexicons"
 	}
 
@@ -464,8 +542,9 @@ func run() error {
 		}
 	}
 
-	// Also load lexicons from the database (uploaded via admin UI)
-	dbLexicons, err := lexiconsRepo.GetAll(ctx)
+	// Load lexicons from database (uploaded via admin UI)
+	ctx := context.Background()
+	dbLexicons, err := svc.lexicons.GetAll(ctx)
 	if err != nil {
 		slog.Warn("Failed to load lexicons from database", "error", err)
 	} else if len(dbLexicons) > 0 {
@@ -482,14 +561,12 @@ func run() error {
 
 	slog.Info("Total lexicons registered", "count", registry.Count())
 
-	// Create GraphQL handler with database repositories
+	// Create GraphQL handler
 	repos := &resolver.Repositories{
-		Records:  recordsRepo,
-		Actors:   actorsRepo,
-		Lexicons: lexiconsRepo,
+		Records:  svc.records,
+		Actors:   svc.actors,
+		Lexicons: svc.lexicons,
 	}
-	// Create PubSub for GraphQL subscriptions (shared between subscriptions and Jetstream consumer)
-	pubsub := subscription.NewPubSub()
 
 	graphqlHandler, err := hgraphql.NewHandler(registry, repos)
 	if err != nil {
@@ -499,7 +576,7 @@ func run() error {
 		r.Handle("/graphql/", graphqlHandler)
 		slog.Info("GraphQL endpoint enabled", "path", "/graphql")
 
-		// Add WebSocket subscription endpoint
+		// WebSocket subscription endpoint
 		var allowedOrigins []string
 		if cfg.AllowedOrigins != "" {
 			allowedOrigins = strings.Split(cfg.AllowedOrigins, ",")
@@ -512,57 +589,67 @@ func run() error {
 		slog.Info("GraphQL subscriptions enabled", "path", "/graphql/ws")
 	}
 
-	// Start Jetstream consumer if collections are configured
-	var jsConsumer *jetstream.Consumer
-
-	// If no config, try to get collections from registered lexicons
+	// Resolve collections for Jetstream
 	var collections []string
 	if cfg.JetstreamCollections != "" {
 		collections = atproto.ParseCollections(cfg.JetstreamCollections)
 	} else {
-		// Read from database lexicons
-		lexicons, err := lexiconsRepo.GetAll(ctx)
-		if err != nil {
-			slog.Warn("Failed to get lexicons for Jetstream", "error", err)
-		} else {
-			for _, lex := range lexicons {
-				collections = append(collections, lex.ID)
-			}
+		for _, lex := range dbLexicons {
+			collections = append(collections, lex.ID)
 		}
 	}
 
-	if len(collections) > 0 {
-		jsURL := cfg.JetstreamURL
-		if jsURL == "" {
-			jsURL = jetstream.DefaultJetstreamURL
-		}
-		disableCursor := cfg.JetstreamDisableCursor
+	return collections
+}
 
-		activityRepo := repositories.NewJetstreamActivityRepository(db)
-		jsConsumer = jetstream.NewConsumer(
+// startWorkers launches background worker goroutines (activity cleanup).
+func startWorkers(svc *services, bg *backgroundServices) {
+	activityCleanupWorker := workers.NewActivityCleanupWorker(svc.activity)
+	workersCtx, workersCancel := context.WithCancel(context.Background())
+	bg.workersCancel = workersCancel
+	activityCleanupWorker.Start(workersCtx)
+}
+
+// startJetstream creates and starts the Jetstream consumer for real-time AT Protocol
+// events. It also wires up the lexicon change callback on the admin handler so that
+// adding/removing lexicons dynamically updates the consumer's collection filter.
+func startJetstream(
+	cfg *config.Config,
+	svc *services,
+	pubsub *subscription.PubSub,
+	collections []string,
+	adminHandler *admin.Handler,
+	bg *backgroundServices,
+) {
+	jsURL := cfg.JetstreamURL
+	if jsURL == "" {
+		jsURL = jetstream.DefaultJetstreamURL
+	}
+
+	if len(collections) > 0 {
+		bg.jsConsumer = jetstream.NewConsumer(
 			jetstream.ConsumerConfig{
 				JetstreamURL:  jsURL,
 				Collections:   collections,
-				DisableCursor: disableCursor,
+				DisableCursor: cfg.JetstreamDisableCursor,
 			},
-			recordsRepo,
-			actorsRepo,
-			configRepo,
-			activityRepo,
+			svc.records,
+			svc.actors,
+			svc.config,
+			svc.activity,
 			pubsub,
 		)
 
-		// Start consumer in background
 		jsCtx, jsCancel := context.WithCancel(context.Background())
-		defer jsCancel()
+		bg.jsCancel = jsCancel
 
 		go func() {
 			slog.Info("Starting Jetstream consumer",
 				"url", jsURL,
 				"collections", collections,
-				"disable_cursor", disableCursor,
+				"disable_cursor", cfg.JetstreamDisableCursor,
 			)
-			if err := jsConsumer.Start(jsCtx); err != nil {
+			if err := bg.jsConsumer.Start(jsCtx); err != nil {
 				slog.Error("Jetstream consumer error", "error", err)
 			}
 		}()
@@ -570,82 +657,79 @@ func run() error {
 		slog.Info("Jetstream consumer disabled (no collections - register lexicons or set JETSTREAM_COLLECTIONS)")
 	}
 
-	// Set up lexicon change callback for dynamic Jetstream updates
+	// Wire up lexicon change callback for dynamic Jetstream updates
 	if adminHandler != nil {
-		adminHandler.Resolver().SetLexiconChangeCallback(func(collections []string) error {
-			if jsConsumer == nil {
-				// Create consumer if it doesn't exist yet
-				jsURL := cfg.JetstreamURL
-				if jsURL == "" {
-					jsURL = jetstream.DefaultJetstreamURL
-				}
-				disableCursor := cfg.JetstreamDisableCursor
-				activityRepo := repositories.NewJetstreamActivityRepository(db)
-
-				jsConsumer = jetstream.NewConsumer(
+		adminHandler.Resolver().SetLexiconChangeCallback(func(updatedCollections []string) error {
+			if bg.jsConsumer == nil {
+				bg.jsConsumer = jetstream.NewConsumer(
 					jetstream.ConsumerConfig{
 						JetstreamURL:  jsURL,
-						Collections:   collections,
-						DisableCursor: disableCursor,
+						Collections:   updatedCollections,
+						DisableCursor: cfg.JetstreamDisableCursor,
 					},
-					recordsRepo,
-					actorsRepo,
-					configRepo,
-					activityRepo,
+					svc.records,
+					svc.actors,
+					svc.config,
+					svc.activity,
 					pubsub,
 				)
 
-				// Start consumer in background
 				go func() {
 					slog.Info("Starting Jetstream consumer (dynamic)",
-						"collections", collections,
+						"collections", updatedCollections,
 					)
-					if err := jsConsumer.Start(context.Background()); err != nil {
+					if err := bg.jsConsumer.Start(context.Background()); err != nil {
 						slog.Error("Jetstream consumer error", "error", err)
 					}
 				}()
 				return nil
 			}
-			return jsConsumer.UpdateCollections(collections)
+			return bg.jsConsumer.UpdateCollections(updatedCollections)
 		})
 		slog.Info("Lexicon change callback configured for dynamic Jetstream updates")
 	}
+}
 
-	// Run backfill if enabled
-	if cfg.BackfillOnStart {
-		bfConfig := backfill.NewConfigFromApp(cfg)
-		if bfConfig.Collections == nil {
-			bfConfig.Collections = atproto.ParseCollections(cfg.JetstreamCollections)
-		}
-
-		if len(bfConfig.Collections) > 0 {
-			startupActivityRepo := repositories.NewJetstreamActivityRepository(db)
-			backfiller := backfill.NewBackfiller(bfConfig, recordsRepo, actorsRepo, startupActivityRepo)
-
-			// Run backfill in background
-			go func() {
-				slog.Info("Starting backfill operation",
-					"collections", collections,
-					"relay", bfConfig.RelayURL,
-				)
-				stats, err := backfiller.Run(context.Background())
-				if err != nil {
-					slog.Error("Backfill failed", "error", err)
-				} else {
-					slog.Info("Backfill completed",
-						"repos_discovered", stats.ReposDiscovered,
-						"repos_processed", stats.ReposProcessed,
-						"records_inserted", stats.RecordsInserted,
-						"duration", stats.Duration(),
-					)
-				}
-			}()
-		} else {
-			slog.Warn("BACKFILL_ON_START=true but no collections specified")
-		}
+// startBackfill runs the initial backfill in the background if BACKFILL_ON_START is set.
+func startBackfill(cfg *config.Config, svc *services) {
+	if !cfg.BackfillOnStart {
+		return
 	}
 
-	// Create HTTP server
+	bfConfig := backfill.NewConfigFromApp(cfg)
+	if bfConfig.Collections == nil {
+		bfConfig.Collections = atproto.ParseCollections(cfg.JetstreamCollections)
+	}
+
+	if len(bfConfig.Collections) == 0 {
+		slog.Warn("BACKFILL_ON_START=true but no collections specified")
+		return
+	}
+
+	backfiller := backfill.NewBackfiller(bfConfig, svc.records, svc.actors, svc.activity)
+
+	go func() {
+		slog.Info("Starting backfill operation",
+			"collections", bfConfig.Collections,
+			"relay", bfConfig.RelayURL,
+		)
+		stats, err := backfiller.Run(context.Background())
+		if err != nil {
+			slog.Error("Backfill failed", "error", err)
+		} else {
+			slog.Info("Backfill completed",
+				"repos_discovered", stats.ReposDiscovered,
+				"repos_processed", stats.ReposProcessed,
+				"records_inserted", stats.RecordsInserted,
+				"duration", stats.Duration(),
+			)
+		}
+	}()
+}
+
+// serve starts the HTTP server and blocks until a shutdown signal is received,
+// then performs a graceful shutdown with a 30-second timeout.
+func serve(r *chi.Mux, cfg *config.Config, bg *backgroundServices) error {
 	srv := &http.Server{
 		Addr:        cfg.Address(),
 		Handler:     r,
@@ -680,13 +764,8 @@ func run() error {
 
 	slog.Info("Shutting down server...")
 
-	// Stop background workers
-	workersCancel()
-
-	// Stop Jetstream consumer
-	if jsConsumer != nil {
-		jsConsumer.Stop()
-	}
+	// Stop background services
+	bg.Stop()
 
 	// Graceful shutdown with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -698,6 +777,32 @@ func run() error {
 
 	slog.Info("Server stopped gracefully")
 	return nil
+}
+
+// loadLexiconsFromDir loads all lexicon JSON files from a directory tree.
+func loadLexiconsFromDir(dir string, registry *lexicon.Registry) error {
+	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".json") {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		lex, parseErr := lexicon.ParseBytes(data)
+		if parseErr != nil {
+			// Skip non-lexicon JSON files
+			return nil //nolint:nilerr // intentionally skip parse errors
+		}
+
+		registry.Register(lex)
+		return nil
+	})
 }
 
 // populateActivityFromRecords creates activity entries from existing records.
