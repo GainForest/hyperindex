@@ -66,9 +66,15 @@ func NewHandler(schema *graphql.Schema, pubsub *PubSub, allowedOrigins []string)
 
 // makeOriginChecker returns a CheckOrigin function based on the allowed origins list.
 func makeOriginChecker(allowedOrigins []string) func(r *http.Request) bool {
-	// If explicitly set to "*", allow all origins (development mode)
-	if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
-		slog.Warn("WebSocket CheckOrigin allows all origins (development mode)")
+	// No origins configured or explicitly set to "*": allow all origins.
+	// This matches the CORS middleware default behavior. To restrict origins,
+	// set ALLOWED_ORIGINS to a comma-separated list of specific origins.
+	if len(allowedOrigins) == 0 || (len(allowedOrigins) == 1 && allowedOrigins[0] == "*") {
+		if len(allowedOrigins) == 0 {
+			slog.Warn("WebSocket CheckOrigin allows all origins (ALLOWED_ORIGINS not configured)")
+		} else {
+			slog.Warn("WebSocket CheckOrigin allows all origins (ALLOWED_ORIGINS=\"*\")")
+		}
 		return func(r *http.Request) bool {
 			return true
 		}
