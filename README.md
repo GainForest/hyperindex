@@ -125,6 +125,18 @@ EXTERNAL_BASE_URL=http://localhost:8080
 # Admin access (comma-separated DIDs)
 ADMIN_DIDS=did:plc:your-did-here
 
+# Security — required for session encryption (min 64 chars)
+SECRET_KEY_BASE=your-secret-key-at-least-64-characters-long-generate-with-openssl-rand
+
+# Proxy auth — set to true when running behind a trusted reverse proxy
+# (e.g. Next.js frontend on Vercel) that sets the X-User-DID header.
+# WARNING: Never enable this when the server is directly exposed to the internet.
+TRUST_PROXY_HEADERS=false
+
+# WebSocket origins — comma-separated allowed origins for subscriptions.
+# Empty = same-origin only. Set to "*" for development.
+# ALLOWED_ORIGINS=https://your-frontend.vercel.app
+
 # Jetstream (real-time indexing)
 # Collections are auto-discovered from registered lexicons
 # Or specify manually:
