@@ -582,6 +582,9 @@ func (r *Resolver) RegisterLexicon(ctx context.Context, nsid string) (map[string
 		return nil, fmt.Errorf("failed to save lexicon: %w", err)
 	}
 
+	// Notify Jetstream consumer of collection changes
+	r.notifyLexiconChange(ctx)
+
 	// Parse schema to extract description
 	var schema struct {
 		ID          string `json:"id"`

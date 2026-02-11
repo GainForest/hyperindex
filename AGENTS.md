@@ -186,7 +186,7 @@ testdata/               # Test fixtures and sample lexicons
 2. **Commit and PUSH**:
    ```bash
    git add -A && git commit -m "feat: description"
-   git push
+   git push origin $branchname
    git status  # MUST show "up to date with origin"
    ```
 3. **Verify** - Work is NOT complete until `git push` succeeds
