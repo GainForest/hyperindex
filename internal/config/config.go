@@ -23,9 +23,8 @@ type Config struct {
 	DatabaseURL string
 
 	// Security
-	SecretKeyBase     string
-	TrustProxyHeaders bool   // Trust X-User-DID header from reverse proxy (default: false, DANGEROUS if true without proxy)
-	AllowedOrigins    string // Comma-separated allowed WebSocket/CORS origins (empty = same-origin only, "*" = allow all)
+	SecretKeyBase  string
+	AllowedOrigins string // Comma-separated allowed WebSocket/CORS origins (empty = same-origin only, "*" = allow all)
 
 	// OAuth
 	ExternalBaseURL   string
@@ -33,8 +32,9 @@ type Config struct {
 	OAuthLoopbackMode bool
 
 	// Admin
-	AdminDIDs string // Comma-separated list of admin DIDs
-	DomainDID string // Domain DID for identity
+	AdminDIDs   string // Comma-separated list of admin DIDs
+	AdminAPIKey string // Shared secret; when set, X-User-DID header is trusted if accompanied by a valid Bearer token
+	DomainDID   string // Domain DID for identity
 
 	// Lexicons
 	LexiconDir string // Directory to load lexicon JSON files from
@@ -75,9 +75,8 @@ func Load() (*Config, error) {
 		DatabaseURL: getEnv("DATABASE_URL", "sqlite:data/hypergoat.db"),
 
 		// Security
-		SecretKeyBase:     getEnv("SECRET_KEY_BASE", ""),
-		TrustProxyHeaders: getEnvBool("TRUST_PROXY_HEADERS", false),
-		AllowedOrigins:    getEnv("ALLOWED_ORIGINS", ""),
+		SecretKeyBase:  getEnv("SECRET_KEY_BASE", ""),
+		AllowedOrigins: getEnv("ALLOWED_ORIGINS", ""),
 
 		// OAuth
 		ExternalBaseURL:   getEnv("EXTERNAL_BASE_URL", ""),
@@ -85,8 +84,9 @@ func Load() (*Config, error) {
 		OAuthLoopbackMode: getEnvBool("OAUTH_LOOPBACK_MODE", false),
 
 		// Admin
-		AdminDIDs: getEnv("ADMIN_DIDS", ""),
-		DomainDID: getEnv("DOMAIN_DID", ""),
+		AdminDIDs:   getEnv("ADMIN_DIDS", ""),
+		AdminAPIKey: getEnv("ADMIN_API_KEY", ""),
+		DomainDID:   getEnv("DOMAIN_DID", ""),
 
 		// Lexicons
 		LexiconDir: getEnv("LEXICON_DIR", ""),
@@ -154,18 +154,17 @@ func (c *Config) LogConfig() {
 		"oauth_loopback_mode", c.OAuthLoopbackMode,
 		"oauth_signing_key_set", c.OAuthSigningKey != "",
 		"admin_dids_set", c.AdminDIDs != "",
+		"admin_api_key_set", c.AdminAPIKey != "",
 		"lexicon_dir", c.LexiconDir,
 		"jetstream_url", c.JetstreamURL,
 		"jetstream_collections", c.JetstreamCollections,
 		"jetstream_disable_cursor", c.JetstreamDisableCursor,
 		"backfill_on_start", c.BackfillOnStart,
-		"trust_proxy_headers", c.TrustProxyHeaders,
 		"allowed_origins", c.AllowedOrigins,
 	)
 
-	if c.TrustProxyHeaders {
-		slog.Warn("TRUST_PROXY_HEADERS is enabled: X-User-DID header will be trusted for authentication. " +
-			"Only enable this when running behind a trusted reverse proxy that sets this header.")
+	if c.AdminAPIKey != "" {
+		slog.Info("ADMIN_API_KEY is set: X-User-DID header will be trusted when accompanied by a valid Bearer token")
 	}
 }
 

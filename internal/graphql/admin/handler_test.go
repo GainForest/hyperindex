@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/graphql-go/graphql"
@@ -229,6 +230,65 @@ func TestRequireAdmin(t *testing.T) {
 	emptyCtx := context.Background()
 	if err := requireAdmin(emptyCtx); err == nil {
 		t.Error("Expected error for empty context, got nil")
+	}
+}
+
+func TestValidAPIKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		adminAPIKey string
+		authHeader  string
+		want        bool
+	}{
+		{
+			name:        "no key configured allows all",
+			adminAPIKey: "",
+			authHeader:  "",
+			want:        true,
+		},
+		{
+			name:        "valid key matches",
+			adminAPIKey: "secret123",
+			authHeader:  "Bearer secret123",
+			want:        true,
+		},
+		{
+			name:        "wrong key rejected",
+			adminAPIKey: "secret123",
+			authHeader:  "Bearer wrong",
+			want:        false,
+		},
+		{
+			name:        "missing auth header rejected",
+			adminAPIKey: "secret123",
+			authHeader:  "",
+			want:        false,
+		},
+		{
+			name:        "non-Bearer scheme rejected",
+			adminAPIKey: "secret123",
+			authHeader:  "Basic secret123",
+			want:        false,
+		},
+		{
+			name:        "Bearer prefix only rejected",
+			adminAPIKey: "secret123",
+			authHeader:  "Bearer ",
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &Handler{adminAPIKey: tt.adminAPIKey}
+			req, _ := http.NewRequest("POST", "/admin/graphql", nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+			if got := h.validAPIKey(req); got != tt.want {
+				t.Errorf("validAPIKey() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

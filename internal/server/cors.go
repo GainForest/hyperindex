@@ -16,8 +16,9 @@ type CORSConfig struct {
 	// "Content-Type" and "Authorization" are always included.
 	AllowedHeaders []string
 
-	// TrustProxyHeaders controls whether X-User-DID is included in allowed headers.
-	TrustProxyHeaders bool
+	// AdminAPIKeySet controls whether X-User-DID is included in allowed headers.
+	// When true, the admin API key mechanism is active and browsers need to send X-User-DID.
+	AdminAPIKeySet bool
 }
 
 // CORSMiddleware returns an HTTP middleware that handles CORS headers and preflight requests.
@@ -33,7 +34,7 @@ func CORSMiddleware(cfg CORSConfig) func(http.Handler) http.Handler {
 	// Build allowed headers
 	headers := []string{"Content-Type", "Authorization", "DPoP"}
 	headers = append(headers, cfg.AllowedHeaders...)
-	if cfg.TrustProxyHeaders {
+	if cfg.AdminAPIKeySet {
 		headers = append(headers, "X-User-DID")
 	}
 	allowedHeaders := strings.Join(headers, ", ")

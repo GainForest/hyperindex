@@ -422,6 +422,46 @@ func TestHandleGraphiQL(t *testing.T) {
 			t.Error("response body does not contain default title")
 		}
 	})
+
+	t.Run("admin auth bar present when AdminAuth enabled", func(t *testing.T) {
+		cfg := GraphiQLConfig{
+			EndpointPath: "/admin/graphql",
+			Title:        "Admin",
+			AdminAuth:    true,
+		}
+		handler := HandleGraphiQL(cfg)
+		req := httptest.NewRequest(http.MethodGet, "/graphiql/admin", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		body := rec.Body.String()
+		if !strings.Contains(body, "admin-api-key") {
+			t.Error("response body does not contain API key input")
+		}
+		if !strings.Contains(body, "admin-did") {
+			t.Error("response body does not contain DID input")
+		}
+		if !strings.Contains(body, "X-User-DID") {
+			t.Error("response body does not contain X-User-DID header logic")
+		}
+		if !strings.Contains(body, "getAdminHeaders") {
+			t.Error("response body does not contain custom header fetcher")
+		}
+	})
+
+	t.Run("admin auth bar absent when AdminAuth disabled", func(t *testing.T) {
+		handler := HandleGraphiQL(baseCfg)
+		req := httptest.NewRequest(http.MethodGet, "/graphiql", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		body := rec.Body.String()
+		if strings.Contains(body, "admin-api-key") {
+			t.Error("response body should not contain admin auth when AdminAuth is false")
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
