@@ -79,6 +79,61 @@ func BuildEdgeType(nodeType *graphql.Object) *graphql.Object {
 	})
 }
 
+// SortDirectionEnum defines the sort direction for collection queries.
+var SortDirectionEnum = graphql.NewEnum(graphql.EnumConfig{
+	Name:        "SortDirection",
+	Description: "Sort direction",
+	Values: graphql.EnumValueConfigMap{
+		"ASC":  &graphql.EnumValueConfig{Value: "ASC", Description: "Ascending order"},
+		"DESC": &graphql.EnumValueConfig{Value: "DESC", Description: "Descending order (default)"},
+	},
+})
+
+// SortableProperty holds the name and type info needed to build a sort enum.
+type SortableProperty struct {
+	Name   string
+	Type   string
+	Format string
+}
+
+// isSortableProperty returns true if the given property type is sortable.
+// Only scalar types are sortable: string (any format), integer, number, boolean.
+func isSortableProperty(propType string) bool {
+	switch propType {
+	case "string", "integer", "number", "boolean":
+		return true
+	default:
+		return false
+	}
+}
+
+// BuildSortFieldEnum creates a per-collection enum of fields that can be used for sorting.
+// Only scalar types are sortable (string, integer, number, boolean).
+// Always includes "indexed_at" as a sortable meta-field.
+func BuildSortFieldEnum(typeName string, properties []SortableProperty) *graphql.Enum {
+	values := graphql.EnumValueConfigMap{
+		"indexed_at": &graphql.EnumValueConfig{
+			Value:       "indexed_at",
+			Description: "Sort by the time the record was indexed",
+		},
+	}
+
+	for _, prop := range properties {
+		if isSortableProperty(prop.Type) {
+			values[prop.Name] = &graphql.EnumValueConfig{
+				Value:       prop.Name,
+				Description: "Sort by " + prop.Name,
+			}
+		}
+	}
+
+	return graphql.NewEnum(graphql.EnumConfig{
+		Name:        typeName + "SortField",
+		Description: "Fields available for sorting " + typeName + " records",
+		Values:      values,
+	})
+}
+
 // BuildConnectionType creates a Connection type for a given node type.
 func BuildConnectionType(nodeType *graphql.Object) *graphql.Object {
 	edgeType := BuildEdgeType(nodeType)

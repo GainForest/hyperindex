@@ -28,6 +28,7 @@ type Builder struct {
 	// Built types
 	recordTypes     map[string]*graphql.Object // lexiconID -> record type
 	connectionTypes map[string]*graphql.Object // lexiconID -> connection type
+	sortFieldEnums  map[string]*graphql.Enum   // lexiconID -> sort field enum
 }
 
 // NewBuilder creates a new schema builder.
@@ -39,6 +40,7 @@ func NewBuilder(registry *lexicon.Registry) *Builder {
 		objectBuilder:   types.NewObjectBuilder(mapper, registry),
 		recordTypes:     make(map[string]*graphql.Object),
 		connectionTypes: make(map[string]*graphql.Object),
+		sortFieldEnums:  make(map[string]*graphql.Enum),
 	}
 }
 
@@ -52,6 +54,9 @@ func (b *Builder) Build() (*graphql.Schema, error) {
 
 	// Phase 3: Build connection types
 	b.buildConnectionTypes()
+
+	// Phase 3b: Build sort field enums for each collection
+	b.buildSortFieldEnums()
 
 	// Phase 4: Build Query type
 	queryType := b.buildQueryType()
@@ -109,6 +114,33 @@ func (b *Builder) buildConnectionTypes() {
 	for lexiconID, recordType := range b.recordTypes {
 		connectionType := query.BuildConnectionType(recordType)
 		b.connectionTypes[lexiconID] = connectionType
+	}
+}
+
+// buildSortFieldEnums builds per-collection sort field enums from lexicon properties.
+func (b *Builder) buildSortFieldEnums() {
+	for _, lex := range b.registry.GetCollectionLexicons() {
+		if lex.Defs.Main == nil {
+			continue
+		}
+
+		recordType, ok := b.recordTypes[lex.ID]
+		if !ok {
+			continue
+		}
+
+		// Collect sortable properties from the lexicon's main record definition
+		var sortableProps []query.SortableProperty
+		for _, entry := range lex.Defs.Main.Properties {
+			sortableProps = append(sortableProps, query.SortableProperty{
+				Name:   entry.Name,
+				Type:   entry.Property.Type,
+				Format: entry.Property.Format,
+			})
+		}
+
+		sortEnum := query.BuildSortFieldEnum(recordType.Name(), sortableProps)
+		b.sortFieldEnums[lex.ID] = sortEnum
 	}
 }
 
@@ -360,10 +392,23 @@ func (b *Builder) buildQueryType() *graphql.Object {
 	for lexiconID, connectionType := range b.connectionTypes {
 		fieldName := lexicon.ToFieldName(lexiconID)
 
+		// Build args: start with standard connection args, then add sort args if available
+		args := query.ConnectionArgs()
+		if sortEnum, ok := b.sortFieldEnums[lexiconID]; ok {
+			args["sortBy"] = &graphql.ArgumentConfig{
+				Type:        sortEnum,
+				Description: "Field to sort by (default: indexed_at)",
+			}
+			args["sortDirection"] = &graphql.ArgumentConfig{
+				Type:        query.SortDirectionEnum,
+				Description: "Sort direction (default: DESC)",
+			}
+		}
+
 		fields[fieldName] = &graphql.Field{
 			Type:        connectionType,
 			Description: fmt.Sprintf("Query %s records", lexiconID),
-			Args:        query.ConnectionArgs(),
+			Args:        args,
 			Resolve:     b.createCollectionResolver(lexiconID),
 		}
 
