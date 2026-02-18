@@ -778,7 +778,7 @@ func TestFilterSort_EmptyResults(t *testing.T) {
 	}
 }
 
-// TestFilterSort_SearchShortQueryError tests that search with < 2 chars returns an error.
+// TestFilterSort_SearchShortQueryError tests that search with < 3 runes returns an error.
 func TestFilterSort_SearchShortQueryError(t *testing.T) {
 	env := setupFilterTestEnv(t)
 
@@ -793,6 +793,14 @@ func TestFilterSort_SearchShortQueryError(t *testing.T) {
 		{
 			name:  "single char query",
 			query: `{ search(query: "a") { edges { node { uri } } } }`,
+		},
+		{
+			name:  "two char query",
+			query: `{ search(query: "ab") { edges { node { uri } } } }`,
+		},
+		{
+			name:  "two multi-byte char query",
+			query: `{ search(query: "éé") { edges { node { uri } } } }`,
 		},
 	}
 
