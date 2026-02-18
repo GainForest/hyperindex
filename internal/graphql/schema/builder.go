@@ -594,7 +594,9 @@ func isTotalCountRequested(p graphql.ResolveParams) bool {
 }
 
 // resolveRecordConnection is the shared implementation for paginated record queries.
-// It uses deterministic keyset pagination with a composite (indexed_at, uri) cursor.
+// It uses deterministic keyset pagination with a composite (sortField, uri) cursor.
+// When sortBy/sortDirection args are present (typed collection queries), it uses the
+// sorted repository method; otherwise it falls back to the default indexed_at DESC order.
 func (b *Builder) resolveRecordConnection(
 	p graphql.ResolveParams,
 	collection string,
@@ -610,16 +612,6 @@ func (b *Builder) resolveRecordConnection(
 	first := query.ClampPageSize(firstArg)
 	after, _ := p.Args["after"].(string)
 
-	// Decode composite cursor if provided
-	var afterTimestamp, afterURI string
-	if after != "" {
-		var err error
-		afterTimestamp, afterURI, err = decodeCursor(after)
-		if err != nil {
-			return nil, fmt.Errorf("invalid cursor: %w", err)
-		}
-	}
-
 	// Extract where filters if present (typed collection queries only)
 	var filters []repositories.FieldFilter
 	var didFilter string
@@ -627,8 +619,32 @@ func (b *Builder) resolveRecordConnection(
 		filters, didFilter = extractFilters(whereArg, collection, b.registry)
 	}
 
-	// Fetch first+1 to determine hasNextPage
-	records, err := repos.Records.GetByCollectionFilteredWithKeysetCursor(p.Context, collection, filters, didFilter, first+1, afterTimestamp, afterURI)
+	// Extract sort args if present (typed collection queries only)
+	var sortOpt *repositories.SortOption
+	if sortByArg, ok := p.Args["sortBy"].(string); ok && sortByArg != "" {
+		direction := "DESC" // default
+		if dirArg, ok := p.Args["sortDirection"].(string); ok && dirArg != "" {
+			direction = dirArg
+		}
+		sortOpt = &repositories.SortOption{Field: sortByArg, Direction: direction}
+	}
+
+	// Decode composite cursor if provided
+	var afterCursorValues []string
+	if after != "" {
+		var err error
+		afterCursorValues, err = decodeCursorValues(after)
+		if err != nil {
+			return nil, fmt.Errorf("invalid cursor: %w", err)
+		}
+		// Ensure we have exactly 2 values for keyset pagination
+		if len(afterCursorValues) != 2 {
+			return nil, fmt.Errorf("invalid cursor: expected 2 components")
+		}
+	}
+
+	// Fetch first+1 to determine hasNextPage using the sorted method
+	records, err := repos.Records.GetByCollectionSortedWithKeysetCursor(p.Context, collection, filters, didFilter, sortOpt, first+1, afterCursorValues)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query records: %w", err)
 	}
@@ -639,9 +655,19 @@ func (b *Builder) resolveRecordConnection(
 		records = records[:first]
 	}
 
-	// Build edges
+	// Build edges with sort-aware cursors
 	edges := make([]interface{}, 0, len(records))
 	var startCursor, endCursor string
+
+	// directSortCols mirrors the repository's directSortColumns set for cursor building
+	directSortCols := map[string]bool{
+		"indexed_at": true,
+		"uri":        true,
+		"did":        true,
+		"collection": true,
+		"cid":        true,
+		"rkey":       true,
+	}
 
 	for _, rec := range records {
 		var value map[string]interface{}
@@ -654,7 +680,37 @@ func (b *Builder) resolveRecordConnection(
 			continue
 		}
 
-		cursor := encodeCursor(rec.IndexedAt.Format("2006-01-02T15:04:05Z"), rec.URI)
+		// Build sort-aware cursor: [sortFieldValue, uri]
+		var sortFieldValue string
+		if sortOpt == nil {
+			// Default: sort by indexed_at
+			sortFieldValue = rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+		} else if directSortCols[sortOpt.Field] {
+			// Sort by a direct column — extract from the Record struct
+			switch sortOpt.Field {
+			case "indexed_at":
+				sortFieldValue = rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+			case "uri":
+				sortFieldValue = rec.URI
+			case "did":
+				sortFieldValue = rec.DID
+			case "collection":
+				sortFieldValue = rec.Collection
+			case "cid":
+				sortFieldValue = rec.CID
+			case "rkey":
+				sortFieldValue = rec.RKey
+			default:
+				sortFieldValue = rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+			}
+		} else {
+			// Sort by a JSON field — extract from the parsed data map
+			if v, exists := value[sortOpt.Field]; exists && v != nil {
+				sortFieldValue = fmt.Sprintf("%v", v)
+			}
+		}
+
+		cursor := encodeCursorValues(sortFieldValue, rec.URI)
 		if startCursor == "" {
 			startCursor = cursor
 		}
@@ -933,18 +989,33 @@ func emptyConnection() map[string]interface{} {
 	}
 }
 
+// encodeCursorValues encodes multiple cursor component values into a base64 string.
+func encodeCursorValues(values ...string) string {
+	return base64.URLEncoding.EncodeToString([]byte(strings.Join(values, "|")))
+}
+
+// decodeCursorValues decodes a base64 cursor into its component values.
+func decodeCursorValues(cursor string) ([]string, error) {
+	data, err := base64.URLEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor")
+	}
+	return strings.Split(string(data), "|"), nil
+}
+
 // encodeCursor encodes a composite (indexed_at, uri) cursor as base64.
+// Kept for backward compatibility; delegates to encodeCursorValues.
 func encodeCursor(indexedAt, uri string) string {
-	return base64.URLEncoding.EncodeToString([]byte(indexedAt + "|" + uri))
+	return encodeCursorValues(indexedAt, uri)
 }
 
 // decodeCursor decodes a base64 cursor into (indexed_at, uri) components.
+// Kept for backward compatibility; delegates to decodeCursorValues.
 func decodeCursor(cursor string) (string, string, error) {
-	data, err := base64.URLEncoding.DecodeString(cursor)
+	parts, err := decodeCursorValues(cursor)
 	if err != nil {
 		return "", "", err
 	}
-	parts := strings.SplitN(string(data), "|", 2)
 	if len(parts) != 2 {
 		return "", "", fmt.Errorf("malformed cursor: expected 'timestamp|uri'")
 	}

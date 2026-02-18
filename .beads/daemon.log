@@ -855,3 +855,159 @@ time=2026-02-18T15:02:41.300+08:00 level=INFO msg="Pulled from remote"
 time=2026-02-18T15:02:41.300+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
 time=2026-02-18T15:02:41.300+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
 time=2026-02-18T15:03:47.775+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T15:03:47.826+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T15:03:47.826+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:03:48.828+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:03:48.829+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:03:48.841+08:00 level=INFO msg="File change detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:03:48.848+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:03:48.848+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T15:03:48.848+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T15:03:49.595+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:03:49.595+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:03:49.595+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T15:03:49.843+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:03:49.844+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:03:49.855+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:03:49.855+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T15:03:49.855+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T15:03:50.586+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:03:50.586+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:03:50.586+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T15:03:54.549+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T15:03:54.600+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T15:03:54.600+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:03:55.602+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:03:55.603+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:03:55.611+08:00 level=INFO msg="File change detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:03:56.340+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:03:56.341+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:03:56.341+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T15:03:56.613+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:03:56.614+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:03:57.392+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:03:57.392+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:03:57.393+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T15:04:00.385+08:00 level=INFO msg="Mutation detected" type=status issue_id=hyperindex-49s.11
+time=2026-02-18T15:04:00.887+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T15:04:00.888+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T15:04:00.896+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T15:04:00.897+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T15:04:00.897+08:00 level=INFO msg="Export complete"
+time=2026-02-18T15:04:00.947+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T15:04:00.947+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:04:01.950+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:04:01.951+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:04:01.964+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:04:01.964+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T15:04:01.964+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T15:04:02.717+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:04:02.717+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:04:02.718+08:00 level=INFO msg="JSONL content changed, proceeding with operation..." mode=auto-import
+time=2026-02-18T15:04:02.724+08:00 level=INFO msg="Imported from JSONL"
+time=2026-02-18T15:04:02.725+08:00 level=INFO msg="Auto-import complete"
+time=2026-02-18T15:05:58.032+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T15:05:58.084+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T15:05:58.084+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:05:59.086+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:05:59.087+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:05:59.104+08:00 level=INFO msg="File change detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:05:59.912+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:05:59.913+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:05:59.913+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T15:06:00.106+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:06:00.107+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:06:00.877+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:06:00.877+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:06:00.877+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T15:06:00.991+08:00 level=INFO msg="Mutation detected" type=status issue_id=hyperindex-49s.9
+time=2026-02-18T15:06:01.492+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T15:06:01.493+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T15:06:01.501+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T15:06:01.501+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T15:06:01.501+08:00 level=INFO msg="Export complete"
+time=2026-02-18T15:06:01.552+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T15:06:01.552+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:02.554+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:06:02.555+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:06:02.580+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:02.580+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T15:06:02.580+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T15:06:03.319+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:06:03.319+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:06:03.320+08:00 level=INFO msg="JSONL content changed, proceeding with operation..." mode=auto-import
+time=2026-02-18T15:06:03.324+08:00 level=INFO msg="Imported from JSONL"
+time=2026-02-18T15:06:03.324+08:00 level=INFO msg="Auto-import complete"
+time=2026-02-18T15:06:04.350+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T15:06:04.401+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T15:06:04.401+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:05.402+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:06:05.404+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:06:05.422+08:00 level=INFO msg="File change detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:05.437+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:05.437+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T15:06:05.437+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T15:06:06.207+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:06:06.207+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:06:06.207+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T15:06:06.424+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:06:06.426+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:06:06.441+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:06.441+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T15:06:06.441+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T15:06:07.191+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:06:07.191+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:06:07.192+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T15:06:38.556+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T15:06:38.607+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T15:06:38.607+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:38.642+08:00 level=INFO msg="File change detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:38.658+08:00 level=INFO msg="Mutation detected" type=update issue_id=hyperindex-49s.12
+time=2026-02-18T15:06:39.159+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T15:06:39.159+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T15:06:39.164+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T15:06:39.165+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T15:06:39.165+08:00 level=INFO msg="Export complete"
+time=2026-02-18T15:06:39.216+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T15:06:39.216+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:39.329+08:00 level=INFO msg="Mutation detected" type=update issue_id=hyperindex-49s.10
+time=2026-02-18T15:06:39.655+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:06:39.656+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:06:39.668+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:39.668+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T15:06:39.668+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T15:06:39.830+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T15:06:39.831+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T15:06:39.831+08:00 level=INFO msg="JSONL changed externally, importing before export"
+time=2026-02-18T15:06:39.837+08:00 level=INFO msg="Auto-import complete, proceeding with export"
+time=2026-02-18T15:06:39.841+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T15:06:39.842+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T15:06:39.842+08:00 level=INFO msg="Export complete"
+time=2026-02-18T15:06:39.892+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T15:06:39.892+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:40.218+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:06:40.219+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:06:40.229+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:40.229+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T15:06:40.229+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T15:06:40.432+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:06:40.432+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:06:40.433+08:00 level=INFO msg="JSONL content changed, proceeding with operation..." mode=auto-import
+time=2026-02-18T15:06:40.437+08:00 level=INFO msg="Imported from JSONL"
+time=2026-02-18T15:06:40.438+08:00 level=INFO msg="Auto-import complete"
+time=2026-02-18T15:06:40.894+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T15:06:40.895+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T15:06:40.911+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T15:06:40.911+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T15:06:40.911+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T15:06:40.957+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:06:40.957+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:06:40.958+08:00 level=INFO msg="JSONL content changed, proceeding with operation..." mode=auto-import
+time=2026-02-18T15:06:40.963+08:00 level=INFO msg="Imported from JSONL"
+time=2026-02-18T15:06:40.964+08:00 level=INFO msg="Auto-import complete"
+time=2026-02-18T15:06:41.641+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T15:06:41.641+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T15:06:41.642+08:00 level=INFO msg="JSONL content changed, proceeding with operation..." mode=auto-import
+time=2026-02-18T15:06:41.646+08:00 level=INFO msg="Imported from JSONL"
+time=2026-02-18T15:06:41.646+08:00 level=INFO msg="Auto-import complete"
+time=2026-02-18T15:06:42.903+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
