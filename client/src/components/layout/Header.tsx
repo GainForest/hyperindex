@@ -180,7 +180,7 @@ export function Header() {
                       Settings
                     </Link>
                     <a
-                      href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"}/graphiql`}
+                      href="/graphiql"
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={() => setShowDropdown(false)}
