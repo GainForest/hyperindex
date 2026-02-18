@@ -245,6 +245,18 @@ func TestIndexHandler_HandleRecord_ActivityLogged(t *testing.T) {
 	if count == 0 {
 		t.Error("expected activity to be logged, but count is 0")
 	}
+
+	// Verify activity status is "completed" (not "pending")
+	entries, err := db.Activity.GetRecentActivity(ctx, 1)
+	if err != nil {
+		t.Fatalf("failed to get recent activity: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected at least one activity entry")
+	}
+	if entries[0].Status != "completed" {
+		t.Errorf("expected activity status %q, got %q", "completed", entries[0].Status)
+	}
 }
 
 func TestIndexHandler_HandleRecord_NilActivity(t *testing.T) {

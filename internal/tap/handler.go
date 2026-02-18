@@ -53,8 +53,13 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 
 		// Log activity (if activity repo available)
 		if h.activity != nil {
-			if _, err := h.activity.LogActivity(ctx, time.Now(), string(event.Action), event.Collection, event.DID, event.RKey, string(event.Record)); err != nil {
+			activityID, err := h.activity.LogActivity(ctx, time.Now(), string(event.Action), event.Collection, event.DID, event.RKey, string(event.Record))
+			if err != nil {
 				slog.Debug("Failed to log activity", "error", err)
+			} else {
+				if err := h.activity.UpdateStatus(ctx, activityID, "completed", nil); err != nil {
+					slog.Debug("Failed to update activity status", "error", err)
+				}
 			}
 		}
 
@@ -75,8 +80,13 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 			h.pubsub.PublishRecord(subscription.EventDelete, uri, "", event.DID, event.Collection, nil)
 		}
 		if h.activity != nil {
-			if _, err := h.activity.LogActivity(ctx, time.Now(), "delete", event.Collection, event.DID, event.RKey, ""); err != nil {
+			activityID, err := h.activity.LogActivity(ctx, time.Now(), "delete", event.Collection, event.DID, event.RKey, "")
+			if err != nil {
 				slog.Debug("Failed to log delete activity", "error", err)
+			} else {
+				if err := h.activity.UpdateStatus(ctx, activityID, "completed", nil); err != nil {
+					slog.Debug("Failed to update activity status", "error", err)
+				}
 			}
 		}
 	}
