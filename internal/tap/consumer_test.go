@@ -477,6 +477,62 @@ func TestConsumer_Stats(t *testing.T) {
 	}
 }
 
+// TestConsumer_StopDuringDispatch verifies that calling Stop() concurrently with
+// active event dispatching does not cause a data race. gorilla/websocket does not
+// allow concurrent writers, so Stop() must not call WriteMessage while dispatch()
+// may be sending acks.
+func TestConsumer_StopDuringDispatch(t *testing.T) {
+	const numEvents = 200
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		// Send many events rapidly to keep dispatch() busy writing acks.
+		for i := 0; i < numEvents; i++ {
+			ev := Event{
+				ID:   int64(i + 1),
+				Type: EventTypeRecord,
+				Record: &RecordEvent{
+					DID:        "did:plc:race",
+					Collection: "app.bsky.feed.post",
+					RKey:       fmt.Sprintf("rkey%d", i),
+					Action:     ActionCreate,
+				},
+			}
+			data, err := json.Marshal(ev)
+			if err != nil {
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				// Connection may have been closed by Stop() — that is expected.
+				return
+			}
+		}
+		// Drain any acks that arrive before the connection closes.
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+		}
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	// Let the consumer connect and start receiving events, then stop it
+	// concurrently while dispatch() is actively writing acks.
+	time.Sleep(10 * time.Millisecond)
+	consumer.Stop()
+}
+
 // TestConsumer_HandlerErrorDoesNotAck verifies that handler errors suppress acks.
 func TestConsumer_HandlerErrorDoesNotAck(t *testing.T) {
 	ackReceived := make(chan struct{})

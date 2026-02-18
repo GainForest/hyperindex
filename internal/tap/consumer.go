@@ -287,10 +287,6 @@ func (c *Consumer) Stop() {
 		c.connMu.Unlock()
 
 		if conn != nil {
-			_ = conn.WriteMessage(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-			)
 			_ = conn.Close()
 		}
 	})
