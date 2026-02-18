@@ -73,10 +73,10 @@ export default function BackfillPage() {
     <div className="pt-8 sm:pt-12 space-y-10">
       {/* Hero Section */}
       <div className="max-w-md">
-        <h2 className="font-[family-name:var(--font-garamond)] text-3xl sm:text-4xl text-zinc-900 leading-tight">
+        <h2 className="font-[family-name:var(--font-syne)] text-3xl sm:text-4xl leading-tight" style={{ color: "var(--foreground)" }}>
           Backfill
         </h2>
-        <p className="text-zinc-500 mt-3 leading-relaxed">
+        <p className="mt-3 leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
           Sync historical data from the AT Protocol relay
         </p>
       </div>
@@ -95,13 +95,13 @@ export default function BackfillPage() {
 
       {/* Status */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           Status
         </h3>
-        <div className="rounded-xl border border-zinc-200/60 bg-white p-6">
+        <div className="rounded-xl border p-6" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
           {statusLoading ? (
-            <div className="flex items-center gap-2 text-zinc-400">
-              <div className="w-4 h-4 rounded-full border-2 border-zinc-200 border-t-zinc-400 animate-spin" />
+            <div className="flex items-center gap-2" style={{ color: "var(--muted-foreground)" }}>
+              <div className="w-4 h-4 rounded-full border-2 animate-spin" style={{ borderColor: "var(--border)", borderTopColor: "var(--muted-foreground)" }} />
               Checking status...
             </div>
           ) : isBackfilling ? (
@@ -115,13 +115,13 @@ export default function BackfillPage() {
               </div>
             </div>
           ) : (
-            <div className="flex items-center gap-3 p-4 bg-emerald-50/50 border border-emerald-200/60 rounded-lg">
-              <svg className="h-5 w-5 text-emerald-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <div className="flex items-center gap-3 p-4 rounded-lg border" style={{ backgroundColor: "var(--accent)", borderColor: "var(--border)" }}>
+              <svg className="h-5 w-5" style={{ color: "oklch(0.65 0.15 155)" }} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
               </svg>
               <div>
-                <div className="font-medium text-emerald-700">Idle</div>
-                <div className="text-sm text-emerald-600/70">
+                <div className="font-medium" style={{ color: "oklch(0.65 0.15 155)" }}>Idle</div>
+                <div className="text-sm" style={{ color: "var(--muted-foreground)" }}>
                   No backfill currently running
                 </div>
               </div>
@@ -132,11 +132,11 @@ export default function BackfillPage() {
 
       {/* Full Backfill */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           Full Backfill
         </h3>
-        <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-4">
-          <p className="text-sm text-zinc-500">
+        <div className="rounded-xl border p-6 space-y-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
+          <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
             Trigger a complete backfill of all known actors from the relay.
             This will fetch all historical records for actors that have been seen.
           </p>
@@ -164,7 +164,7 @@ export default function BackfillPage() {
               )}
             </Button>
             {isBackfilling && (
-              <span className="text-sm text-zinc-400">
+              <span className="text-sm" style={{ color: "var(--muted-foreground)" }}>
                 A backfill is already in progress
               </span>
             )}
@@ -187,11 +187,11 @@ export default function BackfillPage() {
 
       {/* Actor Backfill */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           Backfill Single Actor
         </h3>
-        <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-4">
-          <p className="text-sm text-zinc-500">
+        <div className="rounded-xl border p-6 space-y-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
+          <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
             Fetch all historical records for a specific actor by their DID.
             Useful for quickly syncing a single user.
           </p>
