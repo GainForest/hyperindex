@@ -315,7 +315,7 @@ func TestHandleClientMetadata(t *testing.T) {
 func TestHandleGraphiQL(t *testing.T) {
 	baseCfg := GraphiQLConfig{
 		Endpoint: "/graphql",
-		Title:    "Hypergoat GraphiQL",
+		Title:    "Hyperindex GraphiQL",
 	}
 
 	t.Run("GET returns 200 with text/html content type", func(t *testing.T) {
@@ -356,7 +356,7 @@ func TestHandleGraphiQL(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		body := rec.Body.String()
-		if !strings.Contains(body, "Hypergoat GraphiQL") {
+		if !strings.Contains(body, "Hyperindex GraphiQL") {
 			t.Error("response body does not contain title")
 		}
 	})

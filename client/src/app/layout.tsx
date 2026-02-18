@@ -1,20 +1,21 @@
 import type { Metadata } from "next";
-import { Inter, EB_Garamond } from "next/font/google";
+import { Syne, Outfit } from "next/font/google";
 import Image from "next/image";
 import { Header } from "@/components/layout/Header";
 import { GeometricBackground } from "@/components/layout/GeometricBackground";
 import { Providers } from "@/components/Providers";
 import "./globals.css";
 
-const inter = Inter({
-  variable: "--font-inter",
+const syne = Syne({
+  variable: "--font-syne",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
 });
 
-const garamond = EB_Garamond({
-  variable: "--font-garamond",
+const outfit = Outfit({
+  variable: "--font-outfit",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: ["300", "400", "500", "600", "700"],
 });
 
 export const metadata: Metadata = {
@@ -34,7 +35,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${inter.variable} ${garamond.variable} antialiased bg-white text-zinc-800`}
+        className={`${syne.variable} ${outfit.variable} antialiased`}
       >
         <Providers>
           <div className="relative min-h-screen overflow-hidden flex flex-col">

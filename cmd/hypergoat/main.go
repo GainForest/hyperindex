@@ -106,7 +106,7 @@ func run() error {
 	}))
 	slog.SetDefault(logger)
 
-	slog.Info("Starting Hypergoat - AT Protocol AppView Server")
+	slog.Info("Starting Hyperindex - AT Protocol AppView Server")
 
 	// Load and validate configuration
 	cfg, err := config.Load()
@@ -351,7 +351,7 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 	r.Get("/", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"name":        "Hypergoat",
+			"name":        "Hyperindex",
 			"description": "AT Protocol AppView Server",
 			"version":     "0.1.0-dev",
 			"docs":        cfg.ExternalBaseURL + "/docs",
@@ -405,7 +405,7 @@ func setupOAuth(r *chi.Mux, cfg *config.Config, svc *services, bg *backgroundSer
 	// Client metadata (this server as an OAuth client)
 	r.Get("/oauth-client-metadata.json", server.HandleClientMetadata(server.ClientMetadataConfig{
 		ExternalBaseURL: cfg.ExternalBaseURL,
-		ClientName:      "Hypergoat",
+		ClientName:      "Hyperindex",
 		Scope:           "atproto transition:generic",
 	}))
 
@@ -484,8 +484,8 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 	r.Get("/graphiql", server.HandleGraphiQL(server.GraphiQLConfig{
 		Endpoint:             cfg.ExternalBaseURL + "/graphql",
 		SubscriptionEndpoint: strings.Replace(cfg.ExternalBaseURL, "http", "ws", 1) + "/graphql/ws",
-		Title:                "Hypergoat GraphQL",
-		DefaultQuery: `# Hypergoat GraphQL API
+		Title:                "Hyperindex GraphQL",
+		DefaultQuery: `# Hyperindex GraphQL API
 # 
 # Explore the AT Protocol data indexed by this AppView.
 # Try querying for records from your configured lexicons.
@@ -503,8 +503,8 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 
 	r.Get("/graphiql/admin", server.HandleGraphiQL(server.GraphiQLConfig{
 		Endpoint: cfg.ExternalBaseURL + "/admin/graphql",
-		Title:    "Hypergoat Admin",
-		DefaultQuery: `# Hypergoat Admin API
+		Title:    "Hyperindex Admin",
+		DefaultQuery: `# Hyperindex Admin API
 #
 # Administrative operations for managing the AppView.
 # Note: Some operations require authentication.

@@ -1,4 +1,4 @@
-// Package server contains HTTP handlers for the hypergoat server.
+// Package server contains HTTP handlers for the Hyperindex server.
 // GraphiQL playground handler using CDN-hosted resources.
 package server
 
