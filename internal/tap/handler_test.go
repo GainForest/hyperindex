@@ -329,10 +329,10 @@ func TestIndexHandler_HandleRecord_NilPubSub(t *testing.T) {
 	}
 }
 
-func TestIndexHandler_HandleRecord_DeleteError(t *testing.T) {
-	// Deleting a non-existent record should NOT return an error because
-	// SQL DELETE of 0 rows is not an error. This test verifies the happy path
-	// of the delete code path (no DB error → no returned error).
+// TestIndexHandler_HandleRecord_DeleteNonExistent verifies that deleting a record
+// that does not exist is not an error (SQL DELETE of 0 rows is fine) and that
+// pubsub events are still published.
+func TestIndexHandler_HandleRecord_DeleteNonExistent(t *testing.T) {
 	handler, _, pubsub := setupHandler(t)
 	ctx := context.Background()
 
@@ -360,6 +360,56 @@ func TestIndexHandler_HandleRecord_DeleteError(t *testing.T) {
 		}
 	default:
 		t.Error("expected pubsub event to be published for delete of non-existent record")
+	}
+}
+
+func TestIndexHandler_HandleRecord_DeleteActivityCompleted(t *testing.T) {
+	handler, db, _ := setupHandler(t)
+	ctx := context.Background()
+
+	// First create a record so there is something to delete.
+	createEvent := &tap.RecordEvent{
+		DID:        "did:plc:henry",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post-del-activity",
+		Action:     tap.ActionCreate,
+		CID:        "bafyreihenry",
+		Record:     json.RawMessage(`{"text":"to be deleted"}`),
+	}
+	if err := handler.HandleRecord(ctx, createEvent); err != nil {
+		t.Fatalf("HandleRecord (create) returned error: %v", err)
+	}
+
+	// Now delete the record.
+	deleteEvent := &tap.RecordEvent{
+		DID:        "did:plc:henry",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post-del-activity",
+		Action:     tap.ActionDelete,
+	}
+	if err := handler.HandleRecord(ctx, deleteEvent); err != nil {
+		t.Fatalf("HandleRecord (delete) returned error: %v", err)
+	}
+
+	// GetRecentActivity returns entries ordered by timestamp DESC, so the delete
+	// entry should be first. Fetch enough entries to find the delete one.
+	entries, err := db.Activity.GetRecentActivity(ctx, 10)
+	if err != nil {
+		t.Fatalf("failed to get recent activity: %v", err)
+	}
+
+	found := false
+	for _, e := range entries {
+		if e.Operation == "delete" {
+			found = true
+			if e.Status != "completed" {
+				t.Errorf("expected delete activity status %q, got %q", "completed", e.Status)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("expected to find an activity entry with operation=\"delete\"")
 	}
 }
 
