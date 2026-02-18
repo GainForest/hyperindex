@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  tap:
+    image: ghcr.io/bluesky-social/indigo/tap:latest
+    ports:
+      - "2480:2480"
+    volumes:
+      - tap-data:/data
+    environment:
+      TAP_DATABASE_URL: "sqlite:///data/tap.db"
+      TAP_COLLECTION_FILTERS: "${JETSTREAM_COLLECTIONS}"
+      TAP_SIGNAL_COLLECTION: "${TAP_SIGNAL_COLLECTION:-}"
+      TAP_DISABLE_ACKS: "false"
+      TAP_ADMIN_PASSWORD: "${TAP_ADMIN_PASSWORD:-}"
+    restart: unless-stopped
+
+  hyperindex:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      - tap
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      TAP_ENABLED: "true"
+      TAP_URL: "ws://tap:2480"
+      TAP_ADMIN_PASSWORD: "${TAP_ADMIN_PASSWORD:-}"
+      DATABASE_URL: "${DATABASE_URL:-sqlite:data/hypergoat.db}"
+      SECRET_KEY_BASE: "${SECRET_KEY_BASE:-development-secret-key-change-in-production-64chars}"
+      EXTERNAL_BASE_URL: "${EXTERNAL_BASE_URL:-http://localhost:8080}"
+      OAUTH_LOOPBACK_MODE: "${OAUTH_LOOPBACK_MODE:-true}"
+      ADMIN_DIDS: "${ADMIN_DIDS:-}"
+    volumes:
+      - hyperindex-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  tap-data:
+  hyperindex-data:
