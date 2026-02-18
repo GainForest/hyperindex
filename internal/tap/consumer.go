@@ -109,8 +109,10 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 		err := c.runOnce(ctx)
 
-		// Reset backoff after a successful connection that processed events.
-		backoff = minBackoff
+		// Reset backoff only after a successful connection (not failed dials).
+		if err == nil {
+			backoff = minBackoff
+		}
 
 		// Check if we should stop after connection ended.
 		select {
