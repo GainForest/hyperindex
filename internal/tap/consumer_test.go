@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -665,6 +666,97 @@ func TestConsumer_LargeMessageRejected(t *testing.T) {
 
 	if atomic.LoadInt32(&connectionCount) < 2 {
 		t.Errorf("expected at least 2 connections, got %d", atomic.LoadInt32(&connectionCount))
+	}
+}
+
+// capturingHandler is a slog.Handler that records all log records.
+type capturingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *capturingHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *capturingHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
+func (h *capturingHandler) WithGroup(name string) slog.Handler       { return h }
+
+func (h *capturingHandler) ErrorRecords() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var errs []slog.Record
+	for _, r := range h.records {
+		if r.Level >= slog.LevelError {
+			errs = append(errs, r)
+		}
+	}
+	return errs
+}
+
+// TestConsumer_ShutdownNoSpuriousLog verifies that cancelling the context during
+// shutdown does not produce any Error-level log messages.
+func TestConsumer_ShutdownNoSpuriousLog(t *testing.T) {
+	connected := make(chan struct{})
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		close(connected)
+		// Keep connection open until the client disconnects.
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+		}
+	})
+	defer srv.Close()
+
+	// Install a capturing slog handler for the duration of this test.
+	capturing := &capturingHandler{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(capturing))
+	defer slog.SetDefault(origLogger)
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Start(ctx)
+	}()
+
+	// Wait for the consumer to connect before cancelling.
+	select {
+	case <-connected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("consumer did not connect within timeout")
+	}
+
+	// Cancel the context to trigger graceful shutdown.
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil && err != context.Canceled {
+			t.Errorf("Start() returned unexpected error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("consumer did not shut down within timeout")
+	}
+
+	// Verify no Error-level log messages were emitted during shutdown.
+	if errRecords := capturing.ErrorRecords(); len(errRecords) > 0 {
+		for _, r := range errRecords {
+			t.Errorf("unexpected Error-level log during shutdown: %s", r.Message)
+		}
 	}
 }
 

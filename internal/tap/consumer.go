@@ -122,7 +122,11 @@ func (c *Consumer) Start(ctx context.Context) error {
 		}
 
 		if err != nil {
-			slog.Error("Tap connection lost, will reconnect",
+			// If the context was cancelled, the error is expected — don't log it as an error.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			slog.Warn("Tap connection lost, will reconnect",
 				"error", err,
 				"backoff", backoff,
 			)
