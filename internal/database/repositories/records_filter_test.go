@@ -2,6 +2,7 @@
 package repositories
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -233,5 +234,302 @@ func TestBuildFilterClause_MultipleFilters(t *testing.T) {
 	// Two params: eq and gt (isNull has no param)
 	if len(params) != 2 {
 		t.Errorf("params count = %d, want 2", len(params))
+	}
+}
+
+// newSortTestRepo creates a RecordsRepository with a fresh in-memory SQLite DB and the record table.
+// Returns the repo and a helper function for running raw SQL (e.g., to set indexed_at).
+func newSortTestRepo(t *testing.T) (*RecordsRepository, func(query string, args ...any)) {
+	t.Helper()
+	exec, err := sqlite.NewExecutor("sqlite::memory:")
+	if err != nil {
+		t.Fatalf("failed to create executor: %v", err)
+	}
+	t.Cleanup(func() { exec.Close() })
+	rawDB := exec.DB()
+	_, err = rawDB.ExecContext(context.Background(), `
+		CREATE TABLE IF NOT EXISTS record (
+			uri TEXT PRIMARY KEY,
+			cid TEXT NOT NULL,
+			did TEXT NOT NULL,
+			collection TEXT NOT NULL,
+			json TEXT NOT NULL DEFAULT '{}',
+			indexed_at TEXT NOT NULL DEFAULT (datetime('now')),
+			rkey TEXT NOT NULL DEFAULT ''
+		)`)
+	if err != nil {
+		t.Fatalf("failed to create record table: %v", err)
+	}
+	execFn := func(query string, args ...any) {
+		_, _ = rawDB.ExecContext(context.Background(), query, args...)
+	}
+	return NewRecordsRepository(exec), execFn
+}
+
+func insertSortRecord(t *testing.T, repo *RecordsRepository, uri, cid, did, collection, jsonData string) {
+	t.Helper()
+	_, err := repo.Insert(context.Background(), uri, cid, did, collection, jsonData)
+	if err != nil {
+		t.Fatalf("failed to insert record %s: %v", uri, err)
+	}
+}
+
+func TestBuildSortExpr_NilSortOption(t *testing.T) {
+	repo := newTestRepo(t)
+	expr := repo.buildSortExpr(nil)
+	want := "indexed_at DESC, uri DESC"
+	if expr != want {
+		t.Errorf("buildSortExpr(nil) = %q, want %q", expr, want)
+	}
+}
+
+func TestBuildSortExpr_IndexedAtASC(t *testing.T) {
+	repo := newTestRepo(t)
+	sort := &SortOption{Field: "indexed_at", Direction: "ASC"}
+	expr := repo.buildSortExpr(sort)
+	want := "indexed_at ASC, uri ASC"
+	if expr != want {
+		t.Errorf("buildSortExpr(indexed_at ASC) = %q, want %q", expr, want)
+	}
+}
+
+func TestBuildSortExpr_IndexedAtDESC(t *testing.T) {
+	repo := newTestRepo(t)
+	sort := &SortOption{Field: "indexed_at", Direction: "DESC"}
+	expr := repo.buildSortExpr(sort)
+	want := "indexed_at DESC, uri DESC"
+	if expr != want {
+		t.Errorf("buildSortExpr(indexed_at DESC) = %q, want %q", expr, want)
+	}
+}
+
+func TestBuildSortExpr_URIField(t *testing.T) {
+	repo := newTestRepo(t)
+	sort := &SortOption{Field: "uri", Direction: "ASC"}
+	expr := repo.buildSortExpr(sort)
+	// uri is the sort field itself — no tiebreaker appended
+	if !strings.Contains(expr, "uri ASC") {
+		t.Errorf("buildSortExpr(uri ASC) = %q, want to contain 'uri ASC'", expr)
+	}
+	// Should NOT have a second uri reference (no tiebreaker)
+	if strings.Count(expr, "uri") > 1 {
+		t.Errorf("buildSortExpr(uri ASC) = %q, should not have duplicate uri", expr)
+	}
+}
+
+func TestBuildSortExpr_JSONField(t *testing.T) {
+	repo := newTestRepo(t)
+	sort := &SortOption{Field: "createdAt", Direction: "DESC"}
+	expr := repo.buildSortExpr(sort)
+	// Should use JSONExtract (json_extract for SQLite)
+	if !strings.Contains(expr, "json_extract") && !strings.Contains(expr, "->>'") {
+		t.Errorf("buildSortExpr(createdAt DESC) = %q, want JSONExtract expression", expr)
+	}
+	if !strings.Contains(expr, "DESC") {
+		t.Errorf("buildSortExpr(createdAt DESC) = %q, want DESC", expr)
+	}
+	// Should have uri tiebreaker
+	if !strings.Contains(expr, "uri DESC") {
+		t.Errorf("buildSortExpr(createdAt DESC) = %q, want uri DESC tiebreaker", expr)
+	}
+}
+
+func TestBuildSortExpr_DirectColumnDID(t *testing.T) {
+	repo := newTestRepo(t)
+	sort := &SortOption{Field: "did", Direction: "ASC"}
+	expr := repo.buildSortExpr(sort)
+	if !strings.Contains(expr, "did ASC") {
+		t.Errorf("buildSortExpr(did ASC) = %q, want 'did ASC'", expr)
+	}
+	if !strings.Contains(expr, "uri ASC") {
+		t.Errorf("buildSortExpr(did ASC) = %q, want 'uri ASC' tiebreaker", expr)
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_DefaultSort(t *testing.T) {
+	repo, execSQL := newSortTestRepo(t)
+	ctx := context.Background()
+
+	insertSortRecord(t, repo, "at://did:plc:test/col/r1", "cid1", "did:plc:test", "col", `{"val":"a"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test/col/r1'`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r2", "cid2", "did:plc:test", "col", `{"val":"b"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test/col/r2'`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r3", "cid3", "did:plc:test", "col", `{"val":"c"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test/col/r3'`)
+
+	// nil sort → indexed_at DESC (newest first)
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, "", nil, 10, nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("got %d records, want 3", len(records))
+	}
+	// Newest first: r3, r2, r1
+	if records[0].URI != "at://did:plc:test/col/r3" {
+		t.Errorf("records[0].URI = %q, want r3", records[0].URI)
+	}
+	if records[1].URI != "at://did:plc:test/col/r2" {
+		t.Errorf("records[1].URI = %q, want r2", records[1].URI)
+	}
+	if records[2].URI != "at://did:plc:test/col/r1" {
+		t.Errorf("records[2].URI = %q, want r1", records[2].URI)
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_IndexedAtASC(t *testing.T) {
+	repo, execSQL := newSortTestRepo(t)
+	ctx := context.Background()
+
+	insertSortRecord(t, repo, "at://did:plc:test/col/r1", "cid1", "did:plc:test", "col", `{"val":"a"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test/col/r1'`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r2", "cid2", "did:plc:test", "col", `{"val":"b"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test/col/r2'`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r3", "cid3", "did:plc:test", "col", `{"val":"c"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test/col/r3'`)
+
+	sort := &SortOption{Field: "indexed_at", Direction: "ASC"}
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, "", sort, 10, nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("got %d records, want 3", len(records))
+	}
+	// Oldest first: r1, r2, r3
+	if records[0].URI != "at://did:plc:test/col/r1" {
+		t.Errorf("records[0].URI = %q, want r1", records[0].URI)
+	}
+	if records[2].URI != "at://did:plc:test/col/r3" {
+		t.Errorf("records[2].URI = %q, want r3", records[2].URI)
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_JSONFieldSort(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	// Insert records with different createdAt values in JSON
+	insertSortRecord(t, repo, "at://did:plc:test/col/r1", "cid1", "did:plc:test", "col", `{"createdAt":"2026-01-15T10:00:00Z"}`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r2", "cid2", "did:plc:test", "col", `{"createdAt":"2026-01-15T12:00:00Z"}`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r3", "cid3", "did:plc:test", "col", `{"createdAt":"2026-01-15T11:00:00Z"}`)
+
+	// Sort by JSON field createdAt DESC
+	sort := &SortOption{Field: "createdAt", Direction: "DESC"}
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, "", sort, 10, nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("got %d records, want 3", len(records))
+	}
+	// DESC: r2 (12:00), r3 (11:00), r1 (10:00)
+	if records[0].URI != "at://did:plc:test/col/r2" {
+		t.Errorf("records[0].URI = %q, want r2 (newest createdAt)", records[0].URI)
+	}
+	if records[1].URI != "at://did:plc:test/col/r3" {
+		t.Errorf("records[1].URI = %q, want r3", records[1].URI)
+	}
+	if records[2].URI != "at://did:plc:test/col/r1" {
+		t.Errorf("records[2].URI = %q, want r1 (oldest createdAt)", records[2].URI)
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_KeysetCursorASC(t *testing.T) {
+	repo, execSQL := newSortTestRepo(t)
+	ctx := context.Background()
+
+	insertSortRecord(t, repo, "at://did:plc:test/col/r1", "cid1", "did:plc:test", "col", `{"val":"a"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test/col/r1'`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r2", "cid2", "did:plc:test", "col", `{"val":"b"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test/col/r2'`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r3", "cid3", "did:plc:test", "col", `{"val":"c"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test/col/r3'`)
+
+	// ASC sort: r1, r2, r3. Cursor after r1 → should return r2, r3
+	sort := &SortOption{Field: "indexed_at", Direction: "ASC"}
+	cursor := []string{"2026-01-15T10:00:00Z", "at://did:plc:test/col/r1"}
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, "", sort, 10, cursor)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want 2", len(records))
+	}
+	if records[0].URI != "at://did:plc:test/col/r2" {
+		t.Errorf("records[0].URI = %q, want r2", records[0].URI)
+	}
+	if records[1].URI != "at://did:plc:test/col/r3" {
+		t.Errorf("records[1].URI = %q, want r3", records[1].URI)
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_KeysetCursorDESC(t *testing.T) {
+	repo, execSQL := newSortTestRepo(t)
+	ctx := context.Background()
+
+	insertSortRecord(t, repo, "at://did:plc:test/col/r1", "cid1", "did:plc:test", "col", `{"val":"a"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test/col/r1'`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r2", "cid2", "did:plc:test", "col", `{"val":"b"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test/col/r2'`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r3", "cid3", "did:plc:test", "col", `{"val":"c"}`)
+	execSQL(`UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test/col/r3'`)
+
+	// DESC sort: r3, r2, r1. Cursor after r3 → should return r2, r1
+	sort := &SortOption{Field: "indexed_at", Direction: "DESC"}
+	cursor := []string{"2026-01-15T12:00:00Z", "at://did:plc:test/col/r3"}
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, "", sort, 10, cursor)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want 2", len(records))
+	}
+	if records[0].URI != "at://did:plc:test/col/r2" {
+		t.Errorf("records[0].URI = %q, want r2", records[0].URI)
+	}
+	if records[1].URI != "at://did:plc:test/col/r1" {
+		t.Errorf("records[1].URI = %q, want r1", records[1].URI)
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_SortAndFilters(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	// Insert records: some with tag "go", some without
+	insertSortRecord(t, repo, "at://did:plc:test/col/r1", "cid1", "did:plc:test", "col", `{"tag":"go","createdAt":"2026-01-15T10:00:00Z"}`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r2", "cid2", "did:plc:test", "col", `{"tag":"rust","createdAt":"2026-01-15T11:00:00Z"}`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r3", "cid3", "did:plc:test", "col", `{"tag":"go","createdAt":"2026-01-15T12:00:00Z"}`)
+	insertSortRecord(t, repo, "at://did:plc:test/col/r4", "cid4", "did:plc:test", "col", `{"tag":"go","createdAt":"2026-01-15T09:00:00Z"}`)
+
+	// Filter by tag=go, sort by createdAt ASC
+	filters := []FieldFilter{
+		{Field: "tag", Operator: "eq", Value: "go", FieldType: "string"},
+	}
+	sort := &SortOption{Field: "createdAt", Direction: "ASC"}
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", filters, "", sort, 10, nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	// Should return r4, r1, r3 (tag=go, sorted by createdAt ASC)
+	if len(records) != 3 {
+		t.Fatalf("got %d records, want 3", len(records))
+	}
+	if records[0].URI != "at://did:plc:test/col/r4" {
+		t.Errorf("records[0].URI = %q, want r4 (09:00)", records[0].URI)
+	}
+	if records[1].URI != "at://did:plc:test/col/r1" {
+		t.Errorf("records[1].URI = %q, want r1 (10:00)", records[1].URI)
+	}
+	if records[2].URI != "at://did:plc:test/col/r3" {
+		t.Errorf("records[2].URI = %q, want r3 (12:00)", records[2].URI)
+	}
+
+	// Verify r2 (tag=rust) is excluded
+	for _, rec := range records {
+		if rec.URI == "at://did:plc:test/col/r2" {
+			t.Error("r2 (tag=rust) should not be in results")
+		}
 	}
 }
