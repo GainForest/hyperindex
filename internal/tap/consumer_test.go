@@ -1,0 +1,540 @@
+package tap
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+// upgrader is used by the mock WebSocket server.
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// mockHandler is a test implementation of EventHandler.
+type mockHandler struct {
+	mu             sync.Mutex
+	recordEvents   []*RecordEvent
+	identityEvents []*IdentityEvent
+	recordErr      error
+	identityErr    error
+}
+
+func (m *mockHandler) HandleRecord(_ context.Context, event *RecordEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.recordEvents = append(m.recordEvents, event)
+	return m.recordErr
+}
+
+func (m *mockHandler) HandleIdentity(_ context.Context, event *IdentityEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.identityEvents = append(m.identityEvents, event)
+	return m.identityErr
+}
+
+func (m *mockHandler) RecordCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.recordEvents)
+}
+
+func (m *mockHandler) IdentityCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.identityEvents)
+}
+
+// newTestServer creates a mock WebSocket server that calls serverFn for each connection.
+// serverFn receives the WebSocket connection and can send messages and read acks.
+func newTestServer(t *testing.T, serverFn func(conn *websocket.Conn)) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/channel", func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Logf("upgrade error: %v", err)
+			return
+		}
+		defer conn.Close()
+		serverFn(conn)
+	})
+	return httptest.NewServer(mux)
+}
+
+// wsURL converts an http:// test server URL to ws://.
+func wsURL(httpURL string) string {
+	return strings.Replace(httpURL, "http://", "ws://", 1)
+}
+
+// sendEvent sends a Tap event JSON to the WebSocket connection.
+func sendEvent(t *testing.T, conn *websocket.Conn, event Event) {
+	t.Helper()
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("failed to marshal event: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		t.Logf("write error (may be expected on close): %v", err)
+	}
+}
+
+// readAck reads one text message from the connection and returns it.
+func readAck(t *testing.T, conn *websocket.Conn) string {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	msgType, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("failed to read ack: %v", err)
+	}
+	if msgType != websocket.TextMessage {
+		t.Fatalf("expected text message for ack, got type %d", msgType)
+	}
+	return string(data)
+}
+
+// TestConsumer_ConnectsToChannel verifies the consumer connects to /channel.
+func TestConsumer_ConnectsToChannel(t *testing.T) {
+	connected := make(chan struct{})
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		close(connected)
+		// Keep connection open briefly then close.
+		time.Sleep(100 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	select {
+	case <-connected:
+		// Success
+	case <-time.After(2 * time.Second):
+		t.Fatal("consumer did not connect within timeout")
+	}
+
+	consumer.Stop()
+}
+
+// TestConsumer_ReceivesAndAcksRecordEvent verifies record events are dispatched and acked.
+func TestConsumer_ReceivesAndAcksRecordEvent(t *testing.T) {
+	ackReceived := make(chan string, 1)
+
+	recordEvent := Event{
+		ID:   12345,
+		Type: EventTypeRecord,
+		Record: &RecordEvent{
+			Live:       true,
+			Rev:        "abc123",
+			DID:        "did:plc:alice",
+			Collection: "app.bsky.feed.post",
+			RKey:       "rkey1",
+			Action:     ActionCreate,
+			CID:        "bafyreiabc",
+			Record:     json.RawMessage(`{"text":"hello"}`),
+		},
+	}
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		sendEvent(t, conn, recordEvent)
+		ack := readAck(t, conn)
+		ackReceived <- ack
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	select {
+	case ack := <-ackReceived:
+		if ack != "12345" {
+			t.Errorf("expected ack '12345', got %q", ack)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not receive ack within timeout")
+	}
+
+	consumer.Stop()
+
+	if handler.RecordCount() != 1 {
+		t.Errorf("expected 1 record event, got %d", handler.RecordCount())
+	}
+}
+
+// TestConsumer_ReceivesAndAcksIdentityEvent verifies identity events are dispatched and acked.
+func TestConsumer_ReceivesAndAcksIdentityEvent(t *testing.T) {
+	ackReceived := make(chan string, 1)
+
+	identityEvent := Event{
+		ID:   12346,
+		Type: EventTypeIdentity,
+		Identity: &IdentityEvent{
+			DID:      "did:plc:alice",
+			Handle:   "alice.bsky.social",
+			IsActive: true,
+			Status:   "active",
+		},
+	}
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		sendEvent(t, conn, identityEvent)
+		ack := readAck(t, conn)
+		ackReceived <- ack
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	select {
+	case ack := <-ackReceived:
+		if ack != "12346" {
+			t.Errorf("expected ack '12346', got %q", ack)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not receive ack within timeout")
+	}
+
+	consumer.Stop()
+
+	if handler.IdentityCount() != 1 {
+		t.Errorf("expected 1 identity event, got %d", handler.IdentityCount())
+	}
+}
+
+// TestConsumer_DisableAcks verifies no ack is sent when DisableAcks=true.
+func TestConsumer_DisableAcks(t *testing.T) {
+	eventHandled := make(chan struct{})
+	ackReceived := make(chan struct{})
+
+	recordEvent := Event{
+		ID:   99,
+		Type: EventTypeRecord,
+		Record: &RecordEvent{
+			Live:       true,
+			DID:        "did:plc:bob",
+			Collection: "app.bsky.feed.post",
+			RKey:       "rkey2",
+			Action:     ActionCreate,
+		},
+	}
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		sendEvent(t, conn, recordEvent)
+		// Try to read an ack with a short timeout — should not arrive.
+		_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+		_, _, err := conn.ReadMessage()
+		if err == nil {
+			close(ackReceived)
+		}
+		// Signal that we've processed the event check.
+		close(eventHandled)
+		// Keep connection open so consumer doesn't reconnect.
+		time.Sleep(500 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{
+		TapURL:      wsURL(srv.URL),
+		DisableAcks: true,
+	}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	select {
+	case <-eventHandled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not finish within timeout")
+	}
+
+	select {
+	case <-ackReceived:
+		t.Error("received unexpected ack when DisableAcks=true")
+	default:
+		// Good — no ack received.
+	}
+
+	consumer.Stop()
+}
+
+// TestConsumer_ReconnectsOnConnectionLoss verifies reconnection with backoff.
+func TestConsumer_ReconnectsOnConnectionLoss(t *testing.T) {
+	var connectionCount int32
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		count := atomic.AddInt32(&connectionCount, 1)
+		if count == 1 {
+			// First connection: close immediately to trigger reconnect.
+			conn.Close()
+			return
+		}
+		// Second connection: stay open briefly.
+		time.Sleep(200 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	// Use a very short initial backoff for testing by overriding via a custom consumer.
+	// We can't easily override minBackoff, so we just wait long enough for the default 1s backoff.
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	// Wait for at least 2 connections (initial + reconnect after 1s backoff).
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&connectionCount) >= 2 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	consumer.Stop()
+
+	if atomic.LoadInt32(&connectionCount) < 2 {
+		t.Errorf("expected at least 2 connections (reconnect), got %d", atomic.LoadInt32(&connectionCount))
+	}
+}
+
+// TestConsumer_StopGracefully verifies Stop closes the connection cleanly.
+func TestConsumer_StopGracefully(t *testing.T) {
+	serverDone := make(chan struct{})
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		defer close(serverDone)
+		// Read until connection closes.
+		for {
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+		}
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		_ = consumer.Start(ctx)
+	}()
+
+	<-started
+	// Give the consumer time to connect.
+	time.Sleep(100 * time.Millisecond)
+
+	consumer.Stop()
+
+	select {
+	case <-serverDone:
+		// Server saw the connection close — graceful shutdown confirmed.
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not see connection close after Stop()")
+	}
+}
+
+// TestConsumer_Stats verifies Stats() returns correct event counts.
+func TestConsumer_Stats(t *testing.T) {
+	allAcked := make(chan struct{})
+	var ackCount int32
+
+	events := []Event{
+		{
+			ID:   1,
+			Type: EventTypeRecord,
+			Record: &RecordEvent{
+				DID: "did:plc:a", Collection: "app.bsky.feed.post", RKey: "r1",
+				Action: ActionCreate,
+			},
+		},
+		{
+			ID:   2,
+			Type: EventTypeRecord,
+			Record: &RecordEvent{
+				DID: "did:plc:a", Collection: "app.bsky.feed.post", RKey: "r1",
+				Action: ActionUpdate,
+			},
+		},
+		{
+			ID:   3,
+			Type: EventTypeRecord,
+			Record: &RecordEvent{
+				DID: "did:plc:a", Collection: "app.bsky.feed.post", RKey: "r1",
+				Action: ActionDelete,
+			},
+		},
+		{
+			ID:       4,
+			Type:     EventTypeIdentity,
+			Identity: &IdentityEvent{DID: "did:plc:a", Handle: "alice.bsky.social", IsActive: true, Status: "active"},
+		},
+	}
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		for _, ev := range events {
+			sendEvent(t, conn, ev)
+		}
+		// Read all acks.
+		for i := 0; i < len(events); i++ {
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			_, _, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if atomic.AddInt32(&ackCount, 1) == int32(len(events)) {
+				close(allAcked)
+			}
+		}
+		// Keep connection open.
+		time.Sleep(500 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	select {
+	case <-allAcked:
+	case <-time.After(4 * time.Second):
+		t.Fatal("did not receive all acks within timeout")
+	}
+
+	consumer.Stop()
+
+	stats := consumer.Stats()
+	if stats.EventsReceived != 4 {
+		t.Errorf("EventsReceived: want 4, got %d", stats.EventsReceived)
+	}
+	if stats.RecordsCreated != 1 {
+		t.Errorf("RecordsCreated: want 1, got %d", stats.RecordsCreated)
+	}
+	if stats.RecordsUpdated != 1 {
+		t.Errorf("RecordsUpdated: want 1, got %d", stats.RecordsUpdated)
+	}
+	if stats.RecordsDeleted != 1 {
+		t.Errorf("RecordsDeleted: want 1, got %d", stats.RecordsDeleted)
+	}
+	if stats.IdentityEvents != 1 {
+		t.Errorf("IdentityEvents: want 1, got %d", stats.IdentityEvents)
+	}
+	if stats.Errors != 0 {
+		t.Errorf("Errors: want 0, got %d", stats.Errors)
+	}
+}
+
+// TestConsumer_HandlerErrorDoesNotAck verifies that handler errors suppress acks.
+func TestConsumer_HandlerErrorDoesNotAck(t *testing.T) {
+	ackReceived := make(chan struct{})
+	eventSent := make(chan struct{})
+
+	recordEvent := Event{
+		ID:   777,
+		Type: EventTypeRecord,
+		Record: &RecordEvent{
+			DID: "did:plc:err", Collection: "app.bsky.feed.post", RKey: "r1",
+			Action: ActionCreate,
+		},
+	}
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		sendEvent(t, conn, recordEvent)
+		close(eventSent)
+		// Try to read ack with short timeout.
+		_ = conn.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+		_, _, err := conn.ReadMessage()
+		if err == nil {
+			close(ackReceived)
+		}
+		// Keep connection open.
+		time.Sleep(500 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{recordErr: fmt.Errorf("handler error")}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	select {
+	case <-eventSent:
+	case <-time.After(2 * time.Second):
+		t.Fatal("event was not sent within timeout")
+	}
+
+	// Wait a bit to ensure no ack arrives.
+	time.Sleep(500 * time.Millisecond)
+
+	select {
+	case <-ackReceived:
+		t.Error("received unexpected ack after handler error")
+	default:
+		// Good — no ack.
+	}
+
+	consumer.Stop()
+
+	stats := consumer.Stats()
+	if stats.Errors != 1 {
+		t.Errorf("Errors: want 1, got %d", stats.Errors)
+	}
+}
