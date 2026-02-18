@@ -317,6 +317,40 @@ func TestIndexHandler_HandleRecord_NilPubSub(t *testing.T) {
 	}
 }
 
+func TestIndexHandler_HandleRecord_DeleteError(t *testing.T) {
+	// Deleting a non-existent record should NOT return an error because
+	// SQL DELETE of 0 rows is not an error. This test verifies the happy path
+	// of the delete code path (no DB error → no returned error).
+	handler, _, pubsub := setupHandler(t)
+	ctx := context.Background()
+
+	// Subscribe to capture published events
+	sub := pubsub.Subscribe("app.bsky.feed.post")
+	defer pubsub.Unsubscribe(sub)
+
+	// Delete a record that does not exist — should succeed (0 rows affected is fine)
+	deleteEvent := &tap.RecordEvent{
+		DID:        "did:plc:nonexistent",
+		Collection: "app.bsky.feed.post",
+		RKey:       "doesnotexist",
+		Action:     tap.ActionDelete,
+	}
+
+	if err := handler.HandleRecord(ctx, deleteEvent); err != nil {
+		t.Fatalf("HandleRecord (delete non-existent) returned unexpected error: %v", err)
+	}
+
+	// Verify pubsub event was still published (delete succeeded)
+	select {
+	case pubEvent := <-sub.Events:
+		if pubEvent.Type != subscription.EventDelete {
+			t.Errorf("expected EventDelete, got %q", pubEvent.Type)
+		}
+	default:
+		t.Error("expected pubsub event to be published for delete of non-existent record")
+	}
+}
+
 func TestIndexHandler_HandleIdentity(t *testing.T) {
 	handler, db, _ := setupHandler(t)
 	ctx := context.Background()

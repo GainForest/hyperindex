@@ -69,7 +69,7 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 
 	case ActionDelete:
 		if err := h.records.Delete(ctx, uri); err != nil {
-			slog.Debug("Failed to delete record", "uri", uri, "error", err)
+			return fmt.Errorf("failed to delete record: %w", err)
 		}
 		if h.pubsub != nil {
 			h.pubsub.PublishRecord(subscription.EventDelete, uri, "", event.DID, event.Collection, nil)
