@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/graphql-go/graphql"
 
@@ -728,6 +729,148 @@ func TestBuildWhereInput_DidHandledSeparately(t *testing.T) {
 	// "title" must still appear.
 	if _, exists := inputFields["title"]; !exists {
 		t.Error("non-colliding property 'title' is missing from WhereInput")
+	}
+}
+
+// TestSortFieldValueForRecord verifies that sortFieldValueForRecord extracts the
+// correct sort field value from a record for cursor building.
+func TestSortFieldValueForRecord(t *testing.T) {
+	now := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
+	rec := &repositories.Record{
+		URI:        "at://did:plc:abc/com.example.post/rkey123",
+		CID:        "bafyreiabcdef",
+		DID:        "did:plc:abc",
+		Collection: "com.example.post",
+		RKey:       "rkey123",
+		IndexedAt:  now,
+	}
+
+	tests := []struct {
+		name    string
+		sortOpt *repositories.SortOption
+		value   map[string]interface{}
+		want    string
+	}{
+		{
+			name:    "nil sortOpt returns indexed_at",
+			sortOpt: nil,
+			value:   map[string]interface{}{},
+			want:    "2024-06-15T12:00:00Z",
+		},
+		{
+			name:    "indexed_at field returns formatted time",
+			sortOpt: &repositories.SortOption{Field: "indexed_at", Direction: "DESC"},
+			value:   map[string]interface{}{},
+			want:    "2024-06-15T12:00:00Z",
+		},
+		{
+			name:    "uri field returns record URI",
+			sortOpt: &repositories.SortOption{Field: "uri", Direction: "DESC"},
+			value:   map[string]interface{}{},
+			want:    "at://did:plc:abc/com.example.post/rkey123",
+		},
+		{
+			name:    "did field returns record DID",
+			sortOpt: &repositories.SortOption{Field: "did", Direction: "ASC"},
+			value:   map[string]interface{}{},
+			want:    "did:plc:abc",
+		},
+		{
+			name:    "cid field returns record CID",
+			sortOpt: &repositories.SortOption{Field: "cid", Direction: "DESC"},
+			value:   map[string]interface{}{},
+			want:    "bafyreiabcdef",
+		},
+		{
+			name:    "rkey field returns record RKey",
+			sortOpt: &repositories.SortOption{Field: "rkey", Direction: "DESC"},
+			value:   map[string]interface{}{},
+			want:    "rkey123",
+		},
+		{
+			name:    "collection field returns record Collection",
+			sortOpt: &repositories.SortOption{Field: "collection", Direction: "DESC"},
+			value:   map[string]interface{}{},
+			want:    "com.example.post",
+		},
+		{
+			name:    "JSON field present returns its value",
+			sortOpt: &repositories.SortOption{Field: "title", Direction: "DESC"},
+			value:   map[string]interface{}{"title": "Hello World"},
+			want:    "Hello World",
+		},
+		{
+			name:    "JSON field missing returns empty string",
+			sortOpt: &repositories.SortOption{Field: "title", Direction: "DESC"},
+			value:   map[string]interface{}{},
+			want:    "",
+		},
+		{
+			name:    "JSON field with nil value returns empty string",
+			sortOpt: &repositories.SortOption{Field: "title", Direction: "DESC"},
+			value:   map[string]interface{}{"title": nil},
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sortFieldValueForRecord(rec, tt.value, tt.sortOpt)
+			if got != tt.want {
+				t.Errorf("sortFieldValueForRecord() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestEmptyConnection verifies that emptyConnection returns a well-formed
+// Relay connection with empty edges, all-false pageInfo, and totalCount of 0.
+func TestEmptyConnection(t *testing.T) {
+	result := emptyConnection()
+
+	// Verify edges is an empty (non-nil) slice
+	edges, ok := result["edges"]
+	if !ok {
+		t.Fatal("emptyConnection: missing 'edges' key")
+	}
+	edgeSlice, ok := edges.([]interface{})
+	if !ok {
+		t.Fatalf("emptyConnection: edges is %T, want []interface{}", edges)
+	}
+	if len(edgeSlice) != 0 {
+		t.Errorf("emptyConnection: edges length = %d, want 0", len(edgeSlice))
+	}
+
+	// Verify pageInfo structure
+	pageInfoRaw, ok := result["pageInfo"]
+	if !ok {
+		t.Fatal("emptyConnection: missing 'pageInfo' key")
+	}
+	pageInfo, ok := pageInfoRaw.(map[string]interface{})
+	if !ok {
+		t.Fatalf("emptyConnection: pageInfo is %T, want map[string]interface{}", pageInfoRaw)
+	}
+
+	if v, ok := pageInfo["hasNextPage"].(bool); !ok || v {
+		t.Errorf("emptyConnection: hasNextPage = %v, want false", pageInfo["hasNextPage"])
+	}
+	if v, ok := pageInfo["hasPreviousPage"].(bool); !ok || v {
+		t.Errorf("emptyConnection: hasPreviousPage = %v, want false", pageInfo["hasPreviousPage"])
+	}
+	if pageInfo["startCursor"] != nil {
+		t.Errorf("emptyConnection: startCursor = %v, want nil", pageInfo["startCursor"])
+	}
+	if pageInfo["endCursor"] != nil {
+		t.Errorf("emptyConnection: endCursor = %v, want nil", pageInfo["endCursor"])
+	}
+
+	// Verify totalCount is 0
+	totalCount, ok := result["totalCount"]
+	if !ok {
+		t.Fatal("emptyConnection: missing 'totalCount' key")
+	}
+	if totalCount != 0 {
+		t.Errorf("emptyConnection: totalCount = %v, want 0", totalCount)
 	}
 }
 
