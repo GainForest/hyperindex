@@ -1265,3 +1265,129 @@ func TestRecordsRepository_Search_Pagination(t *testing.T) {
 		}
 	})
 }
+
+func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T) {
+	env := setupRecordsTestEnv(t)
+	repo := env.repo
+	ctx := context.Background()
+
+	sqlDB := env.db.Executor.DB()
+
+	// Insert 5 records with distinct indexed_at timestamps (oldest = r1, newest = r5)
+	// Default DESC order: r5, r4, r3, r2, r1
+	// Backward pagination (last N) returns the last N edges in the connection.
+	// "last 3" without cursor returns r3, r2, r1 (the 3 oldest in DESC order).
+	// "last 2, before r1" returns r3, r2 (the 2 edges just before r1 in the DESC connection).
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/r1", "bafyreir1", "did:plc:test1", "app.bsky.feed.post", `{"text":"r1"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/r1'`)
+
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/r2", "bafyreir2", "did:plc:test1", "app.bsky.feed.post", `{"text":"r2"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/r2'`)
+
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/r3", "bafyreir3", "did:plc:test1", "app.bsky.feed.post", `{"text":"r3"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/r3'`)
+
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/r4", "bafyreir4", "did:plc:test1", "app.bsky.feed.post", `{"text":"r4"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/r4'`)
+
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/r5", "bafyreir5", "did:plc:test1", "app.bsky.feed.post", `{"text":"r5"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T14:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/r5'`)
+
+	t.Run("last 3 without cursor returns oldest 3 in DESC order", func(t *testing.T) {
+		// Default DESC order: r5, r4, r3, r2, r1
+		// last 3 = r3, r2, r1 (the last 3 edges in the connection)
+		// Algorithm: reversed sort=ASC, LIMIT 3 → r1,r2,r3 → reverse → r3,r2,r1
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", nil, 3, nil)
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		if len(records) != 3 {
+			t.Fatalf("got %d records, want 3", len(records))
+		}
+		// Result in DESC order: r3, r2, r1
+		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/r3" {
+			t.Errorf("records[0].URI = %q, want r3", records[0].URI)
+		}
+		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/r2" {
+			t.Errorf("records[1].URI = %q, want r2", records[1].URI)
+		}
+		if records[2].URI != "at://did:plc:test1/app.bsky.feed.post/r1" {
+			t.Errorf("records[2].URI = %q, want r1", records[2].URI)
+		}
+	})
+
+	t.Run("last N+1 allows hasPreviousPage detection", func(t *testing.T) {
+		// Fetch 4 (last 3 + 1 extra) — should return 4 records
+		// Algorithm: reversed sort=ASC, LIMIT 4 → r1,r2,r3,r4 → reverse → r4,r3,r2,r1
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", nil, 4, nil)
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		// 4 records returned means there are more (hasPreviousPage = true when caller uses last=3)
+		if len(records) != 4 {
+			t.Fatalf("got %d records, want 4", len(records))
+		}
+	})
+
+	t.Run("before r1 returns edges before r1 in DESC connection", func(t *testing.T) {
+		// DESC connection: r5, r4, r3, r2, r1
+		// "before r1" = edges that come before r1 in the list = r5, r4, r3, r2
+		// Algorithm: reversed sort=ASC, comparison=>, WHERE indexed_at > 10:00
+		//   → r2,r3,r4,r5 → reverse → r5,r4,r3,r2
+		beforeCursor := []string{"2026-01-15T10:00:00Z", "at://did:plc:test1/app.bsky.feed.post/r1"}
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", nil, 10, beforeCursor)
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		if len(records) != 4 {
+			t.Fatalf("got %d records, want 4", len(records))
+		}
+		// Result in DESC order: r5, r4, r3, r2
+		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/r5" {
+			t.Errorf("records[0].URI = %q, want r5", records[0].URI)
+		}
+		if records[3].URI != "at://did:plc:test1/app.bsky.feed.post/r2" {
+			t.Errorf("records[3].URI = %q, want r2", records[3].URI)
+		}
+	})
+
+	t.Run("last 2 before r1 returns 2 edges just before r1", func(t *testing.T) {
+		// DESC connection: r5, r4, r3, r2, r1
+		// "before r1" = r5, r4, r3, r2; last 2 = r3, r2
+		// Algorithm: reversed sort=ASC, comparison=>, WHERE indexed_at > 10:00, LIMIT 2
+		//   → r2,r3 → reverse → r3,r2
+		beforeCursor := []string{"2026-01-15T10:00:00Z", "at://did:plc:test1/app.bsky.feed.post/r1"}
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", nil, 2, beforeCursor)
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		if len(records) != 2 {
+			t.Fatalf("got %d records, want 2", len(records))
+		}
+		// Result in DESC order: r3, r2 (the 2 edges just before r1)
+		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/r3" {
+			t.Errorf("records[0].URI = %q, want r3", records[0].URI)
+		}
+		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/r2" {
+			t.Errorf("records[1].URI = %q, want r2", records[1].URI)
+		}
+	})
+
+	t.Run("all records returned when limit exceeds total", func(t *testing.T) {
+		// Algorithm: reversed sort=ASC, LIMIT 100 → r1,r2,r3,r4,r5 → reverse → r5,r4,r3,r2,r1
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", nil, 100, nil)
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		if len(records) != 5 {
+			t.Fatalf("got %d records, want 5", len(records))
+		}
+		// Should be in DESC order: r5, r4, r3, r2, r1
+		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/r5" {
+			t.Errorf("records[0].URI = %q, want r5", records[0].URI)
+		}
+		if records[4].URI != "at://did:plc:test1/app.bsky.feed.post/r1" {
+			t.Errorf("records[4].URI = %q, want r1", records[4].URI)
+		}
+	})
+}

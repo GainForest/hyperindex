@@ -404,7 +404,15 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			},
 			"after": &graphql.ArgumentConfig{
 				Type:        graphql.String,
-				Description: "Cursor for pagination",
+				Description: "Cursor for forward pagination",
+			},
+			"last": &graphql.ArgumentConfig{
+				Type:        graphql.Int,
+				Description: "Number of items to return from the end",
+			},
+			"before": &graphql.ArgumentConfig{
+				Type:        graphql.String,
+				Description: "Cursor to paginate before (backward pagination)",
 			},
 		},
 		Resolve: b.createGenericRecordsResolver(),
@@ -593,10 +601,50 @@ func isTotalCountRequested(p graphql.ResolveParams) bool {
 	return false
 }
 
+// buildSortAwareCursor builds a sort-aware cursor string for a record.
+// directSortCols mirrors the repository's directSortColumns set.
+var directSortCols = map[string]bool{
+	"indexed_at": true,
+	"uri":        true,
+	"did":        true,
+	"collection": true,
+	"cid":        true,
+	"rkey":       true,
+}
+
+// sortFieldValueForRecord extracts the sort field value from a record for cursor building.
+func sortFieldValueForRecord(rec *repositories.Record, value map[string]interface{}, sortOpt *repositories.SortOption) string {
+	if sortOpt == nil {
+		return rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+	}
+	if directSortCols[sortOpt.Field] {
+		switch sortOpt.Field {
+		case "indexed_at":
+			return rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+		case "uri":
+			return rec.URI
+		case "did":
+			return rec.DID
+		case "collection":
+			return rec.Collection
+		case "cid":
+			return rec.CID
+		case "rkey":
+			return rec.RKey
+		default:
+			return rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+		}
+	}
+	// JSON field
+	if v, exists := value[sortOpt.Field]; exists && v != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
+}
+
 // resolveRecordConnection is the shared implementation for paginated record queries.
 // It uses deterministic keyset pagination with a composite (sortField, uri) cursor.
-// When sortBy/sortDirection args are present (typed collection queries), it uses the
-// sorted repository method; otherwise it falls back to the default indexed_at DESC order.
+// Supports both forward pagination (first/after) and backward pagination (last/before).
 func (b *Builder) resolveRecordConnection(
 	p graphql.ResolveParams,
 	collection string,
@@ -608,9 +656,15 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	// Extract pagination args
-	firstArg, _ := p.Args["first"].(int)
-	first := query.ClampPageSize(firstArg)
+	firstArg, hasFirst := p.Args["first"].(int)
 	after, _ := p.Args["after"].(string)
+	lastArg, hasLast := p.Args["last"].(int)
+	before, _ := p.Args["before"].(string)
+
+	// Validate: cannot use both first/after and last/before
+	if (hasFirst || after != "") && (hasLast || before != "") {
+		return nil, fmt.Errorf("cannot use both first/after and last/before")
+	}
 
 	// Extract where filters if present (typed collection queries only)
 	var filters []repositories.FieldFilter
@@ -628,6 +682,86 @@ func (b *Builder) resolveRecordConnection(
 		}
 		sortOpt = &repositories.SortOption{Field: sortByArg, Direction: direction}
 	}
+
+	// Backward pagination path
+	if hasLast || before != "" {
+		last := query.ClampPageSize(lastArg)
+
+		// Decode before cursor if provided
+		var beforeCursorValues []string
+		if before != "" {
+			parts, err := decodeCursorValues(before)
+			if err != nil {
+				return nil, fmt.Errorf("invalid cursor: %w", err)
+			}
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid cursor: expected 2 components")
+			}
+			beforeCursorValues = parts
+		}
+
+		// Fetch last+1 to detect hasPreviousPage
+		records, err := repos.Records.GetByCollectionReversedWithKeysetCursor(p.Context, collection, filters, didFilter, sortOpt, last+1, beforeCursorValues)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query records: %w", err)
+		}
+
+		// Determine if there are more results before the returned page.
+		// After reversal, the extra record is at the front (oldest end).
+		hasPreviousPage := len(records) > last
+		if hasPreviousPage {
+			records = records[1:]
+		}
+
+		// Build edges
+		edges := make([]interface{}, 0, len(records))
+		var startCursor, endCursor string
+
+		for _, rec := range records {
+			var value map[string]interface{}
+			if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
+				continue
+			}
+
+			node, ok := buildNode(rec, value)
+			if !ok {
+				continue
+			}
+
+			cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
+			if startCursor == "" {
+				startCursor = cursor
+			}
+			endCursor = cursor
+
+			edges = append(edges, map[string]interface{}{
+				"cursor": cursor,
+				"node":   node,
+			})
+		}
+
+		result := map[string]interface{}{
+			"edges": edges,
+			"pageInfo": map[string]interface{}{
+				"hasNextPage":     before != "",
+				"hasPreviousPage": hasPreviousPage,
+				"startCursor":     startCursor,
+				"endCursor":       endCursor,
+			},
+		}
+
+		if isTotalCountRequested(p) {
+			count, err := repos.Records.GetCollectionCountFiltered(p.Context, collection, filters, didFilter)
+			if err == nil {
+				result["totalCount"] = int(count)
+			}
+		}
+
+		return result, nil
+	}
+
+	// Forward pagination path (default)
+	first := query.ClampPageSize(firstArg)
 
 	// Decode composite cursor if provided
 	var afterCursorValues []string
@@ -659,16 +793,6 @@ func (b *Builder) resolveRecordConnection(
 	edges := make([]interface{}, 0, len(records))
 	var startCursor, endCursor string
 
-	// directSortCols mirrors the repository's directSortColumns set for cursor building
-	directSortCols := map[string]bool{
-		"indexed_at": true,
-		"uri":        true,
-		"did":        true,
-		"collection": true,
-		"cid":        true,
-		"rkey":       true,
-	}
-
 	for _, rec := range records {
 		var value map[string]interface{}
 		if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
@@ -680,37 +804,7 @@ func (b *Builder) resolveRecordConnection(
 			continue
 		}
 
-		// Build sort-aware cursor: [sortFieldValue, uri]
-		var sortFieldValue string
-		if sortOpt == nil {
-			// Default: sort by indexed_at
-			sortFieldValue = rec.IndexedAt.Format("2006-01-02T15:04:05Z")
-		} else if directSortCols[sortOpt.Field] {
-			// Sort by a direct column — extract from the Record struct
-			switch sortOpt.Field {
-			case "indexed_at":
-				sortFieldValue = rec.IndexedAt.Format("2006-01-02T15:04:05Z")
-			case "uri":
-				sortFieldValue = rec.URI
-			case "did":
-				sortFieldValue = rec.DID
-			case "collection":
-				sortFieldValue = rec.Collection
-			case "cid":
-				sortFieldValue = rec.CID
-			case "rkey":
-				sortFieldValue = rec.RKey
-			default:
-				sortFieldValue = rec.IndexedAt.Format("2006-01-02T15:04:05Z")
-			}
-		} else {
-			// Sort by a JSON field — extract from the parsed data map
-			if v, exists := value[sortOpt.Field]; exists && v != nil {
-				sortFieldValue = fmt.Sprintf("%v", v)
-			}
-		}
-
-		cursor := encodeCursorValues(sortFieldValue, rec.URI)
+		cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
 		if startCursor == "" {
 			startCursor = cursor
 		}

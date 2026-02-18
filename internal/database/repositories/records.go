@@ -650,6 +650,129 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	return scanRecords(rows)
 }
 
+// GetByCollectionReversedWithKeysetCursor retrieves records for backward pagination
+// per the Relay Connection Spec (last/before).
+//
+// Algorithm:
+//  1. Reverse the sort direction (DESC→ASC, ASC→DESC)
+//  2. Reverse the cursor comparison operator (DESC's < becomes >, ASC's > becomes <)
+//  3. Fetch limit records with LIMIT
+//  4. Reverse the result slice in-memory to restore the original sort order
+//
+// This ensures that `last N` returns the last N edges in the connection, and
+// `last N, before cursor` returns the N edges immediately before the cursor.
+//
+// Fetches limit+1 to allow the caller to detect hasPreviousPage.
+// If did is non-empty, results are further filtered to that DID.
+func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	did string,
+	sort *SortOption,
+	limit int,
+	beforeCursorValues []string,
+) ([]*Record, error) {
+	// Build the reversed sort option: flip direction
+	var reversedSort *SortOption
+	if sort == nil {
+		// Default is indexed_at DESC → reverse to ASC
+		reversedSort = &SortOption{Field: "indexed_at", Direction: "ASC"}
+	} else {
+		dir := "ASC"
+		if sort.Direction == "ASC" {
+			dir = "DESC"
+		}
+		reversedSort = &SortOption{Field: sort.Field, Direction: dir}
+	}
+
+	var whereParts []string
+	var args []any
+
+	// collection = ? is always param 1
+	whereParts = append(whereParts, fmt.Sprintf("collection = %s", r.db.Placeholder(1)))
+	args = append(args, collection)
+
+	nextPlaceholder := 2
+
+	// Keyset cursor condition with reversed comparison operator.
+	// For DESC original (reversed to ASC): forward DESC uses <, so reversed uses >
+	// For ASC original (reversed to DESC): forward ASC uses >, so reversed uses <
+	if len(beforeCursorValues) == 2 {
+		beforeSortVal := beforeCursorValues[0]
+		beforeURI := beforeCursorValues[1]
+
+		// Determine the sort field expression using the reversed sort's field
+		var sortFieldExpr string
+		if directSortColumns[reversedSort.Field] {
+			sortFieldExpr = reversedSort.Field
+		} else {
+			sortFieldExpr = r.db.JSONExtract("json", reversedSort.Field)
+		}
+
+		// Reversed comparison: ASC reversed direction uses >, DESC reversed direction uses <
+		var cmp string
+		if reversedSort.Direction == "ASC" {
+			cmp = ">"
+		} else {
+			cmp = "<"
+		}
+
+		p1 := r.db.Placeholder(nextPlaceholder)
+		p2 := r.db.Placeholder(nextPlaceholder + 1)
+		p3 := r.db.Placeholder(nextPlaceholder + 2)
+
+		whereParts = append(whereParts, fmt.Sprintf(
+			"(%s %s %s OR (%s = %s AND uri %s %s))",
+			sortFieldExpr, cmp, p1,
+			sortFieldExpr, p2,
+			cmp, p3,
+		))
+		args = append(args, beforeSortVal, beforeSortVal, beforeURI)
+		nextPlaceholder += 3
+	}
+
+	// Field filters
+	filterClause, filterParams := r.buildFilterClause(filters, nextPlaceholder)
+	if filterClause != "" {
+		whereParts = append(whereParts, filterClause)
+		for _, p := range filterParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+			nextPlaceholder++
+		}
+	}
+
+	// DID filter
+	if did != "" {
+		whereParts = append(whereParts, fmt.Sprintf("did = %s", r.db.Placeholder(nextPlaceholder)))
+		args = append(args, did)
+		nextPlaceholder++
+	}
+
+	whereClause := strings.Join(whereParts, " AND ")
+	orderBy := r.buildSortExpr(reversedSort)
+	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s LIMIT %d",
+		r.recordColumns(), whereClause, orderBy, limit)
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query reversed records: %w", err)
+	}
+	defer rows.Close()
+
+	records, err := scanRecords(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reverse the result slice to restore the original sort order
+	for i, j := 0, len(records)-1; i < j; i, j = i+1, j-1 {
+		records[i], records[j] = records[j], records[i]
+	}
+
+	return records, nil
+}
+
 // GetByDID retrieves all records for a specific DID.
 func (r *RecordsRepository) GetByDID(ctx context.Context, did string) ([]*Record, error) {
 	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE did = %s ORDER BY indexed_at DESC",
