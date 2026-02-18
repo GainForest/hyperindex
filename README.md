@@ -69,7 +69,7 @@ docker compose -f docker-compose.tap.yml up --build
 ```bash
 # Add a specific repo (DID) for Tap to index
 curl -X POST http://localhost:2480/repos/add \
-  -H "Authorization: Bearer ${TAP_ADMIN_PASSWORD}" \
+  -u ":${TAP_ADMIN_PASSWORD}" \
   -H "Content-Type: application/json" \
   -d '{"dids": ["did:plc:your-did-here"]}'
 ```
