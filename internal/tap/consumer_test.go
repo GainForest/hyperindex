@@ -249,6 +249,7 @@ func TestConsumer_DisableAcks(t *testing.T) {
 			Collection: "app.bsky.feed.post",
 			RKey:       "rkey2",
 			Action:     ActionCreate,
+			Record:     json.RawMessage(`{"text":"hello"}`),
 		},
 	}
 
@@ -393,7 +394,7 @@ func TestConsumer_Stats(t *testing.T) {
 			Type: EventTypeRecord,
 			Record: &RecordEvent{
 				DID: "did:plc:a", Collection: "app.bsky.feed.post", RKey: "r1",
-				Action: ActionCreate,
+				Action: ActionCreate, Record: json.RawMessage(`{"text":"hello"}`),
 			},
 		},
 		{
@@ -401,7 +402,7 @@ func TestConsumer_Stats(t *testing.T) {
 			Type: EventTypeRecord,
 			Record: &RecordEvent{
 				DID: "did:plc:a", Collection: "app.bsky.feed.post", RKey: "r1",
-				Action: ActionUpdate,
+				Action: ActionUpdate, Record: json.RawMessage(`{"text":"updated"}`),
 			},
 		},
 		{
@@ -496,6 +497,7 @@ func TestConsumer_StopDuringDispatch(t *testing.T) {
 					Collection: "app.bsky.feed.post",
 					RKey:       fmt.Sprintf("rkey%d", i),
 					Action:     ActionCreate,
+					Record:     json.RawMessage(`{"text":"hello"}`),
 				},
 			}
 			data, err := json.Marshal(ev)
@@ -551,6 +553,7 @@ func TestConsumer_BackoffResetsAfterSuccess(t *testing.T) {
 			Collection: "app.bsky.feed.post",
 			RKey:       "rkey1",
 			Action:     ActionCreate,
+			Record:     json.RawMessage(`{"text":"hello"}`),
 		},
 	}
 
@@ -760,6 +763,71 @@ func TestConsumer_ShutdownNoSpuriousLog(t *testing.T) {
 	}
 }
 
+// TestConsumer_BackoffEscalatesOnPersistentFailure verifies that when every connection
+// attempt fails (e.g., server unreachable), the backoff escalates rather than resetting
+// to minBackoff on each failure.
+func TestConsumer_BackoffEscalatesOnPersistentFailure(t *testing.T) {
+	// Port 1 is reserved and will refuse connections immediately on all platforms.
+	unreachableURL := "ws://127.0.0.1:1"
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: unreachableURL}, handler)
+
+	// With minBackoff=1s and escalating backoff, in 4s we expect:
+	//   attempt 1 at t=0, wait 1s
+	//   attempt 2 at t=1s, wait 2s
+	//   attempt 3 at t=3s, wait 4s (capped later)
+	// So at most 3 attempts in 4s. If backoff were resetting to 1s every time,
+	// we would see ~4 attempts in 4s.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	var attemptCount int32
+	origDialer := websocket.DefaultDialer
+	_ = origDialer // ensure import used
+
+	// We count attempts by wrapping: use a real consumer but count via a channel.
+	// Since we can't easily intercept the dialer, we rely on the timing guarantee:
+	// if backoff escalates correctly, fewer than 4 attempts occur in 4s.
+	// We track this by counting how many times runOnce is called indirectly via
+	// the "Connecting to Tap" log message using a capturing handler.
+	capturing := &capturingHandler{}
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(capturing))
+	defer slog.SetDefault(origLogger)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.Start(ctx)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("consumer did not stop within timeout")
+	}
+
+	// Count "Connecting to Tap" log messages to determine number of attempts.
+	capturing.mu.Lock()
+	for _, r := range capturing.records {
+		if r.Message == "Connecting to Tap" {
+			atomic.AddInt32(&attemptCount, 1)
+		}
+	}
+	capturing.mu.Unlock()
+
+	attempts := atomic.LoadInt32(&attemptCount)
+	// With proper escalating backoff: attempt 1 at t=0, wait 1s; attempt 2 at t=1s,
+	// wait 2s; attempt 3 at t=3s — context expires before attempt 4.
+	// So we expect at most 3 attempts. If backoff reset every time (bug), we'd see ~4.
+	if attempts >= 4 {
+		t.Errorf("expected fewer than 4 connection attempts (backoff should escalate), got %d", attempts)
+	}
+	if attempts == 0 {
+		t.Error("expected at least 1 connection attempt, got 0")
+	}
+}
+
 // TestConsumer_HandlerErrorDoesNotAck verifies that handler errors suppress acks.
 func TestConsumer_HandlerErrorDoesNotAck(t *testing.T) {
 	ackReceived := make(chan struct{})
@@ -770,7 +838,7 @@ func TestConsumer_HandlerErrorDoesNotAck(t *testing.T) {
 		Type: EventTypeRecord,
 		Record: &RecordEvent{
 			DID: "did:plc:err", Collection: "app.bsky.feed.post", RKey: "r1",
-			Action: ActionCreate,
+			Action: ActionCreate, Record: json.RawMessage(`{"text":"hello"}`),
 		},
 	}
 

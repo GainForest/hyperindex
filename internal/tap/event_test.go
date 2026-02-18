@@ -351,7 +351,7 @@ func TestRecordEvent_URI_AcceptanceCriteria(t *testing.T) {
 }
 
 func TestParseEvent_RecordValidation(t *testing.T) {
-	validRecord := `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":"create"}}`
+	validRecord := `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":"create","record":{"text":"hello"}}}`
 
 	tests := []struct {
 		name    string
@@ -365,42 +365,42 @@ func TestParseEvent_RecordValidation(t *testing.T) {
 		},
 		{
 			name:    "record with empty DID",
-			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"","collection":"app.bsky.feed.post","rkey":"abc","action":"create"}}`,
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"","collection":"app.bsky.feed.post","rkey":"abc","action":"create","record":{"text":"hello"}}}`,
 			wantErr: true,
 		},
 		{
 			name:    "record with missing DID",
-			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","collection":"app.bsky.feed.post","rkey":"abc","action":"create"}}`,
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","collection":"app.bsky.feed.post","rkey":"abc","action":"create","record":{"text":"hello"}}}`,
 			wantErr: true,
 		},
 		{
 			name:    "record with empty Collection",
-			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"","rkey":"abc","action":"create"}}`,
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"","rkey":"abc","action":"create","record":{"text":"hello"}}}`,
 			wantErr: true,
 		},
 		{
 			name:    "record with missing Collection",
-			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","rkey":"abc","action":"create"}}`,
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","rkey":"abc","action":"create","record":{"text":"hello"}}}`,
 			wantErr: true,
 		},
 		{
 			name:    "record with empty RKey",
-			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"","action":"create"}}`,
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"","action":"create","record":{"text":"hello"}}}`,
 			wantErr: true,
 		},
 		{
 			name:    "record with missing RKey",
-			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","action":"create"}}`,
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","action":"create","record":{"text":"hello"}}}`,
 			wantErr: true,
 		},
 		{
 			name:    "record with empty Action",
-			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":""}}`,
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":"","record":{"text":"hello"}}}`,
 			wantErr: true,
 		},
 		{
 			name:    "record with missing Action",
-			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc"}}`,
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","record":{"text":"hello"}}}`,
 			wantErr: true,
 		},
 	}
@@ -435,6 +435,49 @@ func TestParseEvent_IdentityValidation(t *testing.T) {
 			name:    "identity with missing DID",
 			data:    `{"id":1,"type":"identity","identity":{"handle":"alice.bsky.social","isActive":true,"status":"active"}}`,
 			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseEvent([]byte(tt.data))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseEvent() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseEvent_NilPayloadRejection(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		wantErr bool
+	}{
+		{
+			name:    "type=record with nil Record payload",
+			data:    `{"id":1,"type":"record"}`,
+			wantErr: true,
+		},
+		{
+			name:    "type=identity with nil Identity payload",
+			data:    `{"id":1,"type":"identity"}`,
+			wantErr: true,
+		},
+		{
+			name:    "type=record action=create with empty record body",
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":"create"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "type=record action=update with empty record body",
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":"update"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "type=record action=delete with empty record body",
+			data:    `{"id":1,"type":"record","record":{"live":false,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":"delete"}}`,
+			wantErr: false,
 		},
 	}
 

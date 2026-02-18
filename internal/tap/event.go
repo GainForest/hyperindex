@@ -65,8 +65,11 @@ func ParseEvent(data []byte) (*Event, error) {
 	if event.Type == "" {
 		return nil, fmt.Errorf("tap event missing type field")
 	}
-	// Validate required fields for record events.
-	if event.Type == EventTypeRecord && event.Record != nil {
+	// Validate record events.
+	if event.Type == EventTypeRecord {
+		if event.Record == nil {
+			return nil, fmt.Errorf("tap record event missing record payload")
+		}
 		if event.Record.DID == "" {
 			return nil, fmt.Errorf("tap record event missing did field")
 		}
@@ -79,9 +82,17 @@ func ParseEvent(data []byte) (*Event, error) {
 		if event.Record.Action == "" {
 			return nil, fmt.Errorf("tap record event missing action field")
 		}
+		if event.Record.Action == ActionCreate || event.Record.Action == ActionUpdate {
+			if len(event.Record.Record) == 0 {
+				return nil, fmt.Errorf("tap record event action %q missing record body", event.Record.Action)
+			}
+		}
 	}
-	// Validate required fields for identity events.
-	if event.Type == EventTypeIdentity && event.Identity != nil {
+	// Validate identity events.
+	if event.Type == EventTypeIdentity {
+		if event.Identity == nil {
+			return nil, fmt.Errorf("tap identity event missing identity payload")
+		}
 		if event.Identity.DID == "" {
 			return nil, fmt.Errorf("tap identity event missing did field")
 		}
