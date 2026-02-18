@@ -268,6 +268,55 @@ func TestIndexHandler_HandleRecord_NilActivity(t *testing.T) {
 	}
 }
 
+func TestIndexHandler_HandleRecord_NilPubSub(t *testing.T) {
+	// Handler with nil pubsub should not panic
+	db := testutil.SetupTestDB(t)
+	handler := tap.NewIndexHandler(db.Records, db.Actors, nil, nil)
+	ctx := context.Background()
+
+	// Test create event does not panic and stores the record
+	createEvent := &tap.RecordEvent{
+		DID:        "did:plc:grace",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post5",
+		Action:     tap.ActionCreate,
+		CID:        "bafyreinilpubsub",
+		Record:     json.RawMessage(`{"text":"no pubsub"}`),
+	}
+
+	if err := handler.HandleRecord(ctx, createEvent); err != nil {
+		t.Fatalf("HandleRecord (create) with nil pubsub returned error: %v", err)
+	}
+
+	// Verify record was still stored correctly
+	uri := "at://did:plc:grace/app.bsky.feed.post/post5"
+	rec, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("record not found after create with nil pubsub: %v", err)
+	}
+	if rec.CID != "bafyreinilpubsub" {
+		t.Errorf("expected CID %q, got %q", "bafyreinilpubsub", rec.CID)
+	}
+
+	// Test delete event does not panic
+	deleteEvent := &tap.RecordEvent{
+		DID:        "did:plc:grace",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post5",
+		Action:     tap.ActionDelete,
+	}
+
+	if err := handler.HandleRecord(ctx, deleteEvent); err != nil {
+		t.Fatalf("HandleRecord (delete) with nil pubsub returned error: %v", err)
+	}
+
+	// Verify record was deleted
+	_, err = db.Records.GetByURI(ctx, uri)
+	if err == nil {
+		t.Error("expected record to be deleted, but it still exists")
+	}
+}
+
 func TestIndexHandler_HandleIdentity(t *testing.T) {
 	handler, db, _ := setupHandler(t)
 	ctx := context.Background()

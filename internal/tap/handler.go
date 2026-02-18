@@ -63,13 +63,17 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 		if event.Action == ActionUpdate {
 			eventType = subscription.EventUpdate
 		}
-		h.pubsub.PublishRecord(eventType, uri, event.CID, event.DID, event.Collection, event.Record)
+		if h.pubsub != nil {
+			h.pubsub.PublishRecord(eventType, uri, event.CID, event.DID, event.Collection, event.Record)
+		}
 
 	case ActionDelete:
 		if err := h.records.Delete(ctx, uri); err != nil {
 			slog.Debug("Failed to delete record", "uri", uri, "error", err)
 		}
-		h.pubsub.PublishRecord(subscription.EventDelete, uri, "", event.DID, event.Collection, nil)
+		if h.pubsub != nil {
+			h.pubsub.PublishRecord(subscription.EventDelete, uri, "", event.DID, event.Collection, nil)
+		}
 		if h.activity != nil {
 			if _, err := h.activity.LogActivity(ctx, time.Now(), "delete", event.Collection, event.DID, event.RKey, ""); err != nil {
 				slog.Debug("Failed to log delete activity", "error", err)
