@@ -100,6 +100,14 @@ func (b *ObjectBuilder) buildRecordFields(lexiconID string, def *lexicon.RecordD
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "CID of this record version",
 		},
+		"did": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "DID of the record author",
+		},
+		"rkey": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "Record key (last segment of AT-URI)",
+		},
 	}
 
 	// Build required set for quick lookup

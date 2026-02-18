@@ -404,10 +404,8 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	// Extract pagination args
-	first, _ := p.Args["first"].(int)
-	if first == 0 {
-		first = 20
-	}
+	firstArg, _ := p.Args["first"].(int)
+	first := query.ClampPageSize(firstArg)
 	after, _ := p.Args["after"].(string)
 
 	// Decode composite cursor if provided
@@ -500,6 +498,8 @@ func (b *Builder) createCollectionResolver(lexiconID string) graphql.FieldResolv
 				// Inject standard record fields into the flat data
 				data["uri"] = rec.URI
 				data["cid"] = rec.CID
+				data["did"] = rec.DID
+				data["rkey"] = rec.RKey
 				return data, true
 			})
 	}
@@ -537,6 +537,8 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 		// Add standard record fields
 		data["uri"] = rec.URI
 		data["cid"] = rec.CID
+		data["did"] = rec.DID
+		data["rkey"] = rec.RKey
 
 		return data, nil
 	}
