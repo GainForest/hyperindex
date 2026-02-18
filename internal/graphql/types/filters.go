@@ -167,6 +167,24 @@ var DateTimeFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	},
 })
 
+// DIDFilterInput is a restricted GraphQL InputObject for filtering DID fields.
+// DID is a column-level filter (not a JSON field), so only eq and in are meaningful.
+// Operators like contains or startsWith are not supported for DIDs.
+var DIDFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "DIDFilterInput",
+	Description: "Filter conditions for DID fields (column-level). Only eq and in are supported.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"eq": &graphql.InputObjectFieldConfig{
+			Type:        graphql.String,
+			Description: "Equals",
+		},
+		"in": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewList(graphql.NewNonNull(graphql.String)),
+			Description: "In list",
+		},
+	},
+})
+
 // FilterInputForLexiconType maps a lexicon property type and format to the
 // appropriate GraphQL filter InputObject. Returns nil for non-filterable types.
 func FilterInputForLexiconType(lexiconType, format string) *graphql.InputObject {

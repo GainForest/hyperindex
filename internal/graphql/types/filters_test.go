@@ -232,6 +232,7 @@ func TestFilterInputNames(t *testing.T) {
 		{FloatFilterInput, "FloatFilterInput"},
 		{BooleanFilterInput, "BooleanFilterInput"},
 		{DateTimeFilterInput, "DateTimeFilterInput"},
+		{DIDFilterInput, "DIDFilterInput"},
 	}
 
 	for _, tt := range tests {
@@ -240,5 +241,58 @@ func TestFilterInputNames(t *testing.T) {
 				t.Errorf("Name() = %q, want %q", tt.inputObj.Name(), tt.wantName)
 			}
 		})
+	}
+}
+
+// TestDIDFilterInput verifies that DIDFilterInput has exactly eq and in fields,
+// and that unsupported operators (contains, startsWith, neq, isNull, gt, lt) are absent.
+func TestDIDFilterInput(t *testing.T) {
+	if DIDFilterInput == nil {
+		t.Fatal("DIDFilterInput is nil")
+	}
+
+	fields := DIDFilterInput.Fields()
+
+	// Must have eq and in
+	wantPresent := []string{"eq", "in"}
+	for _, name := range wantPresent {
+		if _, ok := fields[name]; !ok {
+			t.Errorf("DIDFilterInput: expected field %q to be present", name)
+		}
+	}
+
+	// Must NOT have any other operators
+	wantAbsent := []string{"neq", "contains", "startsWith", "isNull", "gt", "lt", "gte", "lte"}
+	for _, name := range wantAbsent {
+		if _, ok := fields[name]; ok {
+			t.Errorf("DIDFilterInput: expected field %q to be absent", name)
+		}
+	}
+}
+
+// TestDIDFilterInput_FieldTypes verifies the GraphQL types of DIDFilterInput fields.
+func TestDIDFilterInput_FieldTypes(t *testing.T) {
+	fields := DIDFilterInput.Fields()
+
+	// eq should be String
+	eqField, ok := fields["eq"]
+	if !ok {
+		t.Fatal("DIDFilterInput: missing field 'eq'")
+	}
+	if eqField.Type != graphql.String {
+		t.Errorf("DIDFilterInput: field 'eq' type = %v, want String", eqField.Type)
+	}
+
+	// in should be [String!]
+	inField, ok := fields["in"]
+	if !ok {
+		t.Fatal("DIDFilterInput: missing field 'in'")
+	}
+	list, ok := inField.Type.(*graphql.List)
+	if !ok {
+		t.Fatalf("DIDFilterInput: field 'in' type = %T, want *graphql.List", inField.Type)
+	}
+	if _, ok := list.OfType.(*graphql.NonNull); !ok {
+		t.Errorf("DIDFilterInput: field 'in' list element type = %T, want *graphql.NonNull", list.OfType)
 	}
 }

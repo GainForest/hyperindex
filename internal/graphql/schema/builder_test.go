@@ -522,6 +522,177 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 	}
 }
 
+// TestExtractFilters_DIDFilter verifies that extractFilters correctly populates
+// DIDFilter for both eq and in operators, and does not treat DID as a JSON field filter.
+func TestExtractFilters_DIDFilter(t *testing.T) {
+	registry := lexicon.NewRegistry()
+
+	tests := []struct {
+		name        string
+		whereArg    interface{}
+		wantDIDEQ   string
+		wantDIDIN   []string
+		wantFilters int // number of FieldFilters (non-DID)
+	}{
+		{
+			name:     "nil whereArg returns empty",
+			whereArg: nil,
+		},
+		{
+			name:     "empty map returns empty",
+			whereArg: map[string]interface{}{},
+		},
+		{
+			name: "did eq filter",
+			whereArg: map[string]interface{}{
+				"did": map[string]interface{}{
+					"eq": "did:plc:abc",
+				},
+			},
+			wantDIDEQ: "did:plc:abc",
+		},
+		{
+			name: "did in filter",
+			whereArg: map[string]interface{}{
+				"did": map[string]interface{}{
+					"in": []interface{}{"did:plc:abc", "did:plc:def"},
+				},
+			},
+			wantDIDIN: []string{"did:plc:abc", "did:plc:def"},
+		},
+		{
+			name: "did eq takes precedence when both set",
+			whereArg: map[string]interface{}{
+				"did": map[string]interface{}{
+					"eq": "did:plc:abc",
+					"in": []interface{}{"did:plc:xyz"},
+				},
+			},
+			wantDIDEQ: "did:plc:abc",
+			wantDIDIN: []string{"did:plc:xyz"},
+		},
+		{
+			name: "non-did field filter is not treated as DID",
+			whereArg: map[string]interface{}{
+				"title": map[string]interface{}{
+					"eq": "hello",
+				},
+			},
+			wantFilters: 1,
+		},
+		{
+			name: "did and non-did field filters together",
+			whereArg: map[string]interface{}{
+				"did": map[string]interface{}{
+					"eq": "did:plc:abc",
+				},
+				"title": map[string]interface{}{
+					"eq": "hello",
+				},
+			},
+			wantDIDEQ:   "did:plc:abc",
+			wantFilters: 1,
+		},
+		{
+			name: "empty did eq is ignored",
+			whereArg: map[string]interface{}{
+				"did": map[string]interface{}{
+					"eq": "",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filters, didFilter := extractFilters(tt.whereArg, "com.example.test", registry)
+
+			if didFilter.EQ != tt.wantDIDEQ {
+				t.Errorf("DIDFilter.EQ = %q, want %q", didFilter.EQ, tt.wantDIDEQ)
+			}
+
+			if len(didFilter.IN) != len(tt.wantDIDIN) {
+				t.Errorf("DIDFilter.IN = %v, want %v", didFilter.IN, tt.wantDIDIN)
+			} else {
+				for i, v := range tt.wantDIDIN {
+					if didFilter.IN[i] != v {
+						t.Errorf("DIDFilter.IN[%d] = %q, want %q", i, didFilter.IN[i], v)
+					}
+				}
+			}
+
+			if len(filters) != tt.wantFilters {
+				t.Errorf("len(filters) = %d, want %d (filters: %v)", len(filters), tt.wantFilters, filters)
+			}
+		})
+	}
+}
+
+// TestBuildWhereInput_UsesDIDFilterInput verifies that the WhereInput for a collection
+// uses DIDFilterInput (not StringFilterInput) for the did field, and that DIDFilterInput
+// only exposes eq and in operators.
+func TestBuildWhereInput_UsesDIDFilterInput(t *testing.T) {
+	lexiconID := "com.example.didfilter.post"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "title", Property: lexicon.Property{Type: "string"}},
+				},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput, ok := builder.whereInputTypes[lexiconID]
+	if !ok {
+		t.Fatal("WhereInput type not found after Build()")
+	}
+
+	inputFields := whereInput.Fields()
+
+	// did field must be present
+	didField, ok := inputFields["did"]
+	if !ok {
+		t.Fatal("WhereInput is missing the 'did' field")
+	}
+
+	// The type must be DIDFilterInput (named "DIDFilterInput")
+	inputObj, ok := didField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("WhereInput 'did' field type = %T, want *graphql.InputObject", didField.Type)
+	}
+	if inputObj.Name() != "DIDFilterInput" {
+		t.Errorf("WhereInput 'did' field type name = %q, want %q", inputObj.Name(), "DIDFilterInput")
+	}
+
+	// DIDFilterInput must only have eq and in
+	didFilterFields := inputObj.Fields()
+	if _, ok := didFilterFields["eq"]; !ok {
+		t.Error("DIDFilterInput: missing 'eq' field")
+	}
+	if _, ok := didFilterFields["in"]; !ok {
+		t.Error("DIDFilterInput: missing 'in' field")
+	}
+	// Must NOT have contains, startsWith, neq, etc.
+	for _, absent := range []string{"contains", "startsWith", "neq", "isNull", "gt", "lt"} {
+		if _, ok := didFilterFields[absent]; ok {
+			t.Errorf("DIDFilterInput: field %q should be absent", absent)
+		}
+	}
+}
+
 func TestBuildWhereInput_DidHandledSeparately(t *testing.T) {
 	// A lexicon with a "did" property must not result in a duplicate "did" filter.
 	// The "did" metadata filter is always added; the lexicon property "did" must be skipped.

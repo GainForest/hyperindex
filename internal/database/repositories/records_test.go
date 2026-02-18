@@ -885,7 +885,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:bob/app.bsky.feed.post/f4'`)
 
 	t.Run("no filters returns all records", func(t *testing.T) {
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -898,7 +898,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 		filters := []repositories.FieldFilter{
 			{Field: "text", Operator: "eq", Value: "hello world", FieldType: "string"},
 		}
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, "", 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, repositories.DIDFilter{}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -914,7 +914,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 		filters := []repositories.FieldFilter{
 			{Field: "score", Operator: "isNull", Value: true, FieldType: "integer"},
 		}
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, "", 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, repositories.DIDFilter{}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -925,7 +925,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 	})
 
 	t.Run("filter with DID omits when empty", func(t *testing.T) {
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -935,7 +935,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 	})
 
 	t.Run("filter with DID adds AND did = ? when non-empty", func(t *testing.T) {
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "did:plc:alice", 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{EQ: "did:plc:alice"}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -953,7 +953,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 		filters := []repositories.FieldFilter{
 			{Field: "text", Operator: "contains", Value: "hello", FieldType: "string"},
 		}
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, "did:plc:alice", 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, repositories.DIDFilter{EQ: "did:plc:alice"}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -971,7 +971,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 		}
 		// f3 (2026-01-15T12:00:00Z) and f1 (2026-01-15T10:00:00Z) contain "hello"
 		// First page: limit 1 → f3 (newest)
-		page1, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, "", 1, "", "")
+		page1, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, repositories.DIDFilter{}, 1, "", "")
 		if err != nil {
 			t.Fatalf("page1 error: %v", err)
 		}
@@ -984,7 +984,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 
 		// Second page using cursor from f3
 		afterTS := page1[0].IndexedAt.UTC().Format("2006-01-02T15:04:05Z")
-		page2, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, "", 1, afterTS, page1[0].URI)
+		page2, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, repositories.DIDFilter{}, 1, afterTS, page1[0].URI)
 		if err != nil {
 			t.Fatalf("page2 error: %v", err)
 		}
@@ -1298,7 +1298,7 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 		// Default DESC order: r5, r4, r3, r2, r1
 		// last 3 = r3, r2, r1 (the last 3 edges in the connection)
 		// Algorithm: reversed sort=ASC, LIMIT 3 → r1,r2,r3 → reverse → r3,r2,r1
-		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", nil, 3, nil)
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, nil, 3, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1320,7 +1320,7 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 	t.Run("last N+1 allows hasPreviousPage detection", func(t *testing.T) {
 		// Fetch 4 (last 3 + 1 extra) — should return 4 records
 		// Algorithm: reversed sort=ASC, LIMIT 4 → r1,r2,r3,r4 → reverse → r4,r3,r2,r1
-		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", nil, 4, nil)
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, nil, 4, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1336,7 +1336,7 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 		// Algorithm: reversed sort=ASC, comparison=>, WHERE indexed_at > 10:00
 		//   → r2,r3,r4,r5 → reverse → r5,r4,r3,r2
 		beforeCursor := []string{"2026-01-15T10:00:00Z", "at://did:plc:test1/app.bsky.feed.post/r1"}
-		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", nil, 10, beforeCursor)
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, nil, 10, beforeCursor)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1358,7 +1358,7 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 		// Algorithm: reversed sort=ASC, comparison=>, WHERE indexed_at > 10:00, LIMIT 2
 		//   → r2,r3 → reverse → r3,r2
 		beforeCursor := []string{"2026-01-15T10:00:00Z", "at://did:plc:test1/app.bsky.feed.post/r1"}
-		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", nil, 2, beforeCursor)
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, nil, 2, beforeCursor)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1376,7 +1376,7 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 
 	t.Run("all records returned when limit exceeds total", func(t *testing.T) {
 		// Algorithm: reversed sort=ASC, LIMIT 100 → r1,r2,r3,r4,r5 → reverse → r5,r4,r3,r2,r1
-		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", nil, 100, nil)
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, nil, 100, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}

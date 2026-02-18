@@ -461,6 +461,36 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 	return strings.Join(conditions, " AND "), params, nil
 }
 
+// buildDIDFilterClause builds a SQL WHERE clause fragment for a DIDFilter.
+// startPlaceholder is the 1-based index of the first placeholder to use.
+// Returns the clause string (without leading "AND"), the parameter values, and
+// the number of placeholders consumed. Returns empty string and nil params if
+// the filter is empty.
+func (r *RecordsRepository) buildDIDFilterClause(f DIDFilter, startPlaceholder int) (string, []database.Value, int) {
+	if f.IsEmpty() {
+		return "", nil, 0
+	}
+
+	// EQ takes precedence over IN when both are set.
+	if f.EQ != "" {
+		clause := fmt.Sprintf("did = %s", r.db.Placeholder(startPlaceholder))
+		return clause, []database.Value{database.Text(f.EQ)}, 1
+	}
+
+	// IN list
+	if len(f.IN) == 0 {
+		// Empty IN list — always false
+		return "1 = 0", nil, 0
+	}
+	placeholders := r.db.Placeholders(len(f.IN), startPlaceholder)
+	clause := fmt.Sprintf("did IN (%s)", placeholders)
+	params := make([]database.Value, len(f.IN))
+	for i, did := range f.IN {
+		params[i] = database.Text(did)
+	}
+	return clause, params, len(f.IN)
+}
+
 // toDBValue converts an interface{} value to a database.Value.
 func toDBValue(v interface{}) database.Value {
 	switch val := v.(type) {
@@ -484,13 +514,13 @@ func toDBValue(v interface{}) database.Value {
 // GetByCollectionFilteredWithKeysetCursor retrieves records for a collection with
 // optional field-level filters and keyset-based pagination.
 // Filters are applied as AND conditions on JSON fields.
-// If did is non-empty, results are further filtered to that DID.
+// If didFilter is non-empty, results are further filtered by DID.
 // Records are ordered by (indexed_at DESC, uri DESC).
 func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
 	ctx context.Context,
 	collection string,
 	filters []FieldFilter,
-	did string,
+	didFilter DIDFilter,
 	limit int,
 	afterTimestamp string,
 	afterURI string,
@@ -529,10 +559,12 @@ func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
 	}
 
 	// DID filter
-	if did != "" {
-		whereParts = append(whereParts, fmt.Sprintf("did = %s", r.db.Placeholder(nextPlaceholder)))
-		args = append(args, did)
-		nextPlaceholder++
+	if didClause, didParams, consumed := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+		whereParts = append(whereParts, didClause)
+		for _, p := range didParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+		}
+		nextPlaceholder += consumed
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
@@ -595,12 +627,12 @@ func (r *RecordsRepository) buildSortExpr(sort *SortOption) string {
 // optional field-level filters, a configurable sort order, and keyset-based pagination.
 // The sort field and direction are specified via the sort parameter (nil = default indexed_at DESC).
 // afterCursorValues is [sortFieldValue, uri] for keyset pagination; empty means first page.
-// If did is non-empty, results are further filtered to that DID.
+// If didFilter is non-empty, results are further filtered by DID.
 func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	ctx context.Context,
 	collection string,
 	filters []FieldFilter,
-	did string,
+	didFilter DIDFilter,
 	sort *SortOption,
 	limit int,
 	afterCursorValues []string,
@@ -668,10 +700,12 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	}
 
 	// DID filter
-	if did != "" {
-		whereParts = append(whereParts, fmt.Sprintf("did = %s", r.db.Placeholder(nextPlaceholder)))
-		args = append(args, did)
-		nextPlaceholder++
+	if didClause, didParams, consumed := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+		whereParts = append(whereParts, didClause)
+		for _, p := range didParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+		}
+		nextPlaceholder += consumed
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
@@ -701,12 +735,12 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 // `last N, before cursor` returns the N edges immediately before the cursor.
 //
 // Fetches limit+1 to allow the caller to detect hasPreviousPage.
-// If did is non-empty, results are further filtered to that DID.
+// If didFilter is non-empty, results are further filtered by DID.
 func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	ctx context.Context,
 	collection string,
 	filters []FieldFilter,
-	did string,
+	didFilter DIDFilter,
 	sort *SortOption,
 	limit int,
 	beforeCursorValues []string,
@@ -784,10 +818,12 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	}
 
 	// DID filter
-	if did != "" {
-		whereParts = append(whereParts, fmt.Sprintf("did = %s", r.db.Placeholder(nextPlaceholder)))
-		args = append(args, did)
-		nextPlaceholder++
+	if didClause, didParams, consumed := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+		whereParts = append(whereParts, didClause)
+		for _, p := range didParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+		}
+		nextPlaceholder += consumed
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
@@ -858,7 +894,7 @@ func (r *RecordsRepository) GetCollectionCount(ctx context.Context, collection s
 
 // GetCollectionCountFiltered returns the count with optional DID and field filters applied.
 func (r *RecordsRepository) GetCollectionCountFiltered(
-	ctx context.Context, collection string, filters []FieldFilter, did string,
+	ctx context.Context, collection string, filters []FieldFilter, didFilter DIDFilter,
 ) (int64, error) {
 	var whereParts []string
 	var params []database.Value
@@ -880,9 +916,9 @@ func (r *RecordsRepository) GetCollectionCountFiltered(
 	}
 
 	// DID filter
-	if did != "" {
-		whereParts = append(whereParts, fmt.Sprintf("did = %s", r.db.Placeholder(nextPlaceholder)))
-		params = append(params, database.Text(did))
+	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+		whereParts = append(whereParts, didClause)
+		params = append(params, didParams...)
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")

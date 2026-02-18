@@ -164,9 +164,11 @@ func (b *Builder) buildWhereInputTypes() {
 		typeName := lexicon.ToTypeName(lex.ID) + "WhereInput"
 		fields := graphql.InputObjectConfigFieldMap{}
 
-		// Always include did as a filterable metadata field
+		// Always include did as a filterable metadata field.
+		// Uses DIDFilterInput (restricted to eq and in only) because DID is a
+		// column-level filter — operators like contains/startsWith are not meaningful.
 		fields["did"] = &graphql.InputObjectFieldConfig{
-			Type:        types.StringFilterInput,
+			Type:        types.DIDFilterInput,
 			Description: "Filter by DID (record author)",
 		}
 
@@ -528,22 +530,23 @@ func (b *Builder) buildQueryType() *graphql.Object {
 // nodeBuilder transforms a Record and its parsed JSON into a GraphQL node.
 type nodeBuilder func(rec *repositories.Record, value map[string]interface{}) (interface{}, bool)
 
-// extractFilters extracts FieldFilter conditions and an optional DID filter from
+// extractFilters extracts FieldFilter conditions and an optional DIDFilter from
 // the GraphQL `where` argument. The whereArg is expected to be a
 // map[string]interface{} where each key is a field name and each value is a
 // map[string]interface{} of operator→value pairs (e.g. {"eq": "hello"}).
 //
 // The special key "did" is extracted separately as a DID column filter rather
-// than a JSON field filter. All other keys are looked up in the lexicon registry
+// than a JSON field filter. DIDFilterInput only exposes "eq" and "in", so only
+// those operators are handled. All other keys are looked up in the lexicon registry
 // to determine the correct FieldType for SQL casting.
-func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Registry) ([]repositories.FieldFilter, string) {
+func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Registry) ([]repositories.FieldFilter, repositories.DIDFilter) {
 	whereMap, ok := whereArg.(map[string]interface{})
 	if !ok || len(whereMap) == 0 {
-		return nil, ""
+		return nil, repositories.DIDFilter{}
 	}
 
 	var filters []repositories.FieldFilter
-	var didFilter string
+	var didFilter repositories.DIDFilter
 
 	// Look up the record definition once for property type resolution
 	recordDef, _ := registry.GetRecordDef(lexiconID)
@@ -556,9 +559,16 @@ func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Re
 
 		if fieldName == "did" {
 			// DID is a column filter, not a JSON field filter.
-			// Only "eq" is meaningful for DID filtering.
+			// DIDFilterInput only exposes "eq" and "in".
 			if eqVal, ok := filterMap["eq"].(string); ok && eqVal != "" {
-				didFilter = eqVal
+				didFilter.EQ = eqVal
+			}
+			if inVals, ok := filterMap["in"].([]interface{}); ok {
+				for _, v := range inVals {
+					if s, ok := v.(string); ok && s != "" {
+						didFilter.IN = append(didFilter.IN, s)
+					}
+				}
 			}
 			continue
 		}
@@ -675,7 +685,7 @@ func (b *Builder) resolveRecordConnection(
 
 	// Extract where filters if present (typed collection queries only)
 	var filters []repositories.FieldFilter
-	var didFilter string
+	var didFilter repositories.DIDFilter
 	if whereArg, ok := p.Args["where"]; ok && whereArg != nil {
 		filters, didFilter = extractFilters(whereArg, collection, b.registry)
 	}

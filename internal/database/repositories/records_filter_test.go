@@ -358,7 +358,7 @@ func TestGetByCollectionSortedWithKeysetCursor_DefaultSort(t *testing.T) {
 	execSQL(`UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test/col/r3'`)
 
 	// nil sort → indexed_at DESC (newest first)
-	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, "", nil, 10, nil)
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, DIDFilter{}, nil, 10, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestGetByCollectionSortedWithKeysetCursor_IndexedAtASC(t *testing.T) {
 	execSQL(`UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test/col/r3'`)
 
 	sort := &SortOption{Field: "indexed_at", Direction: "ASC"}
-	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, "", sort, 10, nil)
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, DIDFilter{}, sort, 10, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestGetByCollectionSortedWithKeysetCursor_JSONFieldSort(t *testing.T) {
 
 	// Sort by JSON field createdAt DESC
 	sort := &SortOption{Field: "createdAt", Direction: "DESC"}
-	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, "", sort, 10, nil)
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, DIDFilter{}, sort, 10, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestGetByCollectionSortedWithKeysetCursor_KeysetCursorASC(t *testing.T) {
 	// ASC sort: r1, r2, r3. Cursor after r1 → should return r2, r3
 	sort := &SortOption{Field: "indexed_at", Direction: "ASC"}
 	cursor := []string{"2026-01-15T10:00:00Z", "at://did:plc:test/col/r1"}
-	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, "", sort, 10, cursor)
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, DIDFilter{}, sort, 10, cursor)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -478,7 +478,7 @@ func TestGetByCollectionSortedWithKeysetCursor_KeysetCursorDESC(t *testing.T) {
 	// DESC sort: r3, r2, r1. Cursor after r3 → should return r2, r1
 	sort := &SortOption{Field: "indexed_at", Direction: "DESC"}
 	cursor := []string{"2026-01-15T12:00:00Z", "at://did:plc:test/col/r3"}
-	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, "", sort, 10, cursor)
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, DIDFilter{}, sort, 10, cursor)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestGetByCollectionSortedWithKeysetCursor_SortAndFilters(t *testing.T) {
 		{Field: "tag", Operator: "eq", Value: "go", FieldType: "string"},
 	}
 	sort := &SortOption{Field: "createdAt", Direction: "ASC"}
-	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", filters, "", sort, 10, nil)
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", filters, DIDFilter{}, sort, 10, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -632,6 +632,142 @@ func TestBuildFilterClause_LIKEEscape(t *testing.T) {
 				t.Errorf("param = %q, want %q", string(tv), tt.wantParam)
 			}
 		})
+	}
+}
+
+// TestDIDFilter_IsEmpty verifies the IsEmpty helper.
+func TestDIDFilter_IsEmpty(t *testing.T) {
+	tests := []struct {
+		name      string
+		filter    DIDFilter
+		wantEmpty bool
+	}{
+		{name: "zero value is empty", filter: DIDFilter{}, wantEmpty: true},
+		{name: "EQ set is not empty", filter: DIDFilter{EQ: "did:plc:abc"}, wantEmpty: false},
+		{name: "IN set is not empty", filter: DIDFilter{IN: []string{"did:plc:abc"}}, wantEmpty: false},
+		{name: "both set is not empty", filter: DIDFilter{EQ: "did:plc:abc", IN: []string{"did:plc:def"}}, wantEmpty: false},
+		{name: "empty EQ and nil IN is empty", filter: DIDFilter{EQ: "", IN: nil}, wantEmpty: true},
+		{name: "empty EQ and empty IN is empty", filter: DIDFilter{EQ: "", IN: []string{}}, wantEmpty: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.filter.IsEmpty(); got != tt.wantEmpty {
+				t.Errorf("IsEmpty() = %v, want %v", got, tt.wantEmpty)
+			}
+		})
+	}
+}
+
+// TestBuildDIDFilterClause verifies the SQL clause generation for DIDFilter.
+func TestBuildDIDFilterClause(t *testing.T) {
+	repo := newTestRepo(t)
+
+	tests := []struct {
+		name         string
+		filter       DIDFilter
+		wantClause   string // expected substring in clause (empty means empty clause)
+		wantParams   int
+		wantConsumed int
+	}{
+		{
+			name:         "empty filter returns empty clause",
+			filter:       DIDFilter{},
+			wantClause:   "",
+			wantParams:   0,
+			wantConsumed: 0,
+		},
+		{
+			name:         "EQ filter generates did = ?",
+			filter:       DIDFilter{EQ: "did:plc:abc"},
+			wantClause:   "did = ?",
+			wantParams:   1,
+			wantConsumed: 1,
+		},
+		{
+			name:         "IN filter generates did IN (?)",
+			filter:       DIDFilter{IN: []string{"did:plc:abc", "did:plc:def"}},
+			wantClause:   "did IN (?,?)",
+			wantParams:   2,
+			wantConsumed: 2,
+		},
+		{
+			name:         "empty IN list is treated as empty filter (no clause)",
+			filter:       DIDFilter{IN: []string{}},
+			wantClause:   "",
+			wantParams:   0,
+			wantConsumed: 0,
+		},
+		{
+			name:         "EQ takes precedence over IN when both set",
+			filter:       DIDFilter{EQ: "did:plc:abc", IN: []string{"did:plc:def"}},
+			wantClause:   "did = ?",
+			wantParams:   1,
+			wantConsumed: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clause, params, consumed := repo.buildDIDFilterClause(tt.filter, 1)
+
+			if tt.wantClause == "" {
+				if clause != "" {
+					t.Errorf("clause = %q, want empty", clause)
+				}
+				return
+			}
+
+			// Normalize placeholders for comparison (SQLite uses ?)
+			if !strings.Contains(clause, strings.Split(tt.wantClause, "?")[0]) {
+				t.Errorf("clause = %q, want to contain %q", clause, tt.wantClause)
+			}
+			if len(params) != tt.wantParams {
+				t.Errorf("params count = %d, want %d", len(params), tt.wantParams)
+			}
+			if consumed != tt.wantConsumed {
+				t.Errorf("consumed = %d, want %d", consumed, tt.wantConsumed)
+			}
+		})
+	}
+}
+
+// TestGetByCollectionSortedWithKeysetCursor_DIDFilterIN verifies that the DID "in"
+// filter correctly returns records from multiple DIDs.
+func TestGetByCollectionSortedWithKeysetCursor_DIDFilterIN(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	// Insert records from 3 different DIDs
+	insertSortRecord(t, repo, "at://did:plc:alice/col/r1", "cid1", "did:plc:alice", "col", `{}`)
+	insertSortRecord(t, repo, "at://did:plc:bob/col/r2", "cid2", "did:plc:bob", "col", `{}`)
+	insertSortRecord(t, repo, "at://did:plc:carol/col/r3", "cid3", "did:plc:carol", "col", `{}`)
+
+	// Filter by DID in [alice, bob] — should return 2 records
+	didFilter := DIDFilter{IN: []string{"did:plc:alice", "did:plc:bob"}}
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, didFilter, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want 2", len(records))
+	}
+	for _, rec := range records {
+		if rec.DID != "did:plc:alice" && rec.DID != "did:plc:bob" {
+			t.Errorf("unexpected DID %q, want alice or bob", rec.DID)
+		}
+	}
+
+	// Filter by DID eq alice — should return 1 record
+	didFilterEQ := DIDFilter{EQ: "did:plc:alice"}
+	records2, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", nil, didFilterEQ, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if len(records2) != 1 {
+		t.Fatalf("got %d records, want 1", len(records2))
+	}
+	if records2[0].DID != "did:plc:alice" {
+		t.Errorf("DID = %q, want did:plc:alice", records2[0].DID)
 	}
 }
 
