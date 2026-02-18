@@ -1,0 +1,175 @@
+time=2026-02-18T14:22:24.355+08:00 level=INFO msg="Daemon started" interval=5s auto_commit=false auto_push=false
+time=2026-02-18T14:22:24.355+08:00 level=INFO msg="using database" path=/Users/david/Projects/gainforest/hyperindex/.beads/beads.db
+time=2026-02-18T14:22:24.387+08:00 level=INFO msg="database opened" path=/Users/david/Projects/gainforest/hyperindex/.beads/beads.db backend=sqlite freshness_checking=true
+time=2026-02-18T14:22:24.387+08:00 level=INFO msg="upgrading .beads/.gitignore"
+time=2026-02-18T14:22:24.387+08:00 level=WARN msg="failed to upgrade .gitignore" error="open .beads/.gitignore: no such file or directory"
+time=2026-02-18T14:22:24.394+08:00 level=INFO msg="Repository fingerprint validated" repo_id=f8ba04d3
+time=2026-02-18T14:22:24.395+08:00 level=INFO msg="starting RPC server" socket=/Users/david/Projects/gainforest/hyperindex/.beads/bd.sock
+time=2026-02-18T14:22:24.395+08:00 level=INFO msg="RPC server ready (socket listening)"
+time=2026-02-18T14:22:24.401+08:00 level=INFO msg="registered in global registry"
+time=2026-02-18T14:22:24.401+08:00 level=WARN msg="initial import failed (continuing anyway)" error="failed to open JSONL: open /Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl: no such file or directory"
+time=2026-02-18T14:22:24.401+08:00 level=INFO msg="Starting sync cycle" mode="sync cycle"
+time=2026-02-18T14:22:24.402+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:22:25.314+08:00 level=INFO msg="Pull failed" error="git pull failed: exit status 1\nfatal: couldn't find remote ref filter-feature\n"
+time=2026-02-18T14:22:25.314+08:00 level=INFO msg="monitoring parent process" pid=0
+time=2026-02-18T14:22:25.314+08:00 level=INFO msg="using event-driven mode"
+time=2026-02-18T14:22:25.317+08:00 level=INFO msg="Auto-pull disabled: use 'git pull' manually to sync remote changes"
+time=2026-02-18T14:22:55.633+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s
+time=2026-02-18T14:22:56.135+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:22:56.136+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:22:56.141+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:22:56.141+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:22:56.141+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:22:56.192+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:22:56.192+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:22:57.195+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:22:57.196+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T14:22:57.940+08:00 level=INFO msg="Pull failed" error="git pull failed: exit status 1\nfatal: couldn't find remote ref filter-feature\n" backoff=30s
+time=2026-02-18T14:23:13.544+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.1
+time=2026-02-18T14:23:14.045+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:23:14.047+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:23:14.051+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:23:14.052+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:23:14.052+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:23:14.102+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:23:14.102+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:23:15.104+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:23:15.106+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:23:37.996+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.2
+time=2026-02-18T14:23:38.498+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:23:38.499+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:23:38.503+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:23:38.503+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:23:38.503+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:23:38.555+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:23:38.555+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:23:39.557+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:23:39.558+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T14:23:40.313+08:00 level=INFO msg="Pull failed" error="git pull failed: exit status 1\nfatal: couldn't find remote ref filter-feature\n" backoff=1m0s
+time=2026-02-18T14:23:57.320+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.3
+time=2026-02-18T14:23:57.822+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:23:57.822+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:23:57.826+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:23:57.826+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:23:57.826+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:23:57.877+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:23:57.877+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:23:58.880+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:23:58.882+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:24:19.060+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.4
+time=2026-02-18T14:24:19.561+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:24:19.561+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:24:19.566+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:24:19.566+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:24:19.566+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:24:19.616+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:24:19.616+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:24:20.618+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:24:20.620+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:24:33.142+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.5
+time=2026-02-18T14:24:33.643+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:24:33.644+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:24:33.648+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:24:33.649+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:24:33.649+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:24:33.700+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:24:33.700+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:24:34.702+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:24:34.704+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:24:45.873+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.6
+time=2026-02-18T14:24:46.374+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:24:46.375+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:24:46.379+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:24:46.380+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:24:46.380+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:24:46.430+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:24:46.430+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:24:47.432+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:24:47.434+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T14:24:48.214+08:00 level=INFO msg="Pull failed" error="git pull failed: exit status 1\nfatal: couldn't find remote ref filter-feature\n" backoff=2m0s
+time=2026-02-18T14:24:58.878+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.7
+time=2026-02-18T14:24:59.379+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:24:59.379+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:24:59.384+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:24:59.385+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:24:59.385+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:24:59.435+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:24:59.435+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:25:00.437+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:25:00.440+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:25:17.756+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.8
+time=2026-02-18T14:25:18.257+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:25:18.258+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:25:18.264+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:25:18.265+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:25:18.266+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:25:18.316+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:25:18.316+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:25:19.318+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:25:19.319+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:25:38.209+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.9
+time=2026-02-18T14:25:38.710+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:25:38.711+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:25:38.720+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:25:38.721+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:25:38.721+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:25:38.772+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:25:38.772+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:25:39.772+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:25:39.775+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:25:58.393+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.10
+time=2026-02-18T14:25:58.895+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:25:58.895+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:25:58.898+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:25:58.899+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:25:58.899+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:25:58.949+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:25:58.949+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:25:59.950+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:25:59.951+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:26:16.304+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.11
+time=2026-02-18T14:26:16.805+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:26:16.805+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:26:16.808+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:26:16.815+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:26:16.815+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:26:16.859+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:26:16.859+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:26:17.860+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:26:17.864+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:26:34.966+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.12
+time=2026-02-18T14:26:35.468+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:26:35.468+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:26:35.471+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:26:35.471+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:26:35.471+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:26:35.522+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:26:35.522+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:26:36.524+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:26:36.524+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:26:57.902+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.13
+time=2026-02-18T14:26:58.403+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:26:58.404+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:26:58.407+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:26:58.407+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:26:58.407+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:26:58.458+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:26:58.458+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:26:59.459+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:26:59.459+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T14:27:00.215+08:00 level=INFO msg="Pull failed" error="git pull failed: exit status 1\nfatal: couldn't find remote ref filter-feature\n" backoff=5m0s
+time=2026-02-18T14:27:17.265+08:00 level=INFO msg="Mutation detected" type=create issue_id=hyperindex-49s.14
+time=2026-02-18T14:27:17.766+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T14:27:17.766+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T14:27:17.776+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:27:17.777+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T14:27:17.777+08:00 level=INFO msg="Export complete"
+time=2026-02-18T14:27:17.827+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:27:17.827+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:27:18.828+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:27:18.829+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import
+time=2026-02-18T14:27:20.804+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T14:27:20.855+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T14:27:20.855+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T14:27:21.857+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T14:27:21.858+08:00 level=INFO msg="Skipping: in backoff period" mode=auto-import

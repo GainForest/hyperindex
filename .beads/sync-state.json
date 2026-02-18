@@ -1,0 +1,7 @@
+{
+  "last_failure": "2026-02-18T14:27:00.215459+08:00",
+  "failure_count": 4,
+  "backoff_until": "2026-02-18T14:32:00.215459+08:00",
+  "needs_manual_sync": true,
+  "failure_reason": "git pull failed: exit status 1\nfatal: couldn't find remote ref filter-feature\n"
+}
