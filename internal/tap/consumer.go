@@ -104,6 +104,9 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 		err := c.runOnce(ctx)
 
+		// Reset backoff after a successful connection that processed events.
+		backoff = minBackoff
+
 		// Check if we should stop after connection ended.
 		select {
 		case <-ctx.Done():
@@ -167,7 +170,6 @@ func (c *Consumer) runOnce(ctx context.Context) error {
 
 	slog.Info("Connected to Tap", "url", channelURL)
 
-	// Reset backoff is implicit — caller resets on next successful connection.
 	for {
 		// Check for stop signal before reading.
 		select {

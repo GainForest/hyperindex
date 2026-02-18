@@ -533,6 +533,87 @@ func TestConsumer_StopDuringDispatch(t *testing.T) {
 	consumer.Stop()
 }
 
+// TestConsumer_BackoffResetsAfterSuccess verifies that after a successful connection
+// the backoff is reset to minBackoff, so subsequent reconnections are fast.
+func TestConsumer_BackoffResetsAfterSuccess(t *testing.T) {
+	var connectionCount int32
+	// secondConnected is closed when the second connection is established.
+	secondConnected := make(chan struct{})
+	// thirdConnected is closed when the third connection is established.
+	thirdConnected := make(chan struct{})
+
+	recordEvent := Event{
+		ID:   1,
+		Type: EventTypeRecord,
+		Record: &RecordEvent{
+			DID:        "did:plc:backoff",
+			Collection: "app.bsky.feed.post",
+			RKey:       "rkey1",
+			Action:     ActionCreate,
+		},
+	}
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		count := atomic.AddInt32(&connectionCount, 1)
+		switch count {
+		case 1:
+			// First connection: close immediately to trigger backoff escalation.
+			conn.Close()
+		case 2:
+			// Second connection: signal connected, send one event, then close cleanly.
+			close(secondConnected)
+			sendEvent(t, conn, recordEvent)
+			// Read the ack so dispatch completes successfully.
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			conn.ReadMessage() //nolint:errcheck
+			// Close with a normal closure so runOnce returns nil (success).
+			conn.WriteMessage(websocket.CloseMessage, //nolint:errcheck
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		case 3:
+			// Third connection: signal that we reconnected quickly.
+			close(thirdConnected)
+			// Keep open briefly.
+			time.Sleep(200 * time.Millisecond)
+		}
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	// Wait for the second connection (after the 1s backoff from the first failure).
+	select {
+	case <-secondConnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second connection did not arrive within timeout")
+	}
+
+	// After the second connection closes cleanly, backoff should reset to minBackoff (1s).
+	// The third connection should arrive within ~1.5s, not 2s+ (which would indicate
+	// the backoff was not reset and stayed at 2s from the first failure).
+	start := time.Now()
+	select {
+	case <-thirdConnected:
+		elapsed := time.Since(start)
+		// Should reconnect within 1.5s (minBackoff=1s + some slack).
+		// If backoff was NOT reset it would wait 2s (doubled from 1s after first failure).
+		if elapsed > 1500*time.Millisecond {
+			t.Errorf("third connection took %v; expected <1.5s (backoff should have reset to minBackoff)", elapsed)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("third connection did not arrive within timeout")
+	}
+
+	consumer.Stop()
+}
+
 // TestConsumer_HandlerErrorDoesNotAck verifies that handler errors suppress acks.
 func TestConsumer_HandlerErrorDoesNotAck(t *testing.T) {
 	ackReceived := make(chan struct{})
