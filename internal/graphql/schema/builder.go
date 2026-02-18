@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
@@ -171,6 +172,12 @@ func (b *Builder) buildWhereInputTypes() {
 
 		// Add a field for each filterable property
 		for _, entry := range lex.Defs.Main.Properties {
+			if entry.Name == "did" {
+				continue // did is handled separately as a metadata filter
+			}
+			if types.ReservedRecordFields[entry.Name] {
+				continue // Skip properties that collide with reserved metadata fields
+			}
 			filterInput := types.FilterInputForLexiconType(entry.Property.Type, entry.Property.Format)
 			if filterInput == nil {
 				continue // Non-filterable type (array, ref, union, blob, unknown, etc.)
@@ -839,12 +846,12 @@ func (b *Builder) resolveRecordConnection(
 }
 
 // createSearchResolver creates a resolver for the search query.
-// It validates the query string (minimum 2 characters) and calls the Search repository method.
+// It validates the query string (minimum 3 runes) and calls the Search repository method.
 func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
 		searchQuery, _ := p.Args["query"].(string)
-		if len(searchQuery) < 2 {
-			return nil, fmt.Errorf("search query must be at least 2 characters")
+		if utf8.RuneCountInString(searchQuery) < 3 {
+			return nil, fmt.Errorf("search query must be at least 3 characters")
 		}
 
 		collection, _ := p.Args["collection"].(string)
@@ -1087,17 +1094,29 @@ func emptyConnection() map[string]interface{} {
 }
 
 // encodeCursorValues encodes multiple cursor component values into a base64 string.
+// Uses JSON array encoding to safely handle values that contain the pipe character.
 func encodeCursorValues(values ...string) string {
-	return base64.URLEncoding.EncodeToString([]byte(strings.Join(values, "|")))
+	jsonBytes, _ := json.Marshal(values)
+	return base64.URLEncoding.EncodeToString(jsonBytes)
 }
 
 // decodeCursorValues decodes a base64 cursor into its component values.
+// Supports both the current JSON array format and the legacy pipe-delimited format
+// for backward compatibility with cursors issued before the JSON encoding change.
 func decodeCursorValues(cursor string) ([]string, error) {
 	data, err := base64.URLEncoding.DecodeString(cursor)
 	if err != nil {
 		return nil, fmt.Errorf("invalid cursor")
 	}
-	return strings.Split(string(data), "|"), nil
+	var parts []string
+	if err := json.Unmarshal(data, &parts); err != nil {
+		// Backward compatibility: try legacy pipe-delimited format.
+		parts = strings.Split(string(data), "|")
+		if len(parts) < 2 {
+			return nil, fmt.Errorf("invalid cursor format")
+		}
+	}
+	return parts, nil
 }
 
 // encodeCursor encodes a composite (indexed_at, uri) cursor as base64.

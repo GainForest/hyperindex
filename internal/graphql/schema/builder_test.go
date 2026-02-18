@@ -2,6 +2,7 @@ package schema
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -41,6 +42,100 @@ func loadLexiconsFromDir(dir string) ([]*lexicon.Lexicon, error) {
 	})
 
 	return lexicons, err
+}
+
+
+// TestEncodeDecode verifies that encodeCursorValues and decodeCursorValues
+// correctly round-trip values, handle pipe characters in values, and maintain
+// backward compatibility with the legacy pipe-delimited format.
+func TestEncodeDecode(t *testing.T) {
+	t.Run("round-trip normal values", func(t *testing.T) {
+		input := []string{"hello", "at://did:plc:abc/col/rkey"}
+		cursor := encodeCursorValues(input...)
+		got, err := decodeCursorValues(cursor)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != len(input) {
+			t.Fatalf("expected %d parts, got %d", len(input), len(got))
+		}
+		for i, v := range input {
+			if got[i] != v {
+				t.Errorf("part[%d]: want %q, got %q", i, v, got[i])
+			}
+		}
+	})
+
+	t.Run("values containing pipe characters", func(t *testing.T) {
+		input := []string{"hello|world", "at://did:plc:abc/col/rkey"}
+		cursor := encodeCursorValues(input...)
+		got, err := decodeCursorValues(cursor)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != len(input) {
+			t.Fatalf("expected %d parts, got %d", len(input), len(got))
+		}
+		for i, v := range input {
+			if got[i] != v {
+				t.Errorf("part[%d]: want %q, got %q", i, v, got[i])
+			}
+		}
+	})
+
+	t.Run("empty strings", func(t *testing.T) {
+		input := []string{"", ""}
+		cursor := encodeCursorValues(input...)
+		got, err := decodeCursorValues(cursor)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != len(input) {
+			t.Fatalf("expected %d parts, got %d", len(input), len(got))
+		}
+		for i, v := range input {
+			if got[i] != v {
+				t.Errorf("part[%d]: want %q, got %q", i, v, got[i])
+			}
+		}
+	})
+
+	t.Run("single value", func(t *testing.T) {
+		input := []string{"only-one"}
+		cursor := encodeCursorValues(input...)
+		got, err := decodeCursorValues(cursor)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(got) != 1 || got[0] != input[0] {
+			t.Errorf("want %v, got %v", input, got)
+		}
+	})
+
+	t.Run("legacy pipe-delimited format (backward compatibility)", func(t *testing.T) {
+		// Simulate a cursor produced by the old pipe-delimited implementation.
+		legacyCursor := base64.URLEncoding.EncodeToString([]byte("2024-01-01T00:00:00Z|at://did:plc:abc/col/rkey"))
+		got, err := decodeCursorValues(legacyCursor)
+		if err != nil {
+			t.Fatalf("unexpected error decoding legacy cursor: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 parts, got %d", len(got))
+		}
+		if got[0] != "2024-01-01T00:00:00Z" {
+			t.Errorf("part[0]: want %q, got %q", "2024-01-01T00:00:00Z", got[0])
+		}
+		if got[1] != "at://did:plc:abc/col/rkey" {
+			t.Errorf("part[1]: want %q, got %q", "at://did:plc:abc/col/rkey", got[1])
+		}
+	})
+
+	t.Run("invalid base64 returns error", func(t *testing.T) {
+		_, err := decodeCursorValues("!!!invalid!!!")
+		if err == nil {
+			t.Error("expected error for invalid base64, got nil")
+		}
+	})
 }
 
 func TestBuildSchemaFromHypercertsLexicons(t *testing.T) {
