@@ -349,3 +349,101 @@ func TestRecordEvent_URI_AcceptanceCriteria(t *testing.T) {
 		t.Errorf("URI() = %q, want %q", got, want)
 	}
 }
+
+func TestParseEvent_RecordValidation(t *testing.T) {
+	validRecord := `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":"create"}}`
+
+	tests := []struct {
+		name    string
+		data    string
+		wantErr bool
+	}{
+		{
+			name:    "valid record event",
+			data:    validRecord,
+			wantErr: false,
+		},
+		{
+			name:    "record with empty DID",
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"","collection":"app.bsky.feed.post","rkey":"abc","action":"create"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "record with missing DID",
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","collection":"app.bsky.feed.post","rkey":"abc","action":"create"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "record with empty Collection",
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"","rkey":"abc","action":"create"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "record with missing Collection",
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","rkey":"abc","action":"create"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "record with empty RKey",
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"","action":"create"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "record with missing RKey",
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","action":"create"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "record with empty Action",
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":""}}`,
+			wantErr: true,
+		},
+		{
+			name:    "record with missing Action",
+			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc"}}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseEvent([]byte(tt.data))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseEvent() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseEvent_IdentityValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		wantErr bool
+	}{
+		{
+			name:    "valid identity event",
+			data:    `{"id":1,"type":"identity","identity":{"did":"did:plc:abc","handle":"alice.bsky.social","isActive":true,"status":"active"}}`,
+			wantErr: false,
+		},
+		{
+			name:    "identity with empty DID",
+			data:    `{"id":1,"type":"identity","identity":{"did":"","handle":"alice.bsky.social","isActive":true,"status":"active"}}`,
+			wantErr: true,
+		},
+		{
+			name:    "identity with missing DID",
+			data:    `{"id":1,"type":"identity","identity":{"handle":"alice.bsky.social","isActive":true,"status":"active"}}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseEvent([]byte(tt.data))
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseEvent() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
