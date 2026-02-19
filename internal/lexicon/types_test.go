@@ -9,28 +9,27 @@ func TestZeroValueForType(t *testing.T) {
 	tests := []struct {
 		name     string
 		propType string
-		format   string
 		want     interface{}
 	}{
-		{name: "string no format", propType: "string", format: "", want: ""},
-		{name: "string datetime format", propType: "string", format: "datetime", want: ""},
-		{name: "integer", propType: "integer", format: "", want: 0},
-		{name: "boolean", propType: "boolean", format: "", want: false},
-		{name: "array", propType: "array", format: "", want: []interface{}{}},
-		{name: "ref", propType: "ref", format: "", want: nil},
-		{name: "union", propType: "union", format: "", want: nil},
-		{name: "blob", propType: "blob", format: "", want: nil},
-		{name: "bytes", propType: "bytes", format: "", want: nil},
-		{name: "cid-link", propType: "cid-link", format: "", want: nil},
-		{name: "unknown", propType: "unknown", format: "", want: nil},
-		{name: "object", propType: "object", format: "", want: nil},
+		{name: "string no format", propType: "string", want: ""},
+		{name: "string datetime format", propType: "string", want: ""},
+		{name: "integer", propType: "integer", want: 0},
+		{name: "boolean", propType: "boolean", want: false},
+		{name: "array", propType: "array", want: []interface{}{}},
+		{name: "ref", propType: "ref", want: nil},
+		{name: "union", propType: "union", want: nil},
+		{name: "blob", propType: "blob", want: nil},
+		{name: "bytes", propType: "bytes", want: nil},
+		{name: "cid-link", propType: "cid-link", want: nil},
+		{name: "unknown", propType: "unknown", want: nil},
+		{name: "object", propType: "object", want: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ZeroValueForType(tt.propType, tt.format)
+			got := ZeroValueForType(tt.propType)
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("ZeroValueForType(%q, %q) = %v (%T), want %v (%T)",
-					tt.propType, tt.format, got, got, tt.want, tt.want)
+				t.Errorf("ZeroValueForType(%q) = %v (%T), want %v (%T)",
+					tt.propType, got, got, tt.want, tt.want)
 			}
 		})
 	}

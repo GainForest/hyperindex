@@ -223,7 +223,7 @@ func (p *Property) GetRefs() []string {
 // ZeroValueForType returns the appropriate Go zero value for a given lexicon property type.
 // For complex types (ref, union, blob, bytes, cid-link, unknown, object) it returns nil,
 // as these cannot have a meaningful scalar zero value.
-func ZeroValueForType(propType, format string) interface{} {
+func ZeroValueForType(propType string) interface{} {
 	switch propType {
 	case TypeString:
 		return ""
