@@ -13,7 +13,10 @@ import (
 
 	"github.com/graphql-go/graphql"
 
+	"github.com/GainForest/hypergoat/internal/database/migrations"
 	"github.com/GainForest/hypergoat/internal/database/repositories"
+	"github.com/GainForest/hypergoat/internal/database/sqlite"
+	"github.com/GainForest/hypergoat/internal/graphql/resolver"
 	"github.com/GainForest/hypergoat/internal/lexicon"
 )
 
@@ -871,6 +874,243 @@ func TestEmptyConnection(t *testing.T) {
 	}
 	if totalCount != 0 {
 		t.Errorf("emptyConnection: totalCount = %v, want 0", totalCount)
+	}
+}
+
+// setupCoercionTestDB creates an in-memory SQLite database with migrations applied,
+// inserts a single org.hypercerts.claim.activity record with the given JSON payload,
+// and returns a context that carries the repositories.
+func setupCoercionTestDB(t *testing.T, recordJSON string) context.Context {
+	t.Helper()
+
+	exec, err := sqlite.NewExecutor("sqlite::memory:")
+	if err != nil {
+		t.Fatalf("setupCoercionTestDB: failed to create SQLite executor: %v", err)
+	}
+	t.Cleanup(func() { exec.Close() })
+
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("setupCoercionTestDB: failed to run migrations: %v", err)
+	}
+
+	records := repositories.NewRecordsRepository(exec)
+	rec := &repositories.Record{
+		URI:        "at://did:plc:test/org.hypercerts.claim.activity/rkey1",
+		CID:        "bafyreiabc123",
+		DID:        "did:plc:test",
+		Collection: "org.hypercerts.claim.activity",
+		JSON:       recordJSON,
+		RKey:       "rkey1",
+	}
+	if err := records.BatchInsert(ctx, []*repositories.Record{rec}); err != nil {
+		t.Fatalf("setupCoercionTestDB: failed to insert record: %v", err)
+	}
+
+	repos := &resolver.Repositories{
+		Records: records,
+	}
+	return resolver.WithRepositories(ctx, repos)
+}
+
+// buildActivitySchema builds a GraphQL schema from the org.hypercerts.claim.activity lexicon.
+func buildActivitySchema(t *testing.T) *graphql.Schema {
+	t.Helper()
+
+	data, err := os.ReadFile("../../../testdata/lexicons/org/hypercerts/claim/activity.json")
+	if err != nil {
+		t.Fatalf("buildActivitySchema: failed to read activity.json: %v", err)
+	}
+	lex, err := lexicon.ParseBytes(data)
+	if err != nil {
+		t.Fatalf("buildActivitySchema: failed to parse activity.json: %v", err)
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("buildActivitySchema: failed to build schema: %v", err)
+	}
+	return schema
+}
+
+// TestCoerceRequiredFields_MissingFields verifies that required string fields that are
+// absent from the stored JSON are coerced to their zero value ("") when resolved.
+func TestCoerceRequiredFields_MissingFields(t *testing.T) {
+	// Record is missing "title" and "shortDescription" — only "createdAt" is present.
+	ctx := setupCoercionTestDB(t, `{"createdAt":"2025-01-01T00:00:00Z"}`)
+	schema := buildActivitySchema(t)
+
+	query := `{
+		orgHypercertsClaimActivity(first: 10) {
+			edges {
+				node {
+					title
+					shortDescription
+				}
+			}
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("TestCoerceRequiredFields_MissingFields: unexpected GraphQL errors: %v", result.Errors)
+	}
+
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+
+	conn, ok := data["orgHypercertsClaimActivity"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("orgHypercertsClaimActivity is %T", data["orgHypercertsClaimActivity"])
+	}
+
+	edges, ok := conn["edges"].([]interface{})
+	if !ok || len(edges) == 0 {
+		t.Fatalf("expected at least one edge, got %v", conn["edges"])
+	}
+
+	edge, ok := edges[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("edge[0] is %T", edges[0])
+	}
+	node, ok := edge["node"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("node is %T", edge["node"])
+	}
+
+	if title, ok := node["title"]; !ok || title != "" {
+		t.Errorf("title = %v (%T), want \"\" (coerced zero value)", title, title)
+	}
+	if sd, ok := node["shortDescription"]; !ok || sd != "" {
+		t.Errorf("shortDescription = %v (%T), want \"\" (coerced zero value)", sd, sd)
+	}
+}
+
+// TestCoerceRequiredFields_PresentFields verifies that required fields that are already
+// present in the stored JSON are returned unchanged.
+func TestCoerceRequiredFields_PresentFields(t *testing.T) {
+	ctx := setupCoercionTestDB(t, `{"title":"My Title","shortDescription":"My Desc","createdAt":"2025-01-01T00:00:00Z"}`)
+	schema := buildActivitySchema(t)
+
+	query := `{
+		orgHypercertsClaimActivity(first: 10) {
+			edges {
+				node {
+					title
+					shortDescription
+				}
+			}
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("TestCoerceRequiredFields_PresentFields: unexpected GraphQL errors: %v", result.Errors)
+	}
+
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+
+	conn, ok := data["orgHypercertsClaimActivity"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("orgHypercertsClaimActivity is %T", data["orgHypercertsClaimActivity"])
+	}
+
+	edges, ok := conn["edges"].([]interface{})
+	if !ok || len(edges) == 0 {
+		t.Fatalf("expected at least one edge, got %v", conn["edges"])
+	}
+
+	edge, ok := edges[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("edge[0] is %T", edges[0])
+	}
+	node, ok := edge["node"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("node is %T", edge["node"])
+	}
+
+	if title, ok := node["title"]; !ok || title != "My Title" {
+		t.Errorf("title = %v, want %q (original value preserved)", title, "My Title")
+	}
+	if sd, ok := node["shortDescription"]; !ok || sd != "My Desc" {
+		t.Errorf("shortDescription = %v, want %q (original value preserved)", sd, "My Desc")
+	}
+}
+
+// TestCoerceRequiredFields_NullFields verifies that required fields that are explicitly
+// set to null in the stored JSON are coerced to their zero value ("") when resolved.
+func TestCoerceRequiredFields_NullFields(t *testing.T) {
+	ctx := setupCoercionTestDB(t, `{"title":null,"shortDescription":null,"createdAt":"2025-01-01T00:00:00Z"}`)
+	schema := buildActivitySchema(t)
+
+	query := `{
+		orgHypercertsClaimActivity(first: 10) {
+			edges {
+				node {
+					title
+					shortDescription
+				}
+			}
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("TestCoerceRequiredFields_NullFields: unexpected GraphQL errors: %v", result.Errors)
+	}
+
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+
+	conn, ok := data["orgHypercertsClaimActivity"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("orgHypercertsClaimActivity is %T", data["orgHypercertsClaimActivity"])
+	}
+
+	edges, ok := conn["edges"].([]interface{})
+	if !ok || len(edges) == 0 {
+		t.Fatalf("expected at least one edge, got %v", conn["edges"])
+	}
+
+	edge, ok := edges[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("edge[0] is %T", edges[0])
+	}
+	node, ok := edge["node"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("node is %T", edge["node"])
+	}
+
+	if title, ok := node["title"]; !ok || title != "" {
+		t.Errorf("title = %v (%T), want \"\" (coerced from null)", title, title)
+	}
+	if sd, ok := node["shortDescription"]; !ok || sd != "" {
+		t.Errorf("shortDescription = %v (%T), want \"\" (coerced from null)", sd, sd)
 	}
 }
 
