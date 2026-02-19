@@ -332,6 +332,9 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 				if event.Collection != collection {
 					return nil, nil
 				}
+				if event.Record != nil {
+					b.coerceRequiredFields(event.Record, collection)
+				}
 				return event.Record, nil
 			},
 		}
@@ -979,7 +982,7 @@ func (b *Builder) coerceRequiredFields(data map[string]interface{}, collection s
 		if exists && val != nil {
 			continue
 		}
-		zero := lexicon.ZeroValueForType(entry.Property.Type, entry.Property.Format)
+		zero := lexicon.ZeroValueForType(entry.Property.Type)
 		if zero == nil {
 			// Complex type (ref, union, blob, etc.) — skip, keep nil
 			continue

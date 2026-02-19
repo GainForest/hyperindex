@@ -1114,6 +1114,48 @@ func TestCoerceRequiredFields_NullFields(t *testing.T) {
 	}
 }
 
+// TestCoerceRequiredFields_SingleRecordResolver verifies that the ByUri (single record)
+// resolver path also coerces missing required fields to their zero values.
+func TestCoerceRequiredFields_SingleRecordResolver(t *testing.T) {
+	// Record is missing "title" and "shortDescription" — only "createdAt" is present.
+	ctx := setupCoercionTestDB(t, `{"createdAt":"2025-01-01T00:00:00Z"}`)
+	schema := buildActivitySchema(t)
+
+	query := `{
+		orgHypercertsClaimActivityByUri(uri: "at://did:plc:test/org.hypercerts.claim.activity/rkey1") {
+			title
+			shortDescription
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("TestCoerceRequiredFields_SingleRecordResolver: unexpected GraphQL errors: %v", result.Errors)
+	}
+
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+
+	record, ok := data["orgHypercertsClaimActivityByUri"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("orgHypercertsClaimActivityByUri is %T, want map[string]interface{}", data["orgHypercertsClaimActivityByUri"])
+	}
+
+	if title, ok := record["title"]; !ok || title != "" {
+		t.Errorf("title = %v (%T), want \"\" (coerced zero value)", title, title)
+	}
+	if sd, ok := record["shortDescription"]; !ok || sd != "" {
+		t.Errorf("shortDescription = %v (%T), want \"\" (coerced zero value)", sd, sd)
+	}
+}
+
 // TestExtractFilters_MaxFilterConditions verifies that extractFilters enforces the
 // MaxFilterConditions cap and that the DID filter does not count toward the cap.
 func TestExtractFilters_MaxFilterConditions(t *testing.T) {
