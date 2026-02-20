@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { HTMLAttributes, forwardRef } from "react";
+import { CSSProperties, HTMLAttributes, forwardRef } from "react";
 
 interface AlertProps extends HTMLAttributes<HTMLDivElement> {
   variant?: "info" | "success" | "warning" | "error";
@@ -7,21 +7,21 @@ interface AlertProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 const variants = {
-  info: "bg-blue-50/50 text-blue-700 border-blue-200/60",
-  success: "bg-emerald-50/50 text-emerald-700 border-emerald-200/60",
-  warning: "bg-amber-50/50 text-amber-700 border-amber-200/60",
-  error: "bg-red-50/50 text-red-700 border-red-200/60",
+  info: "border",
+  success: "border",
+  warning: "border",
+  error: "border",
 };
 
-const iconColors = {
-  info: "text-blue-400",
-  success: "text-emerald-400",
-  warning: "text-amber-400",
-  error: "text-red-400",
+const variantStyles: Record<string, CSSProperties> = {
+  info: { backgroundColor: "oklch(0.60 0.15 250 / 0.08)", color: "oklch(0.45 0.15 250)", borderColor: "oklch(0.60 0.15 250 / 0.2)" },
+  success: { backgroundColor: "oklch(0.65 0.15 155 / 0.08)", color: "oklch(0.45 0.15 155)", borderColor: "oklch(0.65 0.15 155 / 0.2)" },
+  warning: { backgroundColor: "oklch(0.75 0.15 75 / 0.08)", color: "oklch(0.55 0.15 75)", borderColor: "oklch(0.75 0.15 75 / 0.2)" },
+  error: { backgroundColor: "oklch(0.60 0.20 25 / 0.08)", color: "oklch(0.50 0.20 25)", borderColor: "oklch(0.60 0.20 25 / 0.2)" },
 };
 
 export const Alert = forwardRef<HTMLDivElement, AlertProps>(
-  ({ className, variant = "info", children, onClose, ...props }, ref) => {
+  ({ className, variant = "info", children, onClose, style, ...props }, ref) => {
     return (
       <div
         ref={ref}
@@ -31,10 +31,11 @@ export const Alert = forwardRef<HTMLDivElement, AlertProps>(
           variants[variant],
           className
         )}
+        style={{ ...variantStyles[variant], ...style }}
         {...props}
       >
         <svg
-          className={cn("h-5 w-5 flex-shrink-0", iconColors[variant])}
+          className="h-5 w-5 flex-shrink-0"
           fill="none"
           viewBox="0 0 24 24"
           strokeWidth={1.5}

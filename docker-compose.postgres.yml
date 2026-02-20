@@ -9,7 +9,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8080
       - DATABASE_URL=postgres://hypergoat:hypergoat@postgres:5432/hypergoat?sslmode=disable
-      - SECRET_KEY_BASE=${SECRET_KEY_BASE:-development-secret-key-change-in-production-64chars}
+      - SECRET_KEY_BASE=${SECRET_KEY_BASE:?SECRET_KEY_BASE must be set - generate with: openssl rand -hex 32}
       - EXTERNAL_BASE_URL=${EXTERNAL_BASE_URL:-http://localhost:8080}
       - OAUTH_LOOPBACK_MODE=${OAUTH_LOOPBACK_MODE:-true}
     depends_on:

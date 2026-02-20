@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 
-const API_ENDPOINT = "https://hypergoat-app-production.up.railway.app";
+const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
 type Tab = "http" | "websocket";
 type Language = "javascript" | "python" | "curl";
@@ -312,16 +312,15 @@ function LanguageTabs({
   ];
 
   return (
-    <div className="flex gap-1 mb-4 p-1 bg-zinc-100 rounded-lg w-fit">
+    <div className="flex gap-1 mb-4 p-1 rounded-lg w-fit" style={{ backgroundColor: "var(--muted)" }}>
       {languages.map(({ value, label, icon }) => (
         <button
           key={value}
           onClick={() => onChange(value)}
-          className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md transition-all ${
-            selected === value
-              ? "bg-white text-zinc-900 shadow-sm"
-              : "text-zinc-500 hover:text-zinc-700"
-          }`}
+          className="flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-md transition-all"
+          style={selected === value
+            ? { backgroundColor: "var(--card)", color: "var(--foreground)" }
+            : { color: "var(--muted-foreground)" }}
         >
           {icon}
           {label}
@@ -624,12 +623,12 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
     <div className="pt-8 sm:pt-12 space-y-10">
       {/* Hero Section */}
       <div className="max-w-xl">
-        <h2 className="font-[family-name:var(--font-garamond)] text-3xl sm:text-4xl text-zinc-900 leading-tight">
+        <h2 className="font-[family-name:var(--font-syne)] text-3xl sm:text-4xl leading-tight" style={{ color: "var(--foreground)" }}>
           API Documentation
         </h2>
-        <p className="text-zinc-500 mt-3 leading-relaxed">
-          <strong className="text-zinc-700">Hyperindex</strong> (<em>hi</em>, formerly Hypergoat) is{" "}
-          <a href="https://gainforest.earth" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">GainForest&apos;s</a>{" "}
+        <p className="mt-3 leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
+          <strong style={{ color: "var(--foreground)" }}>Hyperindex</strong> is{" "}
+          <a href="https://gainforest.earth" target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }} className="hover:underline">GainForest&apos;s</a>{" "}
           main AppView for the AT Protocol Hypersphere ecosystem. It indexes Lexicon-defined records and exposes them via a dynamically-generated GraphQL API.
         </p>
         <div className="flex flex-wrap gap-x-4 gap-y-2 mt-4 text-sm">
@@ -637,7 +636,8 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
             href="https://impactindexer.org/"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-zinc-500 hover:text-emerald-600 transition-colors"
+            className="inline-flex items-center gap-1.5 transition-colors"
+            style={{ color: "var(--muted-foreground)" }}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
@@ -648,7 +648,8 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
             href="https://impactindexer.org/lexicon/"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-zinc-500 hover:text-emerald-600 transition-colors"
+            className="inline-flex items-center gap-1.5 transition-colors"
+            style={{ color: "var(--muted-foreground)" }}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
@@ -657,7 +658,8 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
           </a>
           <Link
             href="/docs/agents"
-            className="inline-flex items-center gap-1.5 text-zinc-500 hover:text-emerald-600 transition-colors"
+            className="inline-flex items-center gap-1.5 transition-colors"
+            style={{ color: "var(--muted-foreground)" }}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
@@ -669,12 +671,12 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
 
       {/* Endpoint Info */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           Endpoints
         </h3>
-        <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-3">
+        <div className="rounded-xl border p-6 space-y-3" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <span className="text-sm font-medium text-zinc-500 w-24 flex items-center gap-2">
+            <span className="text-sm font-medium w-24 flex items-center gap-2" style={{ color: "var(--muted-foreground)" }}>
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
               HTTP
             </span>
@@ -683,7 +685,7 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
             </code>
           </div>
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <span className="text-sm font-medium text-zinc-500 w-24 flex items-center gap-2">
+            <span className="text-sm font-medium w-24 flex items-center gap-2" style={{ color: "var(--muted-foreground)" }}>
               <span className="w-2 h-2 rounded-full bg-blue-500" />
               WebSocket
             </span>
@@ -692,7 +694,7 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
             </code>
           </div>
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-            <span className="text-sm font-medium text-zinc-500 w-24 flex items-center gap-2">
+            <span className="text-sm font-medium w-24 flex items-center gap-2" style={{ color: "var(--muted-foreground)" }}>
               <span className="w-2 h-2 rounded-full bg-purple-500" />
               GraphiQL
             </span>
@@ -710,38 +712,38 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
 
       {/* Protocol Info */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           Protocol Details
         </h3>
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="rounded-xl border border-zinc-200/60 bg-white p-5">
+          <div className="rounded-xl border p-5" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
             <div className="flex items-center gap-2 mb-3">
-              <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">
-                <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: "oklch(0.65 0.15 155 / 0.15)" }}>
+                <svg className="w-4 h-4" style={{ color: "oklch(0.55 0.15 155)" }} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
                 </svg>
               </div>
-              <span className="font-medium text-zinc-800">HTTP/HTTPS</span>
+              <span className="font-medium" style={{ color: "var(--foreground)" }}>HTTP/HTTPS</span>
             </div>
-            <p className="text-sm text-zinc-500 leading-relaxed">
+            <p className="text-sm leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
               Standard GraphQL over HTTP. Send POST requests with JSON body containing 
-              <code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded mx-1 text-zinc-700">query</code> 
+              <code className="text-xs px-1.5 py-0.5 rounded mx-1" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>query</code> 
               and optional 
-              <code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded mx-1 text-zinc-700">variables</code>.
+              <code className="text-xs px-1.5 py-0.5 rounded mx-1" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>variables</code>.
             </p>
           </div>
-          <div className="rounded-xl border border-zinc-200/60 bg-white p-5">
+          <div className="rounded-xl border p-5" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
             <div className="flex items-center gap-2 mb-3">
-              <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
-                <svg className="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: "oklch(0.60 0.15 250 / 0.15)" }}>
+                <svg className="w-4 h-4" style={{ color: "oklch(0.50 0.15 250)" }} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
                 </svg>
               </div>
-              <span className="font-medium text-zinc-800">WebSocket</span>
+              <span className="font-medium" style={{ color: "var(--foreground)" }}>WebSocket</span>
             </div>
-            <p className="text-sm text-zinc-500 leading-relaxed">
+            <p className="text-sm leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
               Uses the 
-              <code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded mx-1 text-zinc-700">graphql-transport-ws</code> 
+              <code className="text-xs px-1.5 py-0.5 rounded mx-1" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>graphql-transport-ws</code> 
               protocol for subscriptions. Connect with subprotocol header set accordingly.
             </p>
           </div>
@@ -751,27 +753,25 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
       {/* Connection Tabs */}
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-          <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+          <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
             Code Examples
           </h3>
-          <div className="flex gap-1 bg-zinc-100 p-1 rounded-lg w-fit">
+          <div className="flex gap-1 p-1 rounded-lg w-fit" style={{ backgroundColor: "var(--muted)" }}>
             <button
               onClick={() => setActiveTab("http")}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
-                activeTab === "http"
-                  ? "bg-white text-zinc-900 shadow-sm"
-                  : "text-zinc-500 hover:text-zinc-700"
-              }`}
+              className="px-4 py-2 text-sm font-medium rounded-md transition-all shadow-sm"
+              style={activeTab === "http"
+                ? { backgroundColor: "var(--card)", color: "var(--foreground)" }
+                : { color: "var(--muted-foreground)" }}
             >
               HTTP Queries
             </button>
             <button
               onClick={() => setActiveTab("websocket")}
-              className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${
-                activeTab === "websocket"
-                  ? "bg-white text-zinc-900 shadow-sm"
-                  : "text-zinc-500 hover:text-zinc-700"
-              }`}
+              className="px-4 py-2 text-sm font-medium rounded-md transition-all"
+              style={activeTab === "websocket"
+                ? { backgroundColor: "var(--card)", color: "var(--foreground)" }
+                : { color: "var(--muted-foreground)" }}
             >
               WebSocket Subscriptions
             </button>
@@ -795,96 +795,96 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
 
       {/* WebSocket Protocol Details */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           WebSocket Protocol Reference
         </h3>
-        <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-6">
-          <p className="text-sm text-zinc-600 leading-relaxed">
-            Hyperindex implements the <code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded text-zinc-700">graphql-transport-ws</code> protocol. 
+        <div className="rounded-xl border p-6 space-y-6" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
+          <p className="text-sm leading-relaxed" style={{ color: "var(--secondary-foreground)" }}>
+            Hyperindex implements the <code className="text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>graphql-transport-ws</code> protocol. 
             This is the modern standard for GraphQL subscriptions over WebSocket.
           </p>
 
           <div className="space-y-4">
-            <h4 className="font-medium text-zinc-800">Connection Flow</h4>
-            <ol className="space-y-3 text-sm text-zinc-600">
+            <h4 className="font-medium" style={{ color: "var(--foreground)" }}>Connection Flow</h4>
+            <ol className="space-y-3 text-sm" style={{ color: "var(--secondary-foreground)" }}>
               <li className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium flex items-center justify-center">1</span>
+                <span className="flex-shrink-0 w-6 h-6 rounded-full text-xs font-medium flex items-center justify-center" style={{ backgroundColor: "oklch(0.65 0.15 155 / 0.15)", color: "oklch(0.55 0.15 155)" }}>1</span>
                 <div>
-                  <strong>Connect</strong> - Open WebSocket with <code className="text-xs bg-zinc-100 px-1 py-0.5 rounded">Sec-WebSocket-Protocol: graphql-transport-ws</code>
+                  <strong>Connect</strong> - Open WebSocket with <code className="text-xs px-1 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>Sec-WebSocket-Protocol: graphql-transport-ws</code>
                 </div>
               </li>
               <li className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium flex items-center justify-center">2</span>
+                <span className="flex-shrink-0 w-6 h-6 rounded-full text-xs font-medium flex items-center justify-center" style={{ backgroundColor: "oklch(0.65 0.15 155 / 0.15)", color: "oklch(0.55 0.15 155)" }}>2</span>
                 <div>
-                  <strong>Initialize</strong> - Send <code className="text-xs bg-zinc-100 px-1 py-0.5 rounded">{`{"type":"connection_init"}`}</code>
+                  <strong>Initialize</strong> - Send <code className="text-xs px-1 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>{`{"type":"connection_init"}`}</code>
                 </div>
               </li>
               <li className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium flex items-center justify-center">3</span>
+                <span className="flex-shrink-0 w-6 h-6 rounded-full text-xs font-medium flex items-center justify-center" style={{ backgroundColor: "oklch(0.65 0.15 155 / 0.15)", color: "oklch(0.55 0.15 155)" }}>3</span>
                 <div>
-                  <strong>Acknowledge</strong> - Receive <code className="text-xs bg-zinc-100 px-1 py-0.5 rounded">{`{"type":"connection_ack"}`}</code>
+                  <strong>Acknowledge</strong> - Receive <code className="text-xs px-1 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>{`{"type":"connection_ack"}`}</code>
                 </div>
               </li>
               <li className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium flex items-center justify-center">4</span>
+                <span className="flex-shrink-0 w-6 h-6 rounded-full text-xs font-medium flex items-center justify-center" style={{ backgroundColor: "oklch(0.65 0.15 155 / 0.15)", color: "oklch(0.55 0.15 155)" }}>4</span>
                 <div>
                   <strong>Subscribe</strong> - Send subscription with unique ID
                 </div>
               </li>
               <li className="flex gap-3">
-                <span className="flex-shrink-0 w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium flex items-center justify-center">5</span>
+                <span className="flex-shrink-0 w-6 h-6 rounded-full text-xs font-medium flex items-center justify-center" style={{ backgroundColor: "oklch(0.65 0.15 155 / 0.15)", color: "oklch(0.55 0.15 155)" }}>5</span>
                 <div>
-                  <strong>Receive</strong> - Get <code className="text-xs bg-zinc-100 px-1 py-0.5 rounded">{`{"type":"next"}`}</code> messages with data
+                  <strong>Receive</strong> - Get <code className="text-xs px-1 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>{`{"type":"next"}`}</code> messages with data
                 </div>
               </li>
             </ol>
           </div>
 
           <div className="space-y-3">
-            <h4 className="font-medium text-zinc-800">Message Types</h4>
+            <h4 className="font-medium" style={{ color: "var(--foreground)" }}>Message Types</h4>
             <div className="overflow-x-auto -mx-6 px-6">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-zinc-200">
-                    <th className="text-left py-2 pr-4 font-medium text-zinc-700">Type</th>
-                    <th className="text-left py-2 pr-4 font-medium text-zinc-700">Direction</th>
-                    <th className="text-left py-2 font-medium text-zinc-700">Description</th>
+                  <tr className="border-b" style={{ borderColor: "var(--border)" }}>
+                    <th className="text-left py-2 pr-4 font-medium" style={{ color: "var(--foreground)" }}>Type</th>
+                    <th className="text-left py-2 pr-4 font-medium" style={{ color: "var(--foreground)" }}>Direction</th>
+                    <th className="text-left py-2 font-medium" style={{ color: "var(--foreground)" }}>Description</th>
                   </tr>
                 </thead>
-                <tbody className="text-zinc-600">
-                  <tr className="border-b border-zinc-100">
-                    <td className="py-2.5 pr-4"><code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded">connection_init</code></td>
-                    <td className="py-2.5 pr-4 text-zinc-400">Client → Server</td>
+                <tbody style={{ color: "var(--secondary-foreground)" }}>
+                  <tr className="border-b" style={{ borderColor: "var(--border)" }}>
+                    <td className="py-2.5 pr-4"><code className="text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>connection_init</code></td>
+                    <td className="py-2.5 pr-4" style={{ color: "var(--muted-foreground)" }}>Client → Server</td>
                     <td className="py-2.5">Initialize connection</td>
                   </tr>
-                  <tr className="border-b border-zinc-100">
-                    <td className="py-2.5 pr-4"><code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded">connection_ack</code></td>
-                    <td className="py-2.5 pr-4 text-zinc-400">Server → Client</td>
+                  <tr className="border-b" style={{ borderColor: "var(--border)" }}>
+                    <td className="py-2.5 pr-4"><code className="text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>connection_ack</code></td>
+                    <td className="py-2.5 pr-4" style={{ color: "var(--muted-foreground)" }}>Server → Client</td>
                     <td className="py-2.5">Connection accepted</td>
                   </tr>
-                  <tr className="border-b border-zinc-100">
-                    <td className="py-2.5 pr-4"><code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded">subscribe</code></td>
-                    <td className="py-2.5 pr-4 text-zinc-400">Client → Server</td>
+                  <tr className="border-b" style={{ borderColor: "var(--border)" }}>
+                    <td className="py-2.5 pr-4"><code className="text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>subscribe</code></td>
+                    <td className="py-2.5 pr-4" style={{ color: "var(--muted-foreground)" }}>Client → Server</td>
                     <td className="py-2.5">Start subscription</td>
                   </tr>
-                  <tr className="border-b border-zinc-100">
-                    <td className="py-2.5 pr-4"><code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded">next</code></td>
-                    <td className="py-2.5 pr-4 text-zinc-400">Server → Client</td>
+                  <tr className="border-b" style={{ borderColor: "var(--border)" }}>
+                    <td className="py-2.5 pr-4"><code className="text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>next</code></td>
+                    <td className="py-2.5 pr-4" style={{ color: "var(--muted-foreground)" }}>Server → Client</td>
                     <td className="py-2.5">Data payload</td>
                   </tr>
-                  <tr className="border-b border-zinc-100">
-                    <td className="py-2.5 pr-4"><code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded">error</code></td>
-                    <td className="py-2.5 pr-4 text-zinc-400">Server → Client</td>
+                  <tr className="border-b" style={{ borderColor: "var(--border)" }}>
+                    <td className="py-2.5 pr-4"><code className="text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>error</code></td>
+                    <td className="py-2.5 pr-4" style={{ color: "var(--muted-foreground)" }}>Server → Client</td>
                     <td className="py-2.5">Subscription error</td>
                   </tr>
-                  <tr className="border-b border-zinc-100">
-                    <td className="py-2.5 pr-4"><code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded">complete</code></td>
-                    <td className="py-2.5 pr-4 text-zinc-400">Both</td>
+                  <tr className="border-b" style={{ borderColor: "var(--border)" }}>
+                    <td className="py-2.5 pr-4"><code className="text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>complete</code></td>
+                    <td className="py-2.5 pr-4" style={{ color: "var(--muted-foreground)" }}>Both</td>
                     <td className="py-2.5">End subscription</td>
                   </tr>
                   <tr>
-                    <td className="py-2.5 pr-4"><code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded">ping/pong</code></td>
-                    <td className="py-2.5 pr-4 text-zinc-400">Both</td>
+                    <td className="py-2.5 pr-4"><code className="text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: "var(--muted)", color: "var(--foreground)" }}>ping/pong</code></td>
+                    <td className="py-2.5 pr-4" style={{ color: "var(--muted-foreground)" }}>Both</td>
                     <td className="py-2.5">Keep-alive</td>
                   </tr>
                 </tbody>
@@ -896,49 +896,49 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
 
       {/* Tips */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           Tips & Best Practices
         </h3>
-        <div className="rounded-xl border border-emerald-200/60 bg-gradient-to-br from-emerald-50/50 to-white p-6">
-          <ul className="space-y-4 text-sm text-zinc-700">
+        <div className="rounded-xl border p-6" style={{ borderColor: "var(--border)", backgroundColor: "var(--card)" }}>
+          <ul className="space-y-4 text-sm" style={{ color: "var(--foreground)" }}>
             <li className="flex gap-3">
-              <div className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5" style={{ backgroundColor: "oklch(0.65 0.15 155 / 0.15)" }}>
+                <svg className="w-3.5 h-3.5" style={{ color: "oklch(0.55 0.15 155)" }} fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>
               </div>
               <span>
-                <strong className="text-zinc-900">Use GraphiQL</strong> — Explore the schema interactively at <a href={`${API_ENDPOINT}/graphiql`} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">/graphiql</a>
+                <strong style={{ color: "var(--foreground)" }}>Use GraphiQL</strong> — Explore the schema interactively at <a href={`${API_ENDPOINT}/graphiql`} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }} className="hover:underline">/graphiql</a>
               </span>
             </li>
             <li className="flex gap-3">
-              <div className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5" style={{ backgroundColor: "oklch(0.65 0.15 155 / 0.15)" }}>
+                <svg className="w-3.5 h-3.5" style={{ color: "oklch(0.55 0.15 155)" }} fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>
               </div>
               <span>
-                <strong className="text-zinc-900">Schema introspection</strong> — Dynamically generated from uploaded lexicons
+                <strong style={{ color: "var(--foreground)" }}>Schema introspection</strong> — Dynamically generated from uploaded lexicons
               </span>
             </li>
             <li className="flex gap-3">
-              <div className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5" style={{ backgroundColor: "oklch(0.65 0.15 155 / 0.15)" }}>
+                <svg className="w-3.5 h-3.5" style={{ color: "oklch(0.55 0.15 155)" }} fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>
               </div>
               <span>
-                <strong className="text-zinc-900">Relay pagination</strong> — Use <code className="text-xs bg-emerald-100 px-1 py-0.5 rounded">first</code>, <code className="text-xs bg-emerald-100 px-1 py-0.5 rounded">after</code>, <code className="text-xs bg-emerald-100 px-1 py-0.5 rounded">last</code>, <code className="text-xs bg-emerald-100 px-1 py-0.5 rounded">before</code> for cursors
+                <strong style={{ color: "var(--foreground)" }}>Relay pagination</strong> — Use <code className="text-xs px-1 py-0.5 rounded" style={{ backgroundColor: "var(--accent)" }}>first</code>, <code className="text-xs px-1 py-0.5 rounded" style={{ backgroundColor: "var(--accent)" }}>after</code>, <code className="text-xs px-1 py-0.5 rounded" style={{ backgroundColor: "var(--accent)" }}>last</code>, <code className="text-xs px-1 py-0.5 rounded" style={{ backgroundColor: "var(--accent)" }}>before</code> for cursors
               </span>
             </li>
             <li className="flex gap-3">
-              <div className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                <svg className="w-3.5 h-3.5 text-emerald-600" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5" style={{ backgroundColor: "oklch(0.65 0.15 155 / 0.15)" }}>
+                <svg className="w-3.5 h-3.5" style={{ color: "oklch(0.55 0.15 155)" }} fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
                 </svg>
               </div>
               <span>
-                <strong className="text-zinc-900">Handle reconnection</strong> — Implement exponential backoff for WebSocket subscriptions
+                <strong style={{ color: "var(--foreground)" }}>Handle reconnection</strong> — Implement exponential backoff for WebSocket subscriptions
               </span>
             </li>
           </ul>

@@ -1,18 +1,17 @@
-const API_ENDPOINT = "https://hypergoat-app-production.up.railway.app";
-const WS_ENDPOINT = "wss://hypergoat-app-production.up.railway.app";
+const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+const WS_ENDPOINT = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace("https://", "wss://").replace("http://", "ws://");
 
-const agentsMd = `# Hyperindex (hi) API - Complete Integration Guide for AI Agents
+const agentsMd = `# Hyperindex API - Complete Integration Guide for AI Agents
 
 ## What is Hyperindex?
 
-**Hyperindex** (short: **hi**, formerly known as Hypergoat) is GainForest's AT Protocol AppView server for the Hypersphere ecosystem. The name "hi" stands for **H**yper**i**ndex -- it indexes Lexicon-defined records from the AT Protocol network and exposes them via a dynamically-generated GraphQL API.
+**Hyperindex** is GainForest's AT Protocol AppView server for the Hypersphere ecosystem. It indexes Lexicon-defined records from the AT Protocol network and exposes them via a dynamically-generated GraphQL API.
 
 ### Key Information
 
 - **Organization**: GainForest (https://gainforest.earth)
 - **Purpose**: Indexes Lexicon-defined records from the AT Protocol network and exposes them via a dynamically-generated GraphQL API
 - **Ecosystem**: Part of the Hypersphere ecosystem for environmental impact tracking
-- **History**: Formerly known as Hypergoat (Hypersphere Go ATProto AppView)
 
 ### Related Resources
 

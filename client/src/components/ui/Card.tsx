@@ -4,13 +4,11 @@ import { HTMLAttributes, forwardRef } from "react";
 interface CardProps extends HTMLAttributes<HTMLDivElement> {}
 
 export const Card = forwardRef<HTMLDivElement, CardProps>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn(
-        "rounded-xl border border-zinc-200/60 bg-white shadow-sm",
-        className
-      )}
+      className={cn("rounded-xl border shadow-sm", className)}
+      style={{ backgroundColor: "var(--card)", borderColor: "var(--border)", color: "var(--card-foreground)", ...style }}
       {...props}
     />
   )
@@ -29,13 +27,14 @@ export const CardHeader = forwardRef<HTMLDivElement, CardProps>(
 CardHeader.displayName = "CardHeader";
 
 export const CardTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadingElement>>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <h3
       ref={ref}
       className={cn(
-        "font-[family-name:var(--font-garamond)] text-xl text-zinc-900 leading-none tracking-tight",
+        "font-[family-name:var(--font-syne)] text-xl leading-none tracking-tight",
         className
       )}
+      style={{ color: "var(--card-foreground)", ...style }}
       {...props}
     />
   )
@@ -43,10 +42,11 @@ export const CardTitle = forwardRef<HTMLHeadingElement, HTMLAttributes<HTMLHeadi
 CardTitle.displayName = "CardTitle";
 
 export const CardDescription = forwardRef<HTMLParagraphElement, HTMLAttributes<HTMLParagraphElement>>(
-  ({ className, ...props }, ref) => (
+  ({ className, style, ...props }, ref) => (
     <p
       ref={ref}
-      className={cn("text-sm text-zinc-400", className)}
+      className={cn("text-sm", className)}
+      style={{ color: "var(--muted-foreground)", ...style }}
       {...props}
     />
   )

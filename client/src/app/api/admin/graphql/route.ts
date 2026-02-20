@@ -6,14 +6,14 @@ export const dynamic = "force-dynamic";
 
 /**
  * Proxy for admin GraphQL requests.
- * Checks session authentication and passes user DID to Hypergoat.
+ * Checks session authentication and passes user DID to Hyperindex.
  */
 export async function POST(request: NextRequest) {
   try {
     const session = await getSession();
     const body = await request.json();
 
-    // Build headers for Hypergoat
+    // Build headers for Hyperindex
     const headers: HeadersInit = {
       "Content-Type": "application/json",
     };
@@ -26,8 +26,8 @@ export async function POST(request: NextRequest) {
       console.log("[admin-graphql] Unauthenticated request - no session DID");
     }
 
-    // Proxy to Hypergoat
-    const response = await fetch(`${env.HYPERGOAT_URL}/admin/graphql`, {
+    // Proxy to Hyperindex
+    const response = await fetch(`${env.HYPERINDEX_URL}/admin/graphql`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
 
     const data = await response.json();
 
-    // Log errors from Hypergoat
+    // Log errors from Hyperindex
     if (data.errors) {
       console.log("[admin-graphql] GraphQL errors:", JSON.stringify(data.errors));
     }

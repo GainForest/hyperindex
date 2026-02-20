@@ -332,6 +332,9 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 				if event.Collection != collection {
 					return nil, nil
 				}
+				if event.Record != nil {
+					b.coerceRequiredFields(event.Record, collection)
+				}
 				return event.Record, nil
 			},
 		}
@@ -967,6 +970,32 @@ func (b *Builder) createGenericRecordsResolver() graphql.FieldResolveFn {
 	}
 }
 
+// coerceRequiredFields fills in zero values for required fields that are missing or null.
+// This prevents NonNull violations when historical records lack fields that became required.
+func (b *Builder) coerceRequiredFields(data map[string]interface{}, collection string) {
+	recordDef, ok := b.registry.GetRecordDef(collection)
+	if !ok {
+		return
+	}
+	for _, entry := range recordDef.RequiredProperties() {
+		val, exists := data[entry.Name]
+		if exists && val != nil {
+			continue
+		}
+		zero := lexicon.ZeroValueForType(entry.Property.Type)
+		if zero == nil {
+			// Complex type (ref, union, blob, etc.) — skip, keep nil
+			continue
+		}
+		slog.Debug("Coercing missing required field to zero value",
+			"collection", collection,
+			"field", entry.Name,
+			"type", entry.Property.Type,
+		)
+		data[entry.Name] = zero
+	}
+}
+
 // createCollectionResolver creates a resolver for querying a typed collection.
 func (b *Builder) createCollectionResolver(lexiconID string) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
@@ -977,6 +1006,7 @@ func (b *Builder) createCollectionResolver(lexiconID string) graphql.FieldResolv
 				data["cid"] = rec.CID
 				data["did"] = rec.DID
 				data["rkey"] = rec.RKey
+				b.coerceRequiredFields(data, lexiconID)
 				return data, true
 			})
 	}
@@ -1016,6 +1046,7 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 		data["cid"] = rec.CID
 		data["did"] = rec.DID
 		data["rkey"] = rec.RKey
+		b.coerceRequiredFields(data, lexiconID)
 
 		return data, nil
 	}

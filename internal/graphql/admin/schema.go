@@ -58,11 +58,8 @@ func (b *SchemaBuilder) buildQueryType() *graphql.Object {
 			},
 			"statistics": &graphql.Field{
 				Type:        graphql.NewNonNull(StatisticsType),
-				Description: "Get system statistics (admin only)",
+				Description: "Get system statistics (public)",
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-					if err := requireAdmin(p.Context); err != nil {
-						return nil, err
-					}
 					return b.resolver.Statistics(p.Context)
 				},
 			},
@@ -108,7 +105,7 @@ func (b *SchemaBuilder) buildQueryType() *graphql.Object {
 			},
 			"activityBuckets": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(ActivityBucketType))),
-				Description: "Get aggregated activity data for a time range (admin only)",
+				Description: "Get aggregated activity data for a time range (public)",
 				Args: graphql.FieldConfigArgument{
 					"range": &graphql.ArgumentConfig{
 						Type:        graphql.NewNonNull(TimeRangeEnum),
@@ -116,16 +113,13 @@ func (b *SchemaBuilder) buildQueryType() *graphql.Object {
 					},
 				},
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-					if err := requireAdmin(p.Context); err != nil {
-						return nil, err
-					}
 					timeRange, _ := p.Args["range"].(string)
 					return b.resolver.ActivityBuckets(p.Context, timeRange)
 				},
 			},
 			"recentActivity": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(ActivityEntryType))),
-				Description: "Get recent activity entries (admin only)",
+				Description: "Get recent activity entries (public)",
 				Args: graphql.FieldConfigArgument{
 					"hours": &graphql.ArgumentConfig{
 						Type:         graphql.NewNonNull(graphql.Int),
@@ -134,9 +128,6 @@ func (b *SchemaBuilder) buildQueryType() *graphql.Object {
 					},
 				},
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-					if err := requireAdmin(p.Context); err != nil {
-						return nil, err
-					}
 					hours, _ := p.Args["hours"].(int)
 					if hours < 1 {
 						hours = 1

@@ -219,3 +219,34 @@ func (p *Property) GetRefs() []string {
 	}
 	return nil
 }
+
+// ZeroValueForType returns the appropriate Go zero value for a given lexicon property type.
+// For complex types (ref, union, blob, bytes, cid-link, unknown, object) it returns nil,
+// as these cannot have a meaningful scalar zero value.
+func ZeroValueForType(propType string) interface{} {
+	switch propType {
+	case TypeString:
+		return ""
+	case TypeInteger:
+		return 0
+	case TypeBoolean:
+		return false
+	case TypeArray:
+		return []interface{}{}
+	default:
+		// ref, union, blob, bytes, cid-link, unknown, object — return nil
+		// These are complex types that cannot have a meaningful zero value
+		return nil
+	}
+}
+
+// RequiredProperties returns all properties that are marked as required.
+func (r *RecordDef) RequiredProperties() []PropertyEntry {
+	var result []PropertyEntry
+	for _, entry := range r.Properties {
+		if entry.Property.Required {
+			result = append(result, entry)
+		}
+	}
+	return result
+}

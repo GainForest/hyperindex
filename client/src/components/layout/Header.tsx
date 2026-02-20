@@ -5,6 +5,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/auth'
+import { ThemeToggle } from '@/components/ThemeToggle'
 
 const navLinks = [
   { href: '/', label: 'Dashboard' },
@@ -60,44 +61,48 @@ export function Header() {
 
   return (
     <>
-      <nav className="relative z-10 py-6">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6">
-          <div className="flex items-center">
-            {/* Logo */}
-            <Link href="/" className="flex items-center gap-2.5">
-              <Image
-                src="/logo.png"
-                alt="Hyperindex"
-                width={20}
-                height={20}
-                className="opacity-80"
-              />
-              <span className="text-lg font-medium text-zinc-800 tracking-tight">
-                hi
-              </span>
-            </Link>
+      <nav className="sticky top-0 z-50 glass-panel border-b" style={{ borderColor: 'var(--border)' }}>
+        <div className="h-16 max-w-3xl mx-auto px-4 sm:px-6 flex items-center">
+          {/* Logo */}
+          <Link href="/" className="flex items-center gap-2.5">
+            <Image
+              src="/hypercerts_logo.png"
+              alt="Hyperindex"
+              width={22}
+              height={22}
+            />
+            <span
+              className="text-lg font-[family-name:var(--font-syne)] font-bold tracking-tight"
+              style={{ color: 'var(--foreground)' }}
+            >
+              Hyperindex
+            </span>
+          </Link>
 
-            {/* Nav Links */}
-            <div className="hidden sm:flex items-center gap-1 ml-8">
-              {navLinks.map(({ href, label }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                    isActive(href)
-                      ? 'text-zinc-900 font-medium'
-                      : 'text-zinc-400 hover:text-zinc-600'
-                  }`}
-                >
-                  {label}
-                </Link>
-              ))}
-            </div>
+          {/* Nav Links */}
+          <div className="hidden sm:flex items-center gap-1 ml-8">
+            {navLinks.map(({ href, label }) => (
+              <Link
+                key={href}
+                href={href}
+                className={`px-3 py-1.5 text-sm rounded-lg transition-colors font-[family-name:var(--font-outfit)] ${
+                  isActive(href) ? 'font-medium' : ''
+                }`}
+                style={{ color: isActive(href) ? 'var(--foreground)' : 'var(--muted-foreground)' }}
+              >
+                {label}
+              </Link>
+            ))}
+          </div>
 
-            {/* Right side - User menu */}
-            <div className="relative ml-auto" ref={dropdownRef}>
+          {/* Right side */}
+          <div className="flex items-center gap-2 ml-auto">
+            <ThemeToggle />
+
+            {/* User menu */}
+            <div className="relative" ref={dropdownRef}>
               {isLoading ? (
-                <div className="w-8 h-8 rounded-full bg-zinc-100 animate-pulse" />
+                <div className="w-8 h-8 rounded-full animate-pulse" style={{ backgroundColor: 'var(--accent)' }} />
               ) : (
                 <button
                   onClick={() => setShowDropdown(!showDropdown)}
@@ -113,12 +118,18 @@ export function Header() {
                         className="rounded-full"
                       />
                     ) : (
-                      <div className="w-[30px] h-[30px] rounded-full bg-emerald-100 flex items-center justify-center text-sm font-medium text-emerald-700">
+                      <div
+                        className="w-[30px] h-[30px] rounded-full flex items-center justify-center text-sm font-[family-name:var(--font-syne)] font-semibold"
+                        style={{ backgroundColor: 'var(--accent)', color: 'var(--accent-foreground)' }}
+                      >
                         {(session.displayName || session.handle).charAt(0).toUpperCase()}
                       </div>
                     )
                   ) : (
-                    <span className="text-sm text-zinc-400 hover:text-zinc-600 transition-colors">
+                    <span
+                      className="text-sm transition-colors"
+                      style={{ color: 'var(--muted-foreground)' }}
+                    >
                       Sign in
                     </span>
                   )}
@@ -127,31 +138,31 @@ export function Header() {
 
               {/* Dropdown Menu */}
               {showDropdown && (
-                <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-lg border border-zinc-200/60 py-2 z-50">
+                <div
+                  className="absolute right-0 top-full mt-2 w-48 glass-panel rounded-xl shadow-lg py-2 z-50"
+                  style={{ borderColor: 'var(--border)' }}
+                >
                   {/* User info (if authenticated) */}
                   {isAuthenticated && session && (
-                    <div className="px-4 py-2 border-b border-zinc-100 mb-1">
-                      <p className="text-sm font-medium text-zinc-800 truncate">
+                    <div className="px-4 py-2 mb-1" style={{ borderBottom: '1px solid var(--border)' }}>
+                      <p className="text-sm font-medium truncate" style={{ color: 'var(--foreground)' }}>
                         {session.displayName || session.handle}
                       </p>
-                      <p className="text-xs text-zinc-400 truncate">
+                      <p className="text-xs truncate" style={{ color: 'var(--muted-foreground)' }}>
                         @{session.handle}
                       </p>
                     </div>
                   )}
 
                   {/* Mobile nav (only show on small screens) */}
-                  <div className="sm:hidden py-1 border-b border-zinc-100 mb-1">
+                  <div className="sm:hidden py-1 mb-1" style={{ borderBottom: '1px solid var(--border)' }}>
                     {navLinks.map(({ href, label }) => (
                       <Link
                         key={href}
                         href={href}
                         onClick={() => setShowDropdown(false)}
-                        className={`block px-4 py-2 text-sm transition-colors ${
-                          isActive(href)
-                            ? 'text-emerald-600 bg-emerald-50/50'
-                            : 'text-zinc-600 hover:bg-zinc-50'
-                        }`}
+                        className="block px-4 py-2 text-sm transition-colors"
+                        style={{ color: isActive(href) ? 'var(--primary)' : 'var(--foreground)' }}
                       >
                         {label}
                       </Link>
@@ -163,11 +174,8 @@ export function Header() {
                     <Link
                       href="/settings"
                       onClick={() => setShowDropdown(false)}
-                      className={`block px-4 py-2 text-sm transition-colors ${
-                        isActive('/settings')
-                          ? 'text-emerald-600 bg-emerald-50/50'
-                          : 'text-zinc-600 hover:bg-zinc-50'
-                      }`}
+                      className="block px-4 py-2 text-sm transition-colors"
+                      style={{ color: isActive('/settings') ? 'var(--primary)' : 'var(--foreground)' }}
                     >
                       Settings
                     </Link>
@@ -176,21 +184,23 @@ export function Header() {
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={() => setShowDropdown(false)}
-                      className="flex items-center justify-between px-4 py-2 text-sm text-zinc-600 hover:bg-zinc-50 transition-colors"
+                      className="flex items-center justify-between px-4 py-2 text-sm transition-colors"
+                      style={{ color: 'var(--foreground)' }}
                     >
                       GraphiQL
-                      <svg className="w-3 h-3 text-zinc-300" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                      <svg className="w-3 h-3" style={{ color: 'var(--muted-foreground)' }} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 19.5 15-15m0 0H8.25m11.25 0v11.25" />
                       </svg>
                     </a>
                   </div>
 
                   {/* Auth action */}
-                  <div className="border-t border-zinc-100 mt-1 pt-1">
+                  <div className="mt-1 pt-1" style={{ borderTop: '1px solid var(--border)' }}>
                     {isAuthenticated ? (
                       <button
                         onClick={handleLogout}
-                        className="block w-full text-left px-4 py-2 text-sm text-zinc-500 hover:text-zinc-700 hover:bg-zinc-50 transition-colors"
+                        className="block w-full text-left px-4 py-2 text-sm transition-colors"
+                        style={{ color: 'var(--muted-foreground)' }}
                       >
                         Sign out
                       </button>
@@ -200,7 +210,8 @@ export function Header() {
                           setShowDropdown(false)
                           setShowLoginModal(true)
                         }}
-                        className="block w-full text-left px-4 py-2 text-sm text-emerald-600 hover:bg-emerald-50/50 transition-colors"
+                        className="block w-full text-left px-4 py-2 text-sm transition-colors"
+                        style={{ color: 'var(--primary)' }}
                       >
                         Sign in
                       </button>
@@ -221,18 +232,25 @@ export function Header() {
         >
           <div className="absolute inset-0 bg-black/20 backdrop-blur-sm" />
           <div
-            className="relative w-full max-w-sm mx-4 bg-white rounded-xl shadow-lg border border-zinc-200/60 p-6"
+            className="relative w-full max-w-sm mx-4 glass-panel rounded-xl shadow-lg p-6"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900 mb-1">
+            <h2
+              className="font-[family-name:var(--font-syne)] text-xl mb-1"
+              style={{ color: 'var(--foreground)' }}
+            >
               Sign in with ATProto
             </h2>
-            <p className="text-sm text-zinc-400 mb-5">
+            <p className="text-sm mb-5" style={{ color: 'var(--muted-foreground)' }}>
               Enter your Bluesky handle to connect.
             </p>
 
             <form onSubmit={handleLogin}>
-              <label htmlFor="auth-handle" className="block text-sm text-zinc-600 mb-1.5">
+              <label
+                htmlFor="auth-handle"
+                className="block text-sm mb-1.5"
+                style={{ color: 'var(--foreground)' }}
+              >
                 Handle
               </label>
               <input
@@ -243,12 +261,16 @@ export function Header() {
                 placeholder="alice.bsky.social"
                 disabled={isSubmitting}
                 autoFocus
-                className="w-full px-3 py-2 text-sm bg-white border border-zinc-200/60 rounded-lg
-                           placeholder:text-zinc-300
-                           focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400
+                className="w-full px-3 py-2 text-sm rounded-lg
+                           focus:outline-none focus:ring-2
                            disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{
+                  backgroundColor: 'var(--background)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--foreground)',
+                }}
               />
-              <p className="text-xs text-zinc-300 mt-1.5">
+              <p className="text-xs mt-1.5" style={{ color: 'var(--muted-foreground)' }}>
                 Just a username? We&apos;ll add .bsky.social for you.
               </p>
 
@@ -261,18 +283,24 @@ export function Header() {
                   type="button"
                   onClick={() => setShowLoginModal(false)}
                   disabled={isSubmitting}
-                  className="flex-1 px-3 py-2 text-sm text-zinc-600 bg-zinc-50 rounded-lg
-                             hover:bg-zinc-100 transition-colors
+                  className="flex-1 px-3 py-2 text-sm rounded-lg transition-colors
                              disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{
+                    backgroundColor: 'var(--secondary)',
+                    color: 'var(--secondary-foreground)',
+                  }}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting || !handle.trim()}
-                  className="flex-1 px-3 py-2 text-sm text-white bg-emerald-600 rounded-lg
-                             hover:bg-emerald-700 transition-colors
+                  className="flex-1 px-3 py-2 text-sm rounded-lg transition-colors
                              disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{
+                    backgroundColor: 'var(--primary)',
+                    color: 'var(--primary-foreground)',
+                  }}
                 >
                   {isSubmitting ? 'Connecting...' : 'Connect'}
                 </button>

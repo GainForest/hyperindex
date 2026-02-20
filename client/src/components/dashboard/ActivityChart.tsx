@@ -44,7 +44,10 @@ export function ActivityChart({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3
+          className="font-[family-name:var(--font-syne)] text-xl"
+          style={{ color: "var(--foreground)" }}
+        >
           Activity
         </h3>
         <div className="flex items-center gap-1">
@@ -52,11 +55,12 @@ export function ActivityChart({
             <button
               key={range.value}
               onClick={() => onTimeRangeChange(range.value)}
-              className={`px-2 py-0.5 rounded text-xs transition-colors cursor-pointer ${
+              className="px-2 py-0.5 rounded text-xs transition-colors cursor-pointer"
+              style={
                 timeRange === range.value
-                  ? "bg-emerald-50 text-emerald-600 font-medium"
-                  : "text-zinc-400 hover:text-zinc-600"
-              }`}
+                  ? { backgroundColor: "var(--accent)", color: "var(--primary)", fontWeight: 500 }
+                  : { color: "var(--muted-foreground)" }
+              }
             >
               {range.label}
             </button>
@@ -64,41 +68,50 @@ export function ActivityChart({
         </div>
       </div>
 
-      <div className="rounded-xl border border-zinc-200/60 bg-white p-4">
+      <div
+        className="rounded-xl border p-4"
+        style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}
+      >
         {isLoading ? (
-          <div className="h-48 animate-pulse rounded-lg bg-zinc-50" />
+          <div
+            className="h-48 animate-pulse rounded-lg"
+            style={{ backgroundColor: "var(--muted)" }}
+          />
         ) : data.length === 0 ? (
-          <div className="flex h-48 items-center justify-center text-sm text-zinc-400">
+          <div
+            className="flex h-48 items-center justify-center text-sm"
+            style={{ color: "var(--muted-foreground)" }}
+          >
             No activity data available
           </div>
         ) : (
           <div className="h-48">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f4f4f5" />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis
                   dataKey="timestamp"
                   tickFormatter={(value) =>
                     format(new Date(value), timeRange === "SEVEN_DAYS" ? "MMM d" : "HH:mm")
                   }
                   fontSize={11}
-                  stroke="#a1a1aa"
+                  stroke="var(--muted-foreground)"
                   tickLine={false}
                   axisLine={false}
                 />
                 <YAxis
                   fontSize={11}
-                  stroke="#a1a1aa"
+                  stroke="var(--muted-foreground)"
                   tickLine={false}
                   axisLine={false}
                 />
                 <Tooltip
                   contentStyle={{
-                    backgroundColor: "#fff",
-                    border: "1px solid #e4e4e7",
+                    backgroundColor: "var(--card)",
+                    border: "1px solid var(--border)",
                     borderRadius: "0.75rem",
                     fontSize: "12px",
-                    boxShadow: "0 4px 6px -1px rgb(0 0 0 / 0.05)",
+                    color: "var(--foreground)",
                   }}
                   labelFormatter={(value) =>
                     format(new Date(value), "MMM d, yyyy HH:mm")

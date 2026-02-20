@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { ButtonHTMLAttributes, forwardRef, ElementType, ComponentPropsWithoutRef } from "react";
+import { ButtonHTMLAttributes, forwardRef, ElementType, ComponentPropsWithoutRef, CSSProperties } from "react";
 
 type ButtonBaseProps = {
   variant?: "default" | "outline" | "ghost" | "destructive" | "primary";
@@ -14,11 +14,19 @@ type ButtonProps<T extends ElementType = "button"> = ButtonBaseProps &
   Omit<ComponentPropsWithoutRef<T>, keyof ButtonBaseProps>;
 
 const buttonVariants = {
-  default: "bg-zinc-900 text-white hover:bg-zinc-800",
-  primary: "bg-emerald-600 text-white hover:bg-emerald-700",
-  outline: "border border-zinc-200/60 bg-transparent text-zinc-600 hover:bg-zinc-50",
-  ghost: "bg-transparent text-zinc-600 hover:bg-zinc-50",
-  destructive: "bg-red-600 text-white hover:bg-red-700",
+  default: "",
+  primary: "",
+  outline: "border bg-transparent",
+  ghost: "bg-transparent",
+  destructive: "",
+};
+
+const variantStyles: Record<string, CSSProperties> = {
+  default: { backgroundColor: "var(--primary)", color: "var(--primary-foreground)" },
+  primary: { backgroundColor: "var(--primary)", color: "var(--primary-foreground)" },
+  outline: { borderColor: "var(--border)", color: "var(--foreground)" },
+  ghost: { color: "var(--foreground)" },
+  destructive: { backgroundColor: "var(--destructive)", color: "#fff" },
 };
 
 const buttonSizes = {
@@ -31,6 +39,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   (
     {
       className,
+      style,
       variant = "default",
       size = "md",
       loading,
@@ -48,13 +57,14 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       <Component
         ref={ref}
         className={cn(
-          "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30 focus-visible:border-emerald-400",
+          "inline-flex items-center justify-center gap-2 rounded-lg font-[family-name:var(--font-outfit)] font-medium transition-colors hover:opacity-90",
+          "focus-visible:outline-none focus-visible:ring-2",
           "disabled:opacity-50 disabled:cursor-not-allowed",
           buttonVariants[variant],
           buttonSizes[size],
           className
         )}
+        style={{ ...variantStyles[variant], outline: "var(--ring)", ...style }}
         {...(isButton ? { disabled: disabled || loading } : {})}
         {...props}
       >

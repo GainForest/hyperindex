@@ -103,7 +103,7 @@ export default function SettingsPage() {
     return (
       <div className="pt-8 sm:pt-12 space-y-6">
         {[...Array(3)].map((_, i) => (
-          <div key={i} className="h-48 animate-pulse rounded-xl bg-zinc-100" />
+          <div key={i} className="h-48 animate-pulse rounded-xl" style={{ backgroundColor: "var(--muted)" }} />
         ))}
       </div>
     );
@@ -113,10 +113,10 @@ export default function SettingsPage() {
     <div className="pt-8 sm:pt-12 space-y-10">
       {/* Hero Section */}
       <div className="max-w-md">
-        <h2 className="font-[family-name:var(--font-garamond)] text-3xl sm:text-4xl text-zinc-900 leading-tight">
+        <h2 className="font-[family-name:var(--font-syne)] text-3xl sm:text-4xl leading-tight" style={{ color: "var(--foreground)" }}>
           Settings
         </h2>
-        <p className="text-zinc-500 mt-3 leading-relaxed">
+        <p className="mt-3 leading-relaxed" style={{ color: "var(--muted-foreground)" }}>
           Configure your Hyperindex AppView instance
         </p>
       </div>
@@ -129,10 +129,10 @@ export default function SettingsPage() {
 
       {/* Basic Settings */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           Basic Settings
         </h3>
-        <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-4">
+        <div className="rounded-xl border p-6 space-y-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
           <Input
             label="Domain Authority"
             placeholder="your-domain.com"
@@ -154,10 +154,10 @@ export default function SettingsPage() {
 
       {/* External Services */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           External Services
         </h3>
-        <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-4">
+        <div className="rounded-xl border p-6 space-y-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
           <Input
             label="Relay URL"
             placeholder="https://relay1.us-west.bsky.network"
@@ -196,19 +196,19 @@ export default function SettingsPage() {
 
       {/* Admin DIDs */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           Administrators
         </h3>
-        <div className="rounded-xl border border-zinc-200/60 bg-white p-6">
+        <div className="rounded-xl border p-6" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
           {settings?.adminDids.length === 0 ? (
-            <p className="text-sm text-zinc-400">
+            <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
               No administrators configured
             </p>
           ) : (
-            <ul className="divide-y divide-zinc-100">
+            <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
               {settings?.adminDids.map((did) => (
                 <li key={did} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
-                  <code className="text-sm text-zinc-600 font-mono">{did}</code>
+                  <code className="text-sm font-mono" style={{ color: "var(--secondary-foreground)" }}>{did}</code>
                 </li>
               ))}
             </ul>
@@ -218,26 +218,26 @@ export default function SettingsPage() {
 
       {/* OAuth Clients */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-zinc-900">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           OAuth Clients
         </h3>
-        <div className="rounded-xl border border-zinc-200/60 bg-white p-6">
+        <div className="rounded-xl border p-6" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
           {oauthClients.length === 0 ? (
-            <p className="text-sm text-zinc-400">
+            <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
               No OAuth clients registered
             </p>
           ) : (
-            <ul className="divide-y divide-zinc-100">
+            <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
               {oauthClients.map((client) => (
                 <li key={client.clientId} className="py-3 first:pt-0 last:pb-0">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="font-medium text-zinc-800">
+                      <p className="font-medium" style={{ color: "var(--foreground)" }}>
                         {client.clientName}
                       </p>
-                      <code className="text-xs text-zinc-400 font-mono">{client.clientId}</code>
+                      <code className="text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>{client.clientId}</code>
                     </div>
-                    <span className="rounded-full bg-zinc-100 px-2 py-1 text-xs text-zinc-600">
+                    <span className="rounded-full px-2 py-1 text-xs" style={{ backgroundColor: "var(--muted)", color: "var(--secondary-foreground)" }}>
                       {client.clientType}
                     </span>
                   </div>
@@ -250,11 +250,11 @@ export default function SettingsPage() {
 
       {/* Danger Zone */}
       <div className="space-y-4">
-        <h3 className="font-[family-name:var(--font-garamond)] text-xl text-red-600">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl text-red-600">
           Danger Zone
         </h3>
         <div className="rounded-xl border border-red-200/60 bg-red-50/30 p-6 space-y-4">
-          <p className="text-sm text-zinc-600">
+          <p className="text-sm" style={{ color: "var(--secondary-foreground)" }}>
             Reset all data including records, actors, and activity. This action cannot be undone.
           </p>
           <div className="flex flex-col sm:flex-row items-start sm:items-end gap-4">

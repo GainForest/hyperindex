@@ -43,6 +43,59 @@ Or place lexicon JSON files in a directory and set `LEXICON_DIR` environment var
 
 ### 2. Start Indexing
 
+#### Using Tap (Recommended)
+
+[Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) is Bluesky's official sidecar utility for consuming AT Protocol events. It is the recommended way to run Hyperindex because it provides:
+
+- **Cryptographic verification** — verifies repo structure, MST integrity, and identity signatures
+- **Ordering guarantees** — strict per-repo event ordering, no backfill/live race conditions
+- **At-least-once delivery** — ack-based protocol ensures no events are lost on crash
+- **Identity tracking** — handle changes and account status updates are handled automatically
+- **Simplified architecture** — Tap manages backfill automatically; no separate backfill worker needed
+
+**Run with Tap sidecar:**
+
+```bash
+# Copy and configure environment
+cp .env.example .env
+# Set TAP_ADMIN_PASSWORD and other vars in .env
+
+# Start Tap + Hyperindex together
+docker compose -f docker-compose.tap.yml up --build
+```
+
+**Add repos to track via Tap admin API:**
+
+```bash
+# Add a specific repo (DID) for Tap to index
+curl -X POST http://localhost:2480/repos/add \
+  -u "admin:${TAP_ADMIN_PASSWORD}" \
+  -H "Content-Type: application/json" \
+  -d '{"dids": ["did:plc:your-did-here"]}'
+```
+
+**Auto-discovery with `TAP_SIGNAL_COLLECTION`:**
+
+Set `TAP_SIGNAL_COLLECTION` to a collection NSID (e.g. `app.bsky.feed.post`) and Tap will automatically discover and index all repos that publish records in that collection. This replaces the need for a manual full-network backfill.
+
+```bash
+TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.yml up
+```
+
+**Tap environment variables:**
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TAP_ENABLED` | Enable Tap consumer (disables Jetstream+Backfill) | `false` |
+| `TAP_URL` | WebSocket URL of the Tap sidecar | `ws://localhost:2480` |
+| `TAP_ADMIN_PASSWORD` | Password for Tap's admin HTTP API | *(required for docker-compose.tap.yml)* |
+| `TAP_DISABLE_ACKS` | Disable ack-based delivery (useful for debugging) | `false` |
+| `TAP_SIGNAL_COLLECTION` | Collection NSID for auto-discovery of repos | *(empty)* |
+
+#### Legacy Mode: Jetstream + Backfill
+
+> **Note:** Jetstream+Backfill mode is the legacy ingestion path. It lacks cryptographic verification and ordering guarantees. Use Tap (above) for new deployments.
+
 Once lexicons are registered, Hyperindex automatically:
 - **Connects to Jetstream** for real-time events
 - **Indexes matching records** to your database
