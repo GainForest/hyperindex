@@ -1,5 +1,5 @@
 // Package types provides GraphQL type mapping and building utilities.
-package types
+package types //nolint:revive // package name is descriptive within graphql context
 
 import (
 	"github.com/graphql-go/graphql"

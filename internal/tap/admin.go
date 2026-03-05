@@ -66,7 +66,7 @@ func (c *AdminClient) RemoveRepos(ctx context.Context, dids []string) error {
 // Health checks if Tap is healthy.
 // GET /health — expects {"status":"ok"}
 func (c *AdminClient) Health(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/health", http.NoBody)
 	if err != nil {
 		return fmt.Errorf("failed to create health request: %w", err)
 	}
@@ -97,7 +97,7 @@ func (c *AdminClient) Health(ctx context.Context) error {
 // RepoInfo gets info about a tracked repo.
 // GET /info/:did
 func (c *AdminClient) RepoInfo(ctx context.Context, did string) (*RepoInfoResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/info/"+did, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/info/"+did, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create repo info request: %w", err)
 	}

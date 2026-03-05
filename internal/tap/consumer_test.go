@@ -3,6 +3,7 @@ package tap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -761,7 +762,7 @@ func TestConsumer_ShutdownNoSpuriousLog(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			t.Errorf("Start() returned unexpected error: %v", err)
 		}
 	case <-time.After(3 * time.Second):

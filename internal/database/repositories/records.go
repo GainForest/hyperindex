@@ -563,12 +563,11 @@ func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
 	}
 
 	// DID filter
-	if didClause, didParams, consumed := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
 		whereParts = append(whereParts, didClause)
 		for _, p := range didParams {
 			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
 		}
-		nextPlaceholder += consumed
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
@@ -704,12 +703,11 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	}
 
 	// DID filter
-	if didClause, didParams, consumed := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
 		whereParts = append(whereParts, didClause)
 		for _, p := range didParams {
 			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
 		}
-		nextPlaceholder += consumed
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
@@ -822,12 +820,11 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	}
 
 	// DID filter
-	if didClause, didParams, consumed := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
 		whereParts = append(whereParts, didClause)
 		for _, p := range didParams {
 			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
 		}
-		nextPlaceholder += consumed
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")

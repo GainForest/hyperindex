@@ -1,7 +1,7 @@
 // Package types provides GraphQL type mapping and building utilities.
 // This file defines shared filter InputObject types for field-level filtering,
 // reused across all collection query types.
-package types
+package types //nolint:revive // package name is descriptive within graphql context
 
 import (
 	"github.com/graphql-go/graphql"
