@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/language/ast"
 
 	"github.com/GainForest/hypergoat/internal/database/repositories"
 	"github.com/GainForest/hypergoat/internal/graphql/query"
@@ -26,8 +29,10 @@ type Builder struct {
 	objectBuilder *types.ObjectBuilder
 
 	// Built types
-	recordTypes     map[string]*graphql.Object // lexiconID -> record type
-	connectionTypes map[string]*graphql.Object // lexiconID -> connection type
+	recordTypes     map[string]*graphql.Object      // lexiconID -> record type
+	connectionTypes map[string]*graphql.Object      // lexiconID -> connection type
+	sortFieldEnums  map[string]*graphql.Enum        // lexiconID -> sort field enum
+	whereInputTypes map[string]*graphql.InputObject // lexiconID -> where input type
 }
 
 // NewBuilder creates a new schema builder.
@@ -39,6 +44,8 @@ func NewBuilder(registry *lexicon.Registry) *Builder {
 		objectBuilder:   types.NewObjectBuilder(mapper, registry),
 		recordTypes:     make(map[string]*graphql.Object),
 		connectionTypes: make(map[string]*graphql.Object),
+		sortFieldEnums:  make(map[string]*graphql.Enum),
+		whereInputTypes: make(map[string]*graphql.InputObject),
 	}
 }
 
@@ -50,8 +57,14 @@ func (b *Builder) Build() (*graphql.Schema, error) {
 	// Phase 2: Build all record types
 	b.buildRecordTypes()
 
+	// Phase 2b: Build per-collection WhereInput types
+	b.buildWhereInputTypes()
+
 	// Phase 3: Build connection types
 	b.buildConnectionTypes()
+
+	// Phase 3b: Build sort field enums for each collection
+	b.buildSortFieldEnums()
 
 	// Phase 4: Build Query type
 	queryType := b.buildQueryType()
@@ -109,6 +122,81 @@ func (b *Builder) buildConnectionTypes() {
 	for lexiconID, recordType := range b.recordTypes {
 		connectionType := query.BuildConnectionType(recordType)
 		b.connectionTypes[lexiconID] = connectionType
+	}
+}
+
+// buildSortFieldEnums builds per-collection sort field enums from lexicon properties.
+func (b *Builder) buildSortFieldEnums() {
+	for _, lex := range b.registry.GetCollectionLexicons() {
+		if lex.Defs.Main == nil {
+			continue
+		}
+
+		recordType, ok := b.recordTypes[lex.ID]
+		if !ok {
+			continue
+		}
+
+		// Collect sortable properties from the lexicon's main record definition
+		var sortableProps []query.SortableProperty
+		for _, entry := range lex.Defs.Main.Properties {
+			sortableProps = append(sortableProps, query.SortableProperty{
+				Name:   entry.Name,
+				Type:   entry.Property.Type,
+				Format: entry.Property.Format,
+			})
+		}
+
+		sortEnum := query.BuildSortFieldEnum(recordType.Name(), sortableProps)
+		b.sortFieldEnums[lex.ID] = sortEnum
+	}
+}
+
+// buildWhereInputTypes builds per-collection WhereInput GraphQL InputObject types.
+// For each collection lexicon, it creates a WhereInput type with a field for each
+// filterable property (string, integer, number, boolean, datetime) plus a `did` field.
+func (b *Builder) buildWhereInputTypes() {
+	for _, lex := range b.registry.GetCollectionLexicons() {
+		if lex.Defs.Main == nil {
+			continue
+		}
+
+		typeName := lexicon.ToTypeName(lex.ID) + "WhereInput"
+		fields := graphql.InputObjectConfigFieldMap{}
+
+		// Always include did as a filterable metadata field.
+		// Uses DIDFilterInput (restricted to eq and in only) because DID is a
+		// column-level filter — operators like contains/startsWith are not meaningful.
+		fields["did"] = &graphql.InputObjectFieldConfig{
+			Type:        types.DIDFilterInput,
+			Description: "Filter by DID (record author)",
+		}
+
+		// Add a field for each filterable property
+		for _, entry := range lex.Defs.Main.Properties {
+			if entry.Name == "did" {
+				continue // did is handled separately as a metadata filter
+			}
+			if types.ReservedRecordFields[entry.Name] {
+				continue // Skip properties that collide with reserved metadata fields
+			}
+			filterInput := types.FilterInputForLexiconType(entry.Property.Type, entry.Property.Format)
+			if filterInput == nil {
+				continue // Non-filterable type (array, ref, union, blob, unknown, etc.)
+			}
+			fields[entry.Name] = &graphql.InputObjectFieldConfig{
+				Type:        filterInput,
+				Description: fmt.Sprintf("Filter by %s", entry.Name),
+			}
+		}
+
+		whereInput := graphql.NewInputObject(graphql.InputObjectConfig{
+			Name:        typeName,
+			Description: fmt.Sprintf("Filter conditions for %s queries", lex.ID),
+			Fields:      fields,
+		})
+
+		b.whereInputTypes[lex.ID] = whereInput
 	}
 }
 
@@ -244,6 +332,9 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 				if event.Collection != collection {
 					return nil, nil
 				}
+				if event.Record != nil {
+					b.coerceRequiredFields(event.Record, collection)
+				}
 				return event.Record, nil
 			},
 		}
@@ -300,8 +391,9 @@ var genericRecordEdgeType = graphql.NewObject(graphql.ObjectConfig{
 var genericRecordConnectionType = graphql.NewObject(graphql.ObjectConfig{
 	Name: "GenericRecordConnection",
 	Fields: graphql.Fields{
-		"edges":    &graphql.Field{Type: graphql.NewList(genericRecordEdgeType)},
-		"pageInfo": &graphql.Field{Type: query.PageInfoType},
+		"edges":      &graphql.Field{Type: graphql.NewList(genericRecordEdgeType)},
+		"pageInfo":   &graphql.Field{Type: query.PageInfoType},
+		"totalCount": &graphql.Field{Type: graphql.Int, Description: "Total number of items (if known)"},
 	},
 })
 
@@ -319,16 +411,47 @@ func (b *Builder) buildQueryType() *graphql.Object {
 				Description: "Collection NSID (e.g., org.impactindexer.review.like)",
 			},
 			"first": &graphql.ArgumentConfig{
-				Type:         graphql.Int,
-				DefaultValue: 20,
-				Description:  "Number of records to return",
+				Type:        graphql.Int,
+				Description: "Number of records to return (default 20, max 100)",
 			},
 			"after": &graphql.ArgumentConfig{
 				Type:        graphql.String,
-				Description: "Cursor for pagination",
+				Description: "Cursor for forward pagination",
+			},
+			"last": &graphql.ArgumentConfig{
+				Type:        graphql.Int,
+				Description: "Number of items to return from the end",
+			},
+			"before": &graphql.ArgumentConfig{
+				Type:        graphql.String,
+				Description: "Cursor to paginate before (backward pagination)",
 			},
 		},
 		Resolve: b.createGenericRecordsResolver(),
+	}
+
+	// Add search query for cross-collection text search
+	fields["search"] = &graphql.Field{
+		Type:        genericRecordConnectionType,
+		Description: "Search records by text content",
+		Args: graphql.FieldConfigArgument{
+			"query": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(graphql.String),
+				Description: "Search text (matched against record JSON content)",
+			},
+			"collection": &graphql.ArgumentConfig{
+				Type:        graphql.String,
+				Description: "Optional collection NSID to restrict search",
+			},
+			"first": &graphql.ArgumentConfig{
+				Type:         graphql.Int,
+				DefaultValue: 20,
+			},
+			"after": &graphql.ArgumentConfig{
+				Type: graphql.String,
+			},
+		},
+		Resolve: b.createSearchResolver(),
 	}
 
 	// Add collectionStats query for efficient aggregate counts
@@ -360,10 +483,29 @@ func (b *Builder) buildQueryType() *graphql.Object {
 	for lexiconID, connectionType := range b.connectionTypes {
 		fieldName := lexicon.ToFieldName(lexiconID)
 
+		// Build args: start with standard connection args, then add sort args if available
+		args := query.ConnectionArgs()
+		if sortEnum, ok := b.sortFieldEnums[lexiconID]; ok {
+			args["sortBy"] = &graphql.ArgumentConfig{
+				Type:        sortEnum,
+				Description: "Field to sort by (default: indexed_at)",
+			}
+			args["sortDirection"] = &graphql.ArgumentConfig{
+				Type:        query.SortDirectionEnum,
+				Description: "Sort direction (default: DESC)",
+			}
+		}
+		if whereInput, ok := b.whereInputTypes[lexiconID]; ok {
+			args["where"] = &graphql.ArgumentConfig{
+				Type:        whereInput,
+				Description: "Filter conditions",
+			}
+		}
+
 		fields[fieldName] = &graphql.Field{
 			Type:        connectionType,
 			Description: fmt.Sprintf("Query %s records", lexiconID),
-			Args:        query.ConnectionArgs(),
+			Args:        args,
 			Resolve:     b.createCollectionResolver(lexiconID),
 		}
 
@@ -391,8 +533,143 @@ func (b *Builder) buildQueryType() *graphql.Object {
 // nodeBuilder transforms a Record and its parsed JSON into a GraphQL node.
 type nodeBuilder func(rec *repositories.Record, value map[string]interface{}) (interface{}, bool)
 
+// extractFilters extracts FieldFilter conditions and an optional DIDFilter from
+// the GraphQL `where` argument. The whereArg is expected to be a
+// map[string]interface{} where each key is a field name and each value is a
+// map[string]interface{} of operator→value pairs (e.g. {"eq": "hello"}).
+//
+// The special key "did" is extracted separately as a DID column filter rather
+// than a JSON field filter. DIDFilterInput only exposes "eq" and "in", so only
+// those operators are handled. All other keys are looked up in the lexicon registry
+// to determine the correct FieldType for SQL casting.
+func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Registry) ([]repositories.FieldFilter, repositories.DIDFilter, error) {
+	whereMap, ok := whereArg.(map[string]interface{})
+	if !ok || len(whereMap) == 0 {
+		return nil, repositories.DIDFilter{}, nil
+	}
+
+	var filters []repositories.FieldFilter
+	var didFilter repositories.DIDFilter
+
+	// Look up the record definition once for property type resolution
+	recordDef, _ := registry.GetRecordDef(lexiconID)
+
+	for fieldName, filterVal := range whereMap {
+		filterMap, ok := filterVal.(map[string]interface{})
+		if !ok || filterMap == nil {
+			continue
+		}
+
+		if fieldName == "did" {
+			// DID is a column filter, not a JSON field filter.
+			// DIDFilterInput only exposes "eq" and "in".
+			// The DID filter does not count toward MaxFilterConditions.
+			if eqVal, ok := filterMap["eq"].(string); ok && eqVal != "" {
+				didFilter.EQ = eqVal
+			}
+			if inVals, ok := filterMap["in"].([]interface{}); ok {
+				for _, v := range inVals {
+					if s, ok := v.(string); ok && s != "" {
+						didFilter.IN = append(didFilter.IN, s)
+					}
+				}
+			}
+			continue
+		}
+
+		// Determine the lexicon type for this field so the repository can CAST correctly.
+		fieldType := "string" // default
+		if recordDef != nil {
+			if prop := recordDef.GetProperty(fieldName); prop != nil {
+				if prop.Format == "datetime" {
+					fieldType = "datetime"
+				} else {
+					fieldType = prop.Type
+				}
+			}
+		}
+
+		// Each key in filterMap is an operator (eq, neq, gt, lt, gte, lte, in, contains, startsWith, isNull).
+		for op, val := range filterMap {
+			if val == nil {
+				continue
+			}
+			filters = append(filters, repositories.FieldFilter{
+				Field:     fieldName,
+				Operator:  op,
+				Value:     val,
+				FieldType: fieldType,
+			})
+		}
+	}
+
+	if len(filters) > repositories.MaxFilterConditions {
+		return nil, repositories.DIDFilter{}, fmt.Errorf("too many filter conditions: %d (maximum %d)", len(filters), repositories.MaxFilterConditions)
+	}
+
+	return filters, didFilter, nil
+}
+
+// isTotalCountRequested checks whether the GraphQL query selected the totalCount field.
+// This is used to avoid executing an expensive COUNT query when totalCount is not needed.
+func isTotalCountRequested(p graphql.ResolveParams) bool {
+	for _, field := range p.Info.FieldASTs {
+		if field.SelectionSet == nil {
+			continue
+		}
+		for _, sel := range field.SelectionSet.Selections {
+			if f, ok := sel.(*ast.Field); ok && f.Name.Value == "totalCount" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// buildSortAwareCursor builds a sort-aware cursor string for a record.
+// directSortCols mirrors the repository's directSortColumns set.
+var directSortCols = map[string]bool{
+	"indexed_at": true,
+	"uri":        true,
+	"did":        true,
+	"collection": true,
+	"cid":        true,
+	"rkey":       true,
+}
+
+// sortFieldValueForRecord extracts the sort field value from a record for cursor building.
+func sortFieldValueForRecord(rec *repositories.Record, value map[string]interface{}, sortOpt *repositories.SortOption) string {
+	if sortOpt == nil {
+		return rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+	}
+	if directSortCols[sortOpt.Field] {
+		switch sortOpt.Field {
+		case "indexed_at":
+			return rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+		case "uri":
+			return rec.URI
+		case "did":
+			return rec.DID
+		case "collection":
+			return rec.Collection
+		case "cid":
+			return rec.CID
+		case "rkey":
+			return rec.RKey
+		default:
+			return rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+		}
+	}
+	// JSON field
+	if v, exists := value[sortOpt.Field]; exists && v != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
+}
+
 // resolveRecordConnection is the shared implementation for paginated record queries.
-// It uses deterministic keyset pagination with a composite (indexed_at, uri) cursor.
+// It uses deterministic keyset pagination with a composite (sortField, uri) cursor.
+// Supports both forward pagination (first/after) and backward pagination (last/before).
 func (b *Builder) resolveRecordConnection(
 	p graphql.ResolveParams,
 	collection string,
@@ -404,24 +681,134 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	// Extract pagination args
-	first, _ := p.Args["first"].(int)
-	if first == 0 {
-		first = 20
-	}
+	firstArg, hasFirst := p.Args["first"].(int)
 	after, _ := p.Args["after"].(string)
+	lastArg, hasLast := p.Args["last"].(int)
+	before, _ := p.Args["before"].(string)
 
-	// Decode composite cursor if provided
-	var afterTimestamp, afterURI string
-	if after != "" {
+	// Validate: cannot use both first/after and last/before
+	if (hasFirst || after != "") && (hasLast || before != "") {
+		return nil, fmt.Errorf("cannot use both first/after and last/before")
+	}
+
+	// Extract where filters if present (typed collection queries only)
+	var filters []repositories.FieldFilter
+	var didFilter repositories.DIDFilter
+	if whereArg, ok := p.Args["where"]; ok && whereArg != nil {
 		var err error
-		afterTimestamp, afterURI, err = decodeCursor(after)
+		filters, didFilter, err = extractFilters(whereArg, collection, b.registry)
 		if err != nil {
-			return nil, fmt.Errorf("invalid cursor: %w", err)
+			return nil, err
 		}
 	}
 
-	// Fetch first+1 to determine hasNextPage
-	records, err := repos.Records.GetByCollectionWithKeysetCursor(p.Context, collection, first+1, afterTimestamp, afterURI)
+	// Extract sort args if present (typed collection queries only)
+	var sortOpt *repositories.SortOption
+	if sortByArg, ok := p.Args["sortBy"].(string); ok && sortByArg != "" {
+		direction := "DESC" // default
+		if dirArg, ok := p.Args["sortDirection"].(string); ok && dirArg != "" {
+			direction = dirArg
+		}
+		sortOpt = &repositories.SortOption{Field: sortByArg, Direction: direction}
+	}
+
+	// Backward pagination path
+	if hasLast || before != "" {
+		last := query.ClampPageSize(lastArg)
+
+		// Decode before cursor if provided
+		var beforeCursorValues []string
+		if before != "" {
+			parts, err := decodeCursorValues(before)
+			if err != nil {
+				return nil, fmt.Errorf("invalid cursor: %w", err)
+			}
+			if len(parts) != 2 {
+				return nil, fmt.Errorf("invalid cursor: expected 2 components")
+			}
+			beforeCursorValues = parts
+		}
+
+		// Fetch last+1 to detect hasPreviousPage
+		records, err := repos.Records.GetByCollectionReversedWithKeysetCursor(p.Context, collection, filters, didFilter, sortOpt, last+1, beforeCursorValues)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query records: %w", err)
+		}
+
+		// Determine if there are more results before the returned page.
+		// After reversal, the extra record is at the front (oldest end).
+		hasPreviousPage := len(records) > last
+		if hasPreviousPage {
+			records = records[1:]
+		}
+
+		// Build edges
+		edges := make([]interface{}, 0, len(records))
+		var startCursor, endCursor string
+
+		for _, rec := range records {
+			var value map[string]interface{}
+			if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
+				slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
+				continue
+			}
+
+			node, ok := buildNode(rec, value)
+			if !ok {
+				continue
+			}
+
+			cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
+			if startCursor == "" {
+				startCursor = cursor
+			}
+			endCursor = cursor
+
+			edges = append(edges, map[string]interface{}{
+				"cursor": cursor,
+				"node":   node,
+			})
+		}
+
+		result := map[string]interface{}{
+			"edges": edges,
+			"pageInfo": map[string]interface{}{
+				"hasNextPage":     before != "",
+				"hasPreviousPage": hasPreviousPage,
+				"startCursor":     startCursor,
+				"endCursor":       endCursor,
+			},
+		}
+
+		if isTotalCountRequested(p) {
+			count, err := repos.Records.GetCollectionCountFiltered(p.Context, collection, filters, didFilter)
+			if err == nil {
+				result["totalCount"] = int(count)
+			}
+		}
+
+		return result, nil
+	}
+
+	// Forward pagination path (default)
+	first := query.ClampPageSize(firstArg)
+
+	// Decode composite cursor if provided
+	var afterCursorValues []string
+	if after != "" {
+		var err error
+		afterCursorValues, err = decodeCursorValues(after)
+		if err != nil {
+			return nil, fmt.Errorf("invalid cursor: %w", err)
+		}
+		// Ensure we have exactly 2 values for keyset pagination
+		if len(afterCursorValues) != 2 {
+			return nil, fmt.Errorf("invalid cursor: expected 2 components")
+		}
+	}
+
+	// Fetch first+1 to determine hasNextPage using the sorted method
+	records, err := repos.Records.GetByCollectionSortedWithKeysetCursor(p.Context, collection, filters, didFilter, sortOpt, first+1, afterCursorValues)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query records: %w", err)
 	}
@@ -432,14 +819,15 @@ func (b *Builder) resolveRecordConnection(
 		records = records[:first]
 	}
 
-	// Build edges
+	// Build edges with sort-aware cursors
 	edges := make([]interface{}, 0, len(records))
 	var startCursor, endCursor string
 
 	for _, rec := range records {
 		var value map[string]interface{}
 		if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
-			continue // Skip records with invalid JSON
+			slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
+			continue
 		}
 
 		node, ok := buildNode(rec, value)
@@ -447,7 +835,7 @@ func (b *Builder) resolveRecordConnection(
 			continue
 		}
 
-		cursor := encodeCursor(rec.IndexedAt.Format("2006-01-02T15:04:05Z"), rec.URI)
+		cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
 		if startCursor == "" {
 			startCursor = cursor
 		}
@@ -459,7 +847,7 @@ func (b *Builder) resolveRecordConnection(
 		})
 	}
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"edges": edges,
 		"pageInfo": map[string]interface{}{
 			"hasNextPage":     hasNextPage,
@@ -467,7 +855,97 @@ func (b *Builder) resolveRecordConnection(
 			"startCursor":     startCursor,
 			"endCursor":       endCursor,
 		},
-	}, nil
+	}
+
+	if isTotalCountRequested(p) {
+		count, err := repos.Records.GetCollectionCountFiltered(p.Context, collection, filters, didFilter)
+		if err == nil {
+			result["totalCount"] = int(count)
+		}
+	}
+
+	return result, nil
+}
+
+// createSearchResolver creates a resolver for the search query.
+// It validates the query string (minimum 3 runes) and calls the Search repository method.
+func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		searchQuery, _ := p.Args["query"].(string)
+		if utf8.RuneCountInString(searchQuery) < 3 {
+			return nil, fmt.Errorf("search query must be at least 3 characters")
+		}
+
+		collection, _ := p.Args["collection"].(string)
+
+		firstArg, _ := p.Args["first"].(int)
+		first := query.ClampPageSize(firstArg)
+
+		after, _ := p.Args["after"].(string)
+
+		var afterTimestamp, afterURI string
+		if after != "" {
+			var err error
+			afterTimestamp, afterURI, err = decodeCursor(after)
+			if err != nil {
+				return nil, fmt.Errorf("invalid cursor: %w", err)
+			}
+		}
+
+		repos := resolver.GetRepositories(p.Context)
+		if repos == nil || repos.Records == nil {
+			return emptyConnection(), nil
+		}
+
+		records, err := repos.Records.Search(p.Context, searchQuery, collection, first+1, afterTimestamp, afterURI)
+		if err != nil {
+			return nil, fmt.Errorf("failed to search records: %w", err)
+		}
+
+		hasNextPage := len(records) > first
+		if hasNextPage {
+			records = records[:first]
+		}
+
+		edges := make([]interface{}, 0, len(records))
+		var startCursor, endCursor string
+
+		for _, rec := range records {
+			var value map[string]interface{}
+			if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
+				slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
+				continue
+			}
+
+			cursor := encodeCursor(rec.IndexedAt.Format("2006-01-02T15:04:05Z"), rec.URI)
+			if startCursor == "" {
+				startCursor = cursor
+			}
+			endCursor = cursor
+
+			edges = append(edges, map[string]interface{}{
+				"cursor": cursor,
+				"node": map[string]interface{}{
+					"uri":        rec.URI,
+					"cid":        rec.CID,
+					"did":        rec.DID,
+					"collection": rec.Collection,
+					"rkey":       rec.RKey,
+					"value":      value,
+				},
+			})
+		}
+
+		return map[string]interface{}{
+			"edges": edges,
+			"pageInfo": map[string]interface{}{
+				"hasNextPage":     hasNextPage,
+				"hasPreviousPage": after != "",
+				"startCursor":     startCursor,
+				"endCursor":       endCursor,
+			},
+		}, nil
+	}
 }
 
 // createGenericRecordsResolver creates a resolver for the generic records query.
@@ -492,6 +970,32 @@ func (b *Builder) createGenericRecordsResolver() graphql.FieldResolveFn {
 	}
 }
 
+// coerceRequiredFields fills in zero values for required fields that are missing or null.
+// This prevents NonNull violations when historical records lack fields that became required.
+func (b *Builder) coerceRequiredFields(data map[string]interface{}, collection string) {
+	recordDef, ok := b.registry.GetRecordDef(collection)
+	if !ok {
+		return
+	}
+	for _, entry := range recordDef.RequiredProperties() {
+		val, exists := data[entry.Name]
+		if exists && val != nil {
+			continue
+		}
+		zero := lexicon.ZeroValueForType(entry.Property.Type)
+		if zero == nil {
+			// Complex type (ref, union, blob, etc.) — skip, keep nil
+			continue
+		}
+		slog.Debug("Coercing missing required field to zero value",
+			"collection", collection,
+			"field", entry.Name,
+			"type", entry.Property.Type,
+		)
+		data[entry.Name] = zero
+	}
+}
+
 // createCollectionResolver creates a resolver for querying a typed collection.
 func (b *Builder) createCollectionResolver(lexiconID string) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
@@ -500,6 +1004,9 @@ func (b *Builder) createCollectionResolver(lexiconID string) graphql.FieldResolv
 				// Inject standard record fields into the flat data
 				data["uri"] = rec.URI
 				data["cid"] = rec.CID
+				data["did"] = rec.DID
+				data["rkey"] = rec.RKey
+				b.coerceRequiredFields(data, lexiconID)
 				return data, true
 			})
 	}
@@ -537,6 +1044,9 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 		// Add standard record fields
 		data["uri"] = rec.URI
 		data["cid"] = rec.CID
+		data["did"] = rec.DID
+		data["rkey"] = rec.RKey
+		b.coerceRequiredFields(data, lexiconID)
 
 		return data, nil
 	}
@@ -633,18 +1143,45 @@ func emptyConnection() map[string]interface{} {
 	}
 }
 
+// encodeCursorValues encodes multiple cursor component values into a base64 string.
+// Uses JSON array encoding to safely handle values that contain the pipe character.
+func encodeCursorValues(values ...string) string {
+	jsonBytes, _ := json.Marshal(values)
+	return base64.URLEncoding.EncodeToString(jsonBytes)
+}
+
+// decodeCursorValues decodes a base64 cursor into its component values.
+// Supports both the current JSON array format and the legacy pipe-delimited format
+// for backward compatibility with cursors issued before the JSON encoding change.
+func decodeCursorValues(cursor string) ([]string, error) {
+	data, err := base64.URLEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor")
+	}
+	var parts []string
+	if err := json.Unmarshal(data, &parts); err != nil {
+		// Backward compatibility: try legacy pipe-delimited format.
+		parts = strings.Split(string(data), "|")
+		if len(parts) < 2 {
+			return nil, fmt.Errorf("invalid cursor format")
+		}
+	}
+	return parts, nil
+}
+
 // encodeCursor encodes a composite (indexed_at, uri) cursor as base64.
+// Kept for backward compatibility; delegates to encodeCursorValues.
 func encodeCursor(indexedAt, uri string) string {
-	return base64.URLEncoding.EncodeToString([]byte(indexedAt + "|" + uri))
+	return encodeCursorValues(indexedAt, uri)
 }
 
 // decodeCursor decodes a base64 cursor into (indexed_at, uri) components.
+// Kept for backward compatibility; delegates to decodeCursorValues.
 func decodeCursor(cursor string) (string, string, error) {
-	data, err := base64.URLEncoding.DecodeString(cursor)
+	parts, err := decodeCursorValues(cursor)
 	if err != nil {
 		return "", "", err
 	}
-	parts := strings.SplitN(string(data), "|", 2)
 	if len(parts) != 2 {
 		return "", "", fmt.Errorf("malformed cursor: expected 'timestamp|uri'")
 	}

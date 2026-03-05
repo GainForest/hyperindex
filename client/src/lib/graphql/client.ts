@@ -10,9 +10,9 @@ function getBaseUrl(): string {
   return "http://127.0.0.1:3000";
 }
 
-// Get Hypergoat URL for direct backend access (public API)
-function getHypergoatUrl(): string {
-  return process.env.HYPERGOAT_URL || "http://127.0.0.1:8080";
+// Get Hyperindex URL for direct backend access (public API)
+function getHyperindexUrl(): string {
+  return process.env.HYPERINDEX_URL || process.env.HYPERGOAT_URL || "http://127.0.0.1:8080";
 }
 
 // Lazy-initialized clients to ensure proper URL detection after hydration
@@ -35,15 +35,15 @@ export const graphqlClient = {
 };
 
 /**
- * Public GraphQL client - direct to Hypergoat for unauthenticated queries
+ * Public GraphQL client - direct to Hyperindex for unauthenticated queries
  */
 export const publicGraphqlClient = {
   request: <T>(document: string, variables?: Record<string, unknown>): Promise<T> => {
     if (!_publicGraphqlClient) {
-      // For SSR, go directly to Hypergoat; for client, use proxy
+      // For SSR, go directly to Hyperindex; for client, use proxy
       const url = typeof window !== "undefined" 
         ? `${getBaseUrl()}/api/graphql`
-        : `${getHypergoatUrl()}/graphql`;
+        : `${getHyperindexUrl()}/graphql`;
       _publicGraphqlClient = new GraphQLClient(url, {
         credentials: "include",
       });

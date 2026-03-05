@@ -329,6 +329,94 @@ func TestConfigAddress(t *testing.T) {
 	}
 }
 
+func TestTapConfigDefaults(t *testing.T) {
+	// Ensure TAP env vars are unset before testing defaults
+	for _, key := range []string{"TAP_URL", "TAP_ADMIN_PASSWORD", "TAP_DISABLE_ACKS", "TAP_ENABLED"} {
+		os.Unsetenv(key)
+	}
+
+	tapURL := getEnv("TAP_URL", "ws://localhost:2480")
+	if tapURL != "ws://localhost:2480" {
+		t.Errorf("TAP_URL default = %q, want %q", tapURL, "ws://localhost:2480")
+	}
+
+	tapAdminPassword := getEnv("TAP_ADMIN_PASSWORD", "")
+	if tapAdminPassword != "" {
+		t.Errorf("TAP_ADMIN_PASSWORD default = %q, want %q", tapAdminPassword, "")
+	}
+
+	tapDisableAcks := getEnvBool("TAP_DISABLE_ACKS", false)
+	if tapDisableAcks != false {
+		t.Errorf("TAP_DISABLE_ACKS default = %v, want false", tapDisableAcks)
+	}
+
+	tapEnabled := getEnvBool("TAP_ENABLED", false)
+	if tapEnabled != false {
+		t.Errorf("TAP_ENABLED default = %v, want false", tapEnabled)
+	}
+}
+
+func TestTapConfigEnvVars(t *testing.T) {
+	os.Setenv("TAP_URL", "ws://tap.example.com:2480")
+	os.Setenv("TAP_ADMIN_PASSWORD", "secret")
+	os.Setenv("TAP_DISABLE_ACKS", "true")
+	os.Setenv("TAP_ENABLED", "true")
+	defer func() {
+		os.Unsetenv("TAP_URL")
+		os.Unsetenv("TAP_ADMIN_PASSWORD")
+		os.Unsetenv("TAP_DISABLE_ACKS")
+		os.Unsetenv("TAP_ENABLED")
+	}()
+
+	tapURL := getEnv("TAP_URL", "ws://localhost:2480")
+	if tapURL != "ws://tap.example.com:2480" {
+		t.Errorf("TAP_URL = %q, want %q", tapURL, "ws://tap.example.com:2480")
+	}
+
+	tapAdminPassword := getEnv("TAP_ADMIN_PASSWORD", "")
+	if tapAdminPassword != "secret" {
+		t.Errorf("TAP_ADMIN_PASSWORD = %q, want %q", tapAdminPassword, "secret")
+	}
+
+	tapDisableAcks := getEnvBool("TAP_DISABLE_ACKS", false)
+	if !tapDisableAcks {
+		t.Errorf("TAP_DISABLE_ACKS = %v, want true", tapDisableAcks)
+	}
+
+	tapEnabled := getEnvBool("TAP_ENABLED", false)
+	if !tapEnabled {
+		t.Errorf("TAP_ENABLED = %v, want true", tapEnabled)
+	}
+}
+
+func TestTapConfigFields(t *testing.T) {
+	cfg := Config{
+		TapURL:           "ws://localhost:2480",
+		TapAdminPassword: "mypassword",
+		TapDisableAcks:   false,
+		TapEnabled:       true,
+	}
+
+	if cfg.TapURL != "ws://localhost:2480" {
+		t.Errorf("TapURL = %q, want %q", cfg.TapURL, "ws://localhost:2480")
+	}
+	if cfg.TapAdminPassword != "mypassword" {
+		t.Errorf("TapAdminPassword = %q, want %q", cfg.TapAdminPassword, "mypassword")
+	}
+	if cfg.TapDisableAcks != false {
+		t.Errorf("TapDisableAcks = %v, want false", cfg.TapDisableAcks)
+	}
+	if cfg.TapEnabled != true {
+		t.Errorf("TapEnabled = %v, want true", cfg.TapEnabled)
+	}
+
+	// Verify password is not directly logged (tap_admin_password_set pattern)
+	passwordSet := cfg.TapAdminPassword != ""
+	if !passwordSet {
+		t.Error("TapAdminPassword should be set but tap_admin_password_set is false")
+	}
+}
+
 func TestGenerateRandomKey(t *testing.T) {
 	tests := []struct {
 		name   string

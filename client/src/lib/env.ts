@@ -25,6 +25,6 @@ export const env = {
   // Private JWK for confidential OAuth client (optional, for production)
   ATPROTO_JWK_PRIVATE: getEnv("ATPROTO_JWK_PRIVATE", ""),
   
-  // Hypergoat backend URL
-  HYPERGOAT_URL: getEnv("HYPERGOAT_URL", "http://127.0.0.1:8080"),
+  // Hyperindex backend URL
+  HYPERINDEX_URL: getEnv("HYPERINDEX_URL", getEnv("HYPERGOAT_URL", "http://127.0.0.1:8080")),
 };

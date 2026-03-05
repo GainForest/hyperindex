@@ -114,13 +114,13 @@ function TreeBranch({
           className="flex items-center gap-2 group py-0.5"
         >
           <span
-            className="text-zinc-300 text-xs transition-transform duration-200"
-            style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }}
+            className="text-xs transition-transform duration-200"
+            style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", color: "var(--border)" }}
           >
             ▾
           </span>
-          <span className="font-mono text-sm font-medium text-zinc-700">{node.name}</span>
-          <span className="text-zinc-300 text-xs">{countLeaves(node)}</span>
+          <span className="font-mono text-sm font-medium" style={{ color: "var(--foreground)" }}>{node.name}</span>
+          <span className="text-xs" style={{ color: "var(--border)" }}>{countLeaves(node)}</span>
         </button>
         {!collapsed && hasChildren && (
           <div className="mt-1">
@@ -150,18 +150,19 @@ function TreeBranch({
 
     return (
       <div>
-        <div className="group flex items-center py-0.5 hover:bg-zinc-50/50 -mx-1 px-1 rounded transition-colors">
-          <span className="font-mono text-xs text-zinc-200 whitespace-pre select-none shrink-0 hidden sm:inline">
+        <div className="group flex items-center py-0.5 -mx-1 px-1 rounded transition-colors hover:opacity-90">
+          <span className="font-mono text-xs whitespace-pre select-none shrink-0 hidden sm:inline" style={{ color: "var(--border)" }}>
             {prefix}{branch}
           </span>
           <button
             onClick={() => onToggleExpand(node.lexicon!.id)}
-            className="font-mono text-sm text-emerald-600 hover:text-emerald-700 transition-colors text-left"
+            className="font-mono text-sm transition-colors text-left"
+            style={{ color: "var(--primary)" }}
           >
             {node.name}
           </button>
           {description && (
-            <span className="text-xs text-zinc-300 ml-2 truncate hidden sm:inline">
+            <span className="text-xs ml-2 truncate hidden sm:inline" style={{ color: "var(--border)" }}>
               {description}
             </span>
           )}
@@ -171,11 +172,12 @@ function TreeBranch({
               if (!isDeleting) onDelete(node.lexicon!.id);
             }}
             disabled={isDeleting}
-            className="opacity-0 group-hover:opacity-100 ml-auto p-1 text-zinc-300 hover:text-red-400 transition-all disabled:opacity-50"
+            className="opacity-0 group-hover:opacity-100 ml-auto p-1 hover:text-red-400 transition-all disabled:opacity-50"
+            style={{ color: "var(--border)" }}
             title={`Delete ${node.lexicon.id}`}
           >
             {isDeleting ? (
-              <div className="w-3 h-3 rounded-full border-2 border-zinc-300 border-t-zinc-500 animate-spin" />
+              <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: "var(--border)", borderTopColor: "var(--muted-foreground)" }} />
             ) : (
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -185,7 +187,7 @@ function TreeBranch({
         </div>
         {isExpanded && (
           <div className="ml-4 sm:ml-8 mt-2 mb-3">
-            <pre className="text-xs bg-zinc-50 text-zinc-600 p-3 rounded-lg overflow-x-auto border border-zinc-100">
+            <pre className="text-xs p-3 rounded-lg overflow-x-auto border" style={{ backgroundColor: "var(--muted)", color: "var(--secondary-foreground)", borderColor: "var(--border)" }}>
               {JSON.stringify(JSON.parse(node.lexicon.json), null, 2)}
             </pre>
           </div>
@@ -197,18 +199,18 @@ function TreeBranch({
   // Intermediate directory node
   return (
     <div>
-      <div className="flex items-center py-0.5 hover:bg-zinc-50/50 -mx-1 px-1 rounded transition-colors">
-        <span className="font-mono text-xs text-zinc-200 whitespace-pre select-none shrink-0 hidden sm:inline">
+      <div className="flex items-center py-0.5 -mx-1 px-1 rounded transition-colors hover:opacity-90">
+        <span className="font-mono text-xs whitespace-pre select-none shrink-0 hidden sm:inline" style={{ color: "var(--border)" }}>
           {prefix}{branch}
         </span>
         <button
           onClick={() => setCollapsed(!collapsed)}
           className="flex items-center"
         >
-          <span className="font-mono text-sm text-zinc-500">{node.name}</span>
+          <span className="font-mono text-sm" style={{ color: "var(--muted-foreground)" }}>{node.name}</span>
           <span
-            className="text-zinc-300 text-[10px] ml-1 transition-transform duration-200"
-            style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }}
+            className="text-[10px] ml-1 transition-transform duration-200"
+            style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)", color: "var(--border)" }}
           >
             ▾
           </span>
@@ -242,6 +244,7 @@ export default function LexiconsPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [deletingNsid, setDeletingNsid] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [batchPending, setBatchPending] = useState(false);
 
   const { data, isLoading, error: fetchError } = useQuery({
     queryKey: ["lexicons"],
@@ -251,17 +254,6 @@ export default function LexiconsPage() {
   const registerMutation = useMutation({
     mutationFn: (nsid: string) =>
       graphqlClient.request(REGISTER_LEXICON, { nsid }),
-    onSuccess: (_, nsid) => {
-      setSuccess(`Registered ${nsid}`);
-      setError(null);
-      setNsidInput("");
-      queryClient.invalidateQueries({ queryKey: ["lexicons"] });
-      setTimeout(() => setSuccess(null), 3000);
-    },
-    onError: (err: Error) => {
-      setError(err.message);
-      setSuccess(null);
-    },
   });
 
   const deleteMutation = useMutation({
@@ -282,18 +274,54 @@ export default function LexiconsPage() {
     onSettled: () => setDeletingNsid(null),
   });
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = nsidInput.trim();
-    if (!trimmed) return;
+    if (!nsidInput.trim()) return;
 
-    if (!isValidNsid(trimmed)) {
-      setError("Invalid NSID format. Expected something like org.example.record.type");
+    // Split by commas, newlines, or whitespace; trim and filter empty
+    const nsids = [...new Set(
+      nsidInput.split(/[,\n\s]+/).map((s) => s.trim()).filter(Boolean)
+    )];
+
+    // Validate all NSIDs before submitting any
+    const invalidNsids = nsids.filter((nsid) => !isValidNsid(nsid));
+    if (invalidNsids.length > 0) {
+      setError(`Invalid NSID format: ${invalidNsids.join(", ")}`);
       return;
     }
 
     setError(null);
-    registerMutation.mutate(trimmed);
+    setBatchPending(true);
+
+    let completed = 0;
+    let firstError: string | null = null;
+
+    for (const nsid of nsids) {
+      try {
+        await registerMutation.mutateAsync(nsid);
+        completed++;
+        if (completed < nsids.length) {
+          setSuccess(`Registered ${completed}/${nsids.length} lexicons...`);
+        }
+      } catch (err) {
+        firstError = (err as Error).message;
+        setError(`Failed to register ${nsid}: ${firstError}`);
+        break;
+      }
+    }
+
+    setBatchPending(false);
+
+    if (completed > 0) {
+      queryClient.invalidateQueries({ queryKey: ["lexicons"] });
+      if (!firstError) {
+        setNsidInput("");
+        setSuccess(`Registered ${completed} lexicon${completed !== 1 ? "s" : ""}`);
+        setTimeout(() => setSuccess(null), 3000);
+      } else {
+        setSuccess(`Registered ${completed}/${nsids.length} lexicons (stopped on error)`);
+      }
+    }
   };
 
   const filteredLexicons = useMemo(() => {
@@ -323,10 +351,10 @@ export default function LexiconsPage() {
     <div className="py-8 space-y-6">
       {/* Header */}
       <div>
-        <h2 className="font-[family-name:var(--font-garamond)] text-2xl text-zinc-900">
+        <h2 className="font-[family-name:var(--font-syne)] text-2xl" style={{ color: "var(--foreground)" }}>
           Lexicons
         </h2>
-        <p className="text-sm text-zinc-400 mt-1">
+        <p className="text-sm mt-1" style={{ color: "var(--muted-foreground)" }}>
           Register AT Protocol lexicon schemas for your AppView
         </p>
       </div>
@@ -340,25 +368,29 @@ export default function LexiconsPage() {
       {success && <Alert variant="success">{success}</Alert>}
 
       {/* Register */}
-      <form onSubmit={handleRegister} className="flex gap-2">
-        <input
-          type="text"
+      <form onSubmit={handleRegister} className="flex gap-2 items-start">
+        <textarea
           value={nsidInput}
           onChange={(e) => {
             setNsidInput(e.target.value);
             setError(null);
           }}
-          placeholder="Enter NSID to register..."
-          className="flex-1 px-3 py-1.5 bg-white/50 border border-zinc-200/60 rounded-lg
-                     text-sm text-zinc-800 placeholder-zinc-400 font-mono
-                     focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100
-                     transition-all"
+          placeholder="Enter NSIDs (comma or newline separated)..."
+          rows={1}
+          className="flex-1 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-1 transition-all resize-y"
+          style={{
+            backgroundColor: "var(--card)",
+            borderColor: "var(--border)",
+            color: "var(--foreground)",
+            border: "1px solid var(--border)",
+            minHeight: "2.25rem",
+          }}
         />
         <Button
           type="submit"
           variant="primary"
-          disabled={registerMutation.isPending || !nsidInput.trim()}
-          loading={registerMutation.isPending}
+          disabled={batchPending || !nsidInput.trim()}
+          loading={batchPending}
         >
           Register
         </Button>
@@ -366,7 +398,7 @@ export default function LexiconsPage() {
 
       {/* Search */}
       <div className="relative">
-        <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-300" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5" style={{ color: "var(--border)" }} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
         </svg>
         <input
@@ -374,21 +406,24 @@ export default function LexiconsPage() {
           placeholder="Search..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full pl-9 pr-3 py-1.5 text-sm bg-white/50 border border-zinc-200/60 rounded-lg
-                     text-zinc-800 placeholder:text-zinc-300
-                     focus:outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-100
-                     transition-all"
+          className="w-full pl-9 pr-3 py-1.5 text-sm rounded-lg focus:outline-none focus:ring-1 transition-all"
+          style={{
+            backgroundColor: "var(--card)",
+            borderColor: "var(--border)",
+            color: "var(--foreground)",
+            border: "1px solid var(--border)",
+          }}
         />
       </div>
 
       {/* Tree */}
       {isLoading ? (
         <div className="flex items-center gap-2 py-8 justify-center">
-          <div className="w-3 h-3 border-2 border-zinc-300 border-t-emerald-400 rounded-full animate-spin" />
-          <span className="text-xs text-zinc-400">Loading...</span>
+          <div className="w-3 h-3 border-2 rounded-full animate-spin" style={{ borderColor: "var(--border)", borderTopColor: "var(--primary)" }} />
+          <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>Loading...</span>
         </div>
       ) : roots.length === 0 ? (
-        <p className="text-sm text-zinc-400 py-4 text-center">
+        <p className="text-sm py-4 text-center" style={{ color: "var(--muted-foreground)" }}>
           {searchQuery ? `No lexicons match "${searchQuery}"` : "No lexicons registered yet."}
         </p>
       ) : (

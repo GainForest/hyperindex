@@ -10,13 +10,14 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ className, label, error, hint, id, ...props }, ref) => {
+  ({ className, label, error, hint, id, style, ...props }, ref) => {
     return (
       <div className="space-y-1.5">
         {label && (
           <label
             htmlFor={id}
-            className="block text-sm text-zinc-600"
+            className="block text-sm"
+            style={{ color: "var(--foreground)" }}
           >
             {label}
           </label>
@@ -25,18 +26,20 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           id={id}
           ref={ref}
           className={cn(
-            "w-full px-3 py-2 text-sm bg-white/50 border border-zinc-200/60 rounded-lg",
-            "text-zinc-800 placeholder:text-zinc-300",
-            "focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400",
-            "focus:bg-white/70 transition-all",
+            "w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 transition-all",
             "disabled:opacity-50 disabled:cursor-not-allowed",
-            error && "border-red-400 focus:ring-red-500/30 focus:border-red-400",
             className
           )}
+          style={{
+            backgroundColor: "var(--card)",
+            borderColor: error ? "var(--destructive)" : "var(--input)",
+            color: "var(--foreground)",
+            ...style,
+          }}
           {...props}
         />
         {hint && !error && (
-          <p className="text-xs text-zinc-300">{hint}</p>
+          <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>{hint}</p>
         )}
         {error && (
           <p className="text-sm text-red-500">{error}</p>

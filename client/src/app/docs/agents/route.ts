@@ -1,18 +1,17 @@
-const API_ENDPOINT = "https://hypergoat-app-production.up.railway.app";
-const WS_ENDPOINT = "wss://hypergoat-app-production.up.railway.app";
+const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+const WS_ENDPOINT = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace("https://", "wss://").replace("http://", "ws://");
 
-const agentsMd = `# Hyperindex (hi) API - Complete Integration Guide for AI Agents
+const agentsMd = `# Hyperindex API - Complete Integration Guide for AI Agents
 
 ## What is Hyperindex?
 
-**Hyperindex** (short: **hi**, formerly known as Hypergoat) is GainForest's AT Protocol AppView server for the Hypersphere ecosystem. The name "hi" stands for **H**yper**i**ndex -- it indexes Lexicon-defined records from the AT Protocol network and exposes them via a dynamically-generated GraphQL API.
+**Hyperindex** is GainForest's AT Protocol AppView server for the Hypersphere ecosystem. It indexes Lexicon-defined records from the AT Protocol network and exposes them via a dynamically-generated GraphQL API.
 
 ### Key Information
 
 - **Organization**: GainForest (https://gainforest.earth)
 - **Purpose**: Indexes Lexicon-defined records from the AT Protocol network and exposes them via a dynamically-generated GraphQL API
 - **Ecosystem**: Part of the Hypersphere ecosystem for environmental impact tracking
-- **History**: Formerly known as Hypergoat (Hypersphere Go ATProto AppView)
 
 ### Related Resources
 
@@ -311,7 +310,7 @@ query GetTypeFields($typeName: String!) {
 
 ## Common Query Patterns
 
-### Fetch Records by Collection
+### Fetch Records by Collection (Generic)
 
 \`\`\`graphql
 query GetRecords($collection: String!, $first: Int, $after: String) {
@@ -338,6 +337,42 @@ query GetRecords($collection: String!, $first: Int, $after: String) {
 }
 \`\`\`
 
+### Typed Collection Query with Filters
+
+When lexicons are loaded, typed query fields are generated. Each supports \`where\`, \`sortBy\`, and \`sortDirection\` arguments.
+
+\`\`\`graphql
+query GetFilteredPosts($first: Int, $after: String) {
+  appBskyFeedPost(
+    where: {
+      text: { contains: "climate" }
+      did: { eq: "did:plc:abc123" }
+    }
+    sortBy: "createdAt"
+    sortDirection: DESC
+    first: $first
+    after: $after
+  ) {
+    edges {
+      node {
+        uri
+        did
+        rkey
+        text
+        createdAt
+      }
+      cursor
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      endCursor
+    }
+    totalCount
+  }
+}
+\`\`\`
+
 ### Fetch Single Record by URI
 
 \`\`\`graphql
@@ -353,44 +388,17 @@ query GetRecord($uri: String!) {
 }
 \`\`\`
 
-### Fetch Records by DID (Author)
+### Cross-Collection Text Search
 
 \`\`\`graphql
-query GetRecordsByAuthor($did: String!, $first: Int) {
-  records(did: $did, first: $first) {
-    edges {
-      node {
-        uri
-        collection
-        record
-        createdAt
-      }
-    }
-  }
-}
-\`\`\`
-
-### Fetch Records with Filters
-
-\`\`\`graphql
-query GetFilteredRecords(
-  $collection: String
-  $did: String
-  $first: Int
-  $after: String
-) {
-  records(
-    collection: $collection
-    did: $did
-    first: $first
-    after: $after
-  ) {
+query SearchRecords($query: String!, $collection: String, $first: Int) {
+  search(query: $query, collection: $collection, first: $first) {
     edges {
       node {
         uri
         did
         collection
-        record
+        value
       }
       cursor
     }
@@ -398,9 +406,114 @@ query GetFilteredRecords(
       hasNextPage
       endCursor
     }
+    totalCount
   }
 }
 \`\`\`
+
+---
+
+## Filtering (\`where\` argument)
+
+Typed collection queries accept a \`where\` argument for field-level filtering. The available filter fields are generated from each lexicon's schema.
+
+### Filter Operators
+
+| Operator | Applicable Types | Description | Example |
+|----------|-----------------|-------------|---------|
+| \`eq\` | String, Int, Float, Boolean, DateTime | Exact equality | \`{ title: { eq: "Hello" } }\` |
+| \`neq\` | String, Int, Float, Boolean, DateTime | Not equal | \`{ status: { neq: "draft" } }\` |
+| \`gt\` | Int, Float, DateTime | Greater than | \`{ score: { gt: 5 } }\` |
+| \`lt\` | Int, Float, DateTime | Less than | \`{ score: { lt: 100 } }\` |
+| \`gte\` | Int, Float, DateTime | Greater or equal | \`{ createdAt: { gte: "2024-01-01" } }\` |
+| \`lte\` | Int, Float, DateTime | Less or equal | \`{ createdAt: { lte: "2024-12-31" } }\` |
+| \`in\` | String, Int, Float | Value in list | \`{ type: { in: ["post", "reply"] } }\` |
+| \`contains\` | String | Substring match | \`{ text: { contains: "forest" } }\` |
+| \`startsWith\` | String | Prefix match | \`{ name: { startsWith: "Gain" } }\` |
+| \`isNull\` | All | Null check | \`{ optionalField: { isNull: true } }\` |
+
+### DID (Author) Filtering
+
+Every \`where\` input includes a \`did\` field for filtering by record author:
+
+\`\`\`graphql
+query {
+  appBskyFeedPost(where: { did: { eq: "did:plc:abc123" } }) {
+    edges { node { uri text } }
+  }
+}
+\`\`\`
+
+### Combining Filters
+
+Multiple filter fields are ANDed together. Multiple operators on the same field are also ANDed:
+
+\`\`\`graphql
+query {
+  appBskyFeedPost(
+    where: {
+      did: { eq: "did:plc:abc123" }
+      text: { contains: "carbon" }
+      createdAt: { gte: "2024-01-01", lte: "2024-12-31" }
+    }
+    first: 20
+  ) {
+    edges { node { uri text createdAt } }
+    totalCount
+  }
+}
+\`\`\`
+
+## Sorting
+
+Typed collection queries support sorting by any scalar field with \`sortBy\` and \`sortDirection\` arguments.
+
+### Arguments
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| \`sortBy\` | Enum (per-collection) | \`indexed_at\` | Field to sort by |
+| \`sortDirection\` | \`ASC\` \| \`DESC\` | \`DESC\` | Sort direction |
+
+### Example
+
+\`\`\`graphql
+query {
+  appBskyFeedPost(sortBy: "createdAt", sortDirection: ASC, first: 10) {
+    edges {
+      node { uri text createdAt }
+      cursor
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+\`\`\`
+
+Sortable fields are generated per-collection from the lexicon. Only scalar types (string, integer, number, boolean, datetime) are sortable. The meta-field \`indexed_at\` is always available.
+
+## Text Search
+
+Use the \`search\` query for cross-collection or per-collection text search:
+
+\`\`\`graphql
+query {
+  search(query: "carbon credits", collection: "app.bsky.feed.post", first: 20) {
+    edges {
+      node { uri did collection value }
+    }
+    totalCount
+  }
+}
+\`\`\`
+
+| Argument | Type | Required | Description |
+|----------|------|----------|-------------|
+| \`query\` | String! | Yes | Search text (minimum 2 characters) |
+| \`collection\` | String | No | Restrict search to a collection NSID |
+| \`first\` | Int | No | Page size (default 20, max 100) |
+| \`after\` | String | No | Cursor for pagination |
+
+Search is case-insensitive and matches against the full JSON content of records.
 
 ---
 
@@ -416,6 +529,29 @@ Hyperindex uses Relay-style cursor-based pagination.
 | \`after\` | String | Cursor to start after |
 | \`last\` | Int | Number of items from the end |
 | \`before\` | String | Cursor to start before |
+
+**Note:** The maximum page size is 100. Requests with \`first\` or \`last\` greater than 100 are silently clamped. You cannot use \`first\`/\`after\` and \`last\`/\`before\` simultaneously — doing so returns a GraphQL error.
+
+### totalCount
+
+Connections include an optional \`totalCount\` field. It is **opt-in**: the count query only executes when \`totalCount\` is included in your selection set.
+
+\`\`\`graphql
+# totalCount IS computed (you selected it)
+query {
+  records(collection: "app.bsky.feed.post", first: 10) {
+    edges { node { uri } }
+    totalCount
+  }
+}
+
+# totalCount is NOT computed (not selected — no performance cost)
+query {
+  records(collection: "app.bsky.feed.post", first: 10) {
+    edges { node { uri } }
+  }
+}
+\`\`\`
 
 ### PageInfo Fields
 

@@ -43,6 +43,59 @@ Or place lexicon JSON files in a directory and set `LEXICON_DIR` environment var
 
 ### 2. Start Indexing
 
+#### Using Tap (Recommended)
+
+[Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) is Bluesky's official sidecar utility for consuming AT Protocol events. It is the recommended way to run Hyperindex because it provides:
+
+- **Cryptographic verification** — verifies repo structure, MST integrity, and identity signatures
+- **Ordering guarantees** — strict per-repo event ordering, no backfill/live race conditions
+- **At-least-once delivery** — ack-based protocol ensures no events are lost on crash
+- **Identity tracking** — handle changes and account status updates are handled automatically
+- **Simplified architecture** — Tap manages backfill automatically; no separate backfill worker needed
+
+**Run with Tap sidecar:**
+
+```bash
+# Copy and configure environment
+cp .env.example .env
+# Set TAP_ADMIN_PASSWORD and other vars in .env
+
+# Start Tap + Hyperindex together
+docker compose -f docker-compose.tap.yml up --build
+```
+
+**Add repos to track via Tap admin API:**
+
+```bash
+# Add a specific repo (DID) for Tap to index
+curl -X POST http://localhost:2480/repos/add \
+  -u "admin:${TAP_ADMIN_PASSWORD}" \
+  -H "Content-Type: application/json" \
+  -d '{"dids": ["did:plc:your-did-here"]}'
+```
+
+**Auto-discovery with `TAP_SIGNAL_COLLECTION`:**
+
+Set `TAP_SIGNAL_COLLECTION` to a collection NSID (e.g. `app.bsky.feed.post`) and Tap will automatically discover and index all repos that publish records in that collection. This replaces the need for a manual full-network backfill.
+
+```bash
+TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.yml up
+```
+
+**Tap environment variables:**
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TAP_ENABLED` | Enable Tap consumer (disables Jetstream+Backfill) | `false` |
+| `TAP_URL` | WebSocket URL of the Tap sidecar | `ws://localhost:2480` |
+| `TAP_ADMIN_PASSWORD` | Password for Tap's admin HTTP API | *(required for docker-compose.tap.yml)* |
+| `TAP_DISABLE_ACKS` | Disable ack-based delivery (useful for debugging) | `false` |
+| `TAP_SIGNAL_COLLECTION` | Collection NSID for auto-discovery of repos | *(empty)* |
+
+#### Legacy Mode: Jetstream + Backfill
+
+> **Note:** Jetstream+Backfill mode is the legacy ingestion path. It lacks cryptographic verification and ordering guarantees. Use Tap (above) for new deployments.
+
 Once lexicons are registered, Hyperindex automatically:
 - **Connects to Jetstream** for real-time events
 - **Indexes matching records** to your database
@@ -65,32 +118,94 @@ mutation {
 Access your indexed data at `/graphql`:
 
 ```graphql
-# Query records by collection
+# Generic query — all records by collection
 query {
-  records(collection: "app.bsky.feed.post") {
+  records(collection: "app.bsky.feed.post", first: 20) {
+    edges {
+      node { uri did collection value }
+      cursor
+    }
+    pageInfo { hasNextPage endCursor }
+    totalCount
+  }
+}
+
+# Typed queries — with filtering, sorting, and field-level access
+query {
+  appBskyFeedPost(
+    where: { text: { contains: "hello" }, did: { eq: "did:plc:..." } }
+    sortBy: "createdAt"
+    sortDirection: DESC
+    first: 10
+  ) {
     edges {
       node {
         uri
         did
-        value  # JSON record data
-      }
-    }
-  }
-}
-
-# With typed queries (when lexicon schemas are loaded)
-query {
-  appBskyFeedPost(first: 10, where: { did: { eq: "did:plc:..." } }) {
-    edges {
-      node {
-        uri
+        rkey
         text
         createdAt
       }
     }
+    totalCount
+    pageInfo { hasNextPage hasPreviousPage endCursor }
+  }
+}
+
+# Backward pagination
+query {
+  appBskyFeedPost(last: 10, before: "cursor_value") {
+    edges { node { uri text } }
+    pageInfo { hasPreviousPage startCursor }
+  }
+}
+
+# Cross-collection text search
+query {
+  search(query: "climate", collection: "app.bsky.feed.post", first: 20) {
+    edges {
+      node { uri did collection value }
+    }
   }
 }
 ```
+
+#### Filtering (`where`)
+
+Typed collection queries accept a `where` argument with per-field filters:
+
+| Operator | Types | Example |
+|----------|-------|---------|
+| `eq` | All | `{ title: { eq: "Hello" } }` |
+| `neq` | All | `{ status: { neq: "draft" } }` |
+| `gt`, `lt`, `gte`, `lte` | Int, Float, DateTime | `{ score: { gt: 5, lte: 100 } }` |
+| `in` | String, Int, Float | `{ type: { in: ["post", "reply"] } }` |
+| `contains` | String | `{ text: { contains: "forest" } }` |
+| `startsWith` | String | `{ name: { startsWith: "Gain" } }` |
+| `isNull` | All | `{ optionalField: { isNull: true } }` |
+
+Every `where` input also includes a `did` field for filtering by author DID.
+
+#### Sorting (`sortBy`, `sortDirection`)
+
+Typed queries support sorting by any scalar field:
+
+```graphql
+query {
+  appBskyFeedPost(sortBy: "createdAt", sortDirection: ASC, first: 10) {
+    edges { node { uri createdAt } }
+  }
+}
+```
+
+Default sort is `indexed_at DESC` (newest first). Available sort fields are generated per-collection from the lexicon schema.
+
+#### Pagination
+
+- **Forward**: `first` + `after` (default: 20, max: 100)
+- **Backward**: `last` + `before`
+- **`totalCount`**: Returned when requested (opt-in, computed only when selected)
+- Cannot use `first`/`after` and `last`/`before` simultaneously
 
 ## Endpoints
 

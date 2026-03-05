@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -37,6 +38,7 @@ import (
 	"github.com/GainForest/hypergoat/internal/lexicon"
 	"github.com/GainForest/hypergoat/internal/oauth"
 	"github.com/GainForest/hypergoat/internal/server"
+	"github.com/GainForest/hypergoat/internal/tap"
 	"github.com/GainForest/hypergoat/internal/workers"
 )
 
@@ -70,6 +72,9 @@ type backgroundServices struct {
 	workersCancel      context.CancelFunc
 	jsConsumer         *jetstream.Consumer
 	jsCancel           context.CancelFunc
+	tapConsumer        *tap.Consumer
+	tapCancel          context.CancelFunc
+	tapAdminClient     *tap.AdminClient // reused for health checks; nil when TAP_ENABLED=false
 }
 
 // Stop cleanly shuts down all background services.
@@ -86,6 +91,12 @@ func (bg *backgroundServices) Stop() {
 	if bg.jsCancel != nil {
 		bg.jsCancel()
 	}
+	if bg.tapConsumer != nil {
+		bg.tapConsumer.Stop()
+	}
+	if bg.tapCancel != nil {
+		bg.tapCancel()
+	}
 }
 
 func run() error {
@@ -95,7 +106,7 @@ func run() error {
 	}))
 	slog.SetDefault(logger)
 
-	slog.Info("Starting Hypergoat - AT Protocol AppView Server")
+	slog.Info("Starting Hyperindex - AT Protocol AppView Server")
 
 	// Load and validate configuration
 	cfg, err := config.Load()
@@ -114,12 +125,12 @@ func run() error {
 	}
 	defer svc.db.Close()
 
-	// Set up HTTP router with middleware and basic endpoints
-	r := setupRouter(cfg, svc)
-
 	// Track background services for clean shutdown
 	bg := &backgroundServices{}
 	defer bg.Stop()
+
+	// Set up HTTP router with middleware and basic endpoints
+	r := setupRouter(cfg, svc, bg)
 
 	// Set up OAuth endpoints
 	setupOAuth(r, cfg, svc, bg)
@@ -134,11 +145,16 @@ func run() error {
 	// Start background workers (activity cleanup)
 	startWorkers(svc, bg)
 
-	// Start Jetstream consumer for real-time events
-	startJetstream(cfg, svc, pubsub, collections, adminHandler, bg)
+	if cfg.TapEnabled {
+		// Start Tap consumer instead of Jetstream+Backfill
+		startTap(cfg, svc, pubsub, adminHandler, bg)
+	} else {
+		// Start Jetstream consumer for real-time events
+		startJetstream(cfg, svc, pubsub, collections, adminHandler, bg)
 
-	// Start backfill if configured
-	startBackfill(cfg, svc)
+		// Start backfill if configured
+		startBackfill(cfg, svc)
+	}
 
 	// Run HTTP server with graceful shutdown
 	return serve(r, cfg, bg)
@@ -233,7 +249,9 @@ func populateActivityIfEmpty(ctx context.Context, svc *services) {
 
 // setupRouter creates the chi router with middleware and basic HTTP endpoints
 // (health, stats, root info, XRPC placeholder).
-func setupRouter(cfg *config.Config, svc *services) *chi.Mux {
+// bg is passed so that health/stats handlers can access the Tap admin client
+// once it is wired up by startTap (after setupRouter returns).
+func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -259,6 +277,25 @@ func setupRouter(cfg *config.Config, svc *services) *chi.Mux {
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+
+		if cfg.TapEnabled && bg.tapAdminClient != nil {
+			if err := bg.tapAdminClient.Health(req.Context()); err != nil {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"status": "degraded",
+					"tap":    "unreachable",
+					"error":  err.Error(),
+					"time":   time.Now().UTC().Format(time.RFC3339),
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "ok",
+				"tap":    "ok",
+				"time":   time.Now().UTC().Format(time.RFC3339),
+			})
+			return
+		}
+
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"status": "healthy",
 			"time":   time.Now().UTC().Format(time.RFC3339),
@@ -287,20 +324,34 @@ func setupRouter(cfg *config.Config, svc *services) *chi.Mux {
 			lexiconCount = -1
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		stats := map[string]any{
 			"records":  recordCount,
 			"actors":   actorCount,
 			"lexicons": lexiconCount,
 			"time":     time.Now().UTC().Format(time.RFC3339),
-		})
+		}
+
+		if cfg.TapEnabled && bg.tapConsumer != nil {
+			tapStats := bg.tapConsumer.Stats()
+			stats["tap"] = map[string]any{
+				"events_received": tapStats.EventsReceived,
+				"records_created": tapStats.RecordsCreated,
+				"records_updated": tapStats.RecordsUpdated,
+				"records_deleted": tapStats.RecordsDeleted,
+				"identity_events": tapStats.IdentityEvents,
+				"errors":          tapStats.Errors,
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(stats)
 	})
 
 	// Root endpoint - server info
 	r.Get("/", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"name":        "Hypergoat",
+			"name":        "Hyperindex",
 			"description": "AT Protocol AppView Server",
 			"version":     "0.1.0-dev",
 			"docs":        cfg.ExternalBaseURL + "/docs",
@@ -354,7 +405,7 @@ func setupOAuth(r *chi.Mux, cfg *config.Config, svc *services, bg *backgroundSer
 	// Client metadata (this server as an OAuth client)
 	r.Get("/oauth-client-metadata.json", server.HandleClientMetadata(server.ClientMetadataConfig{
 		ExternalBaseURL: cfg.ExternalBaseURL,
-		ClientName:      "Hypergoat",
+		ClientName:      "Hyperindex",
 		Scope:           "atproto transition:generic",
 	}))
 
@@ -433,8 +484,8 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 	r.Get("/graphiql", server.HandleGraphiQL(server.GraphiQLConfig{
 		Endpoint:             cfg.ExternalBaseURL + "/graphql",
 		SubscriptionEndpoint: strings.Replace(cfg.ExternalBaseURL, "http", "ws", 1) + "/graphql/ws",
-		Title:                "Hypergoat GraphQL",
-		DefaultQuery: `# Hypergoat GraphQL API
+		Title:                "Hyperindex GraphQL",
+		DefaultQuery: `# Hyperindex GraphQL API
 # 
 # Explore the AT Protocol data indexed by this AppView.
 # Try querying for records from your configured lexicons.
@@ -452,8 +503,8 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 
 	r.Get("/graphiql/admin", server.HandleGraphiQL(server.GraphiQLConfig{
 		Endpoint: cfg.ExternalBaseURL + "/admin/graphql",
-		Title:    "Hypergoat Admin",
-		DefaultQuery: `# Hypergoat Admin API
+		Title:    "Hyperindex Admin",
+		DefaultQuery: `# Hyperindex Admin API
 #
 # Administrative operations for managing the AppView.
 # Note: Some operations require authentication.
@@ -737,6 +788,58 @@ func startBackfill(cfg *config.Config, svc *services) {
 			)
 		}
 	}()
+}
+
+// startTap creates and starts the Tap consumer as a replacement for Jetstream+Backfill.
+// It also wires admin backfill callbacks to use Tap's /repos/add HTTP API.
+func startTap(
+	cfg *config.Config,
+	svc *services,
+	pubsub *subscription.PubSub,
+	adminHandler *admin.Handler,
+	bg *backgroundServices,
+) {
+	tapURL := cfg.TapURL
+
+	// Create handler that stores records and publishes to subscriptions.
+	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub)
+
+	// Create consumer.
+	consumer := tap.NewConsumer(tap.ConsumerConfig{
+		TapURL:      tapURL,
+		DisableAcks: cfg.TapDisableAcks,
+	}, handler)
+
+	// Store consumer reference for clean shutdown.
+	bg.tapConsumer = consumer
+
+	tapCtx, tapCancel := context.WithCancel(context.Background())
+	bg.tapCancel = tapCancel
+
+	go func() {
+		slog.Info("Starting Tap consumer", "url", tapURL, "disable_acks", cfg.TapDisableAcks)
+		if err := consumer.Start(tapCtx); err != nil {
+			slog.Error("Tap consumer error", "error", err)
+		}
+	}()
+
+	// Create a shared admin client for health checks and backfill callbacks.
+	tapHTTPURL := strings.Replace(strings.Replace(tapURL, "ws://", "http://", 1), "wss://", "https://", 1)
+	adminClient := tap.NewAdminClient(tapHTTPURL, cfg.TapAdminPassword)
+	bg.tapAdminClient = adminClient
+
+	// Wire admin backfill callbacks to use Tap's /repos/add API.
+	if adminHandler != nil {
+		adminHandler.Resolver().SetBackfillCallback(func(ctx context.Context, did string) error {
+			return adminClient.AddRepos(ctx, []string{did})
+		})
+
+		adminHandler.Resolver().SetFullBackfillCallback(func(_ context.Context) error {
+			return fmt.Errorf("full network backfill not supported via Tap admin API — configure TAP_SIGNAL_COLLECTION or TAP_FULL_NETWORK on the Tap sidecar instead")
+		})
+	}
+
+	slog.Info("Tap consumer started (replaces Jetstream + Backfill)")
 }
 
 // serve starts the HTTP server and blocks until a shutdown signal is received,

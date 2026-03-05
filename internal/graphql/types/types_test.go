@@ -241,6 +241,77 @@ func TestObjectBuilder_BuildRecordType(t *testing.T) {
 	}
 }
 
+func TestObjectBuilder_BuildRecordType_SkipsReservedFields(t *testing.T) {
+	// A lexicon that defines properties named "uri", "did", "cid", "rkey" — all reserved.
+	// These must NOT overwrite the metadata fields injected by buildRecordFields.
+	tests := []struct {
+		name         string
+		colliding    string // the reserved property name the lexicon tries to define
+		wantMetaType string // the metadata field's type should remain NonNull String
+	}{
+		{name: "uri collision", colliding: "uri", wantMetaType: "String!"},
+		{name: "did collision", colliding: "did", wantMetaType: "String!"},
+		{name: "cid collision", colliding: "cid", wantMetaType: "String!"},
+		{name: "rkey collision", colliding: "rkey", wantMetaType: "String!"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := lexicon.NewRegistry()
+			mapper := NewMapper()
+			builder := NewObjectBuilder(mapper, registry)
+
+			// Build a unique lexicon ID per sub-test to avoid cache collisions.
+			lexiconID := "com.example.test." + tt.colliding + "collision"
+
+			recordDef := &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{
+						// This property collides with a reserved metadata field.
+						// It should be silently skipped.
+						Name: tt.colliding,
+						Property: lexicon.Property{
+							Type:        "integer", // intentionally different type from the metadata field
+							Description: "Colliding property",
+						},
+					},
+					{
+						// A normal, non-colliding property that must still appear.
+						Name: "title",
+						Property: lexicon.Property{
+							Type: "string",
+						},
+					},
+				},
+			}
+
+			obj := builder.BuildRecordType(lexiconID, recordDef)
+			if obj == nil {
+				t.Fatal("BuildRecordType returned nil")
+			}
+
+			fields := obj.Fields()
+
+			// The reserved metadata field must still be present and be NonNull String.
+			metaField, ok := fields[tt.colliding]
+			if !ok {
+				t.Fatalf("metadata field %q is missing from the type", tt.colliding)
+			}
+			if metaField.Type.String() != tt.wantMetaType {
+				t.Errorf("metadata field %q type = %q, want %q (lexicon property must not overwrite it)",
+					tt.colliding, metaField.Type.String(), tt.wantMetaType)
+			}
+
+			// The normal non-colliding property must still be present.
+			if _, ok := fields["title"]; !ok {
+				t.Error("non-colliding property 'title' is missing from the type")
+			}
+		})
+	}
+}
+
 func TestObjectBuilder_BuildObjectType(t *testing.T) {
 	registry := lexicon.NewRegistry()
 	mapper := NewMapper()
