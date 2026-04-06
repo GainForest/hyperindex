@@ -2,8 +2,10 @@ package tap
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,6 +39,10 @@ const (
 type ConsumerConfig struct {
 	// TapURL is the WebSocket base URL (e.g., "ws://localhost:2480").
 	TapURL string
+
+	// Password is the Basic auth password for the /channel WebSocket endpoint.
+	// The username is always "admin". Leave empty if Tap has no password set.
+	Password string
 
 	// DisableAcks puts the consumer in fire-and-forget mode (no acks sent).
 	DisableAcks bool
@@ -164,7 +170,12 @@ func (c *Consumer) runOnce(ctx context.Context) error {
 
 	slog.Info("Connecting to Tap", "url", channelURL)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, channelURL, nil)
+	var header http.Header
+	if c.config.Password != "" {
+		creds := base64.StdEncoding.EncodeToString([]byte("admin:" + c.config.Password))
+		header = http.Header{"Authorization": []string{"Basic " + creds}}
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, channelURL, header)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Tap: %w", err)
 	}

@@ -807,6 +807,7 @@ func startTap(
 	// Create consumer.
 	consumer := tap.NewConsumer(tap.ConsumerConfig{
 		TapURL:      tapURL,
+		Password:    cfg.TapAdminPassword,
 		DisableAcks: cfg.TapDisableAcks,
 	}, handler)
 
