@@ -78,6 +78,15 @@ func TestRecordsRepository_Insert(t *testing.T) {
 			wantResult: repositories.Skipped,
 		},
 		{
+			name:       "insert new record with empty CID is inserted (not silently skipped)",
+			uri:        "at://did:plc:test1/app.bsky.feed.post/nocid",
+			cid:        "", // Tap omits CID on some events
+			did:        "did:plc:test1",
+			collection: "app.bsky.feed.post",
+			json:       `{"text":"no cid"}`,
+			wantResult: repositories.Inserted,
+		},
+		{
 			name: "insert same URI with different CID is updated",
 			setup: func(repo *repositories.RecordsRepository) {
 				insertTestRecord(t, repo,

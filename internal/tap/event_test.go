@@ -467,12 +467,12 @@ func TestParseEvent_NilPayloadRejection(t *testing.T) {
 		{
 			name:    "type=record action=create with empty record body",
 			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":"create"}}`,
-			wantErr: true,
+			wantErr: false, // valid Tap protocol event — handler skips gracefully and acks
 		},
 		{
 			name:    "type=record action=update with empty record body",
 			data:    `{"id":1,"type":"record","record":{"live":true,"rev":"r1","did":"did:plc:abc","collection":"app.bsky.feed.post","rkey":"abc","action":"update"}}`,
-			wantErr: true,
+			wantErr: false, // valid Tap protocol event — handler skips gracefully and acks
 		},
 		{
 			name:    "type=record action=delete with empty record body",

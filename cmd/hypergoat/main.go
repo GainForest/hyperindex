@@ -273,31 +273,16 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 		TrustProxyHeaders: cfg.TrustProxyHeaders,
 	}))
 
-	// Health check
+	// Health check — reflects hyperindex's own health only.
+	// Tap liveness is intentionally excluded: if Tap is temporarily unreachable
+	// (restart, deploy, network blip) hyperindex itself is still healthy and
+	// should not be restarted by Railway's health check. Tap status is
+	// available via GET /stats for observability.
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-
-		if cfg.TapEnabled && bg.tapAdminClient != nil {
-			if err := bg.tapAdminClient.Health(req.Context()); err != nil {
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"status": "degraded",
-					"tap":    "unreachable",
-					"error":  err.Error(),
-					"time":   time.Now().UTC().Format(time.RFC3339),
-				})
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status": "ok",
-				"tap":    "ok",
-				"time":   time.Now().UTC().Format(time.RFC3339),
-			})
-			return
-		}
-
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"status": "healthy",
+			"status": "ok",
 			"time":   time.Now().UTC().Format(time.RFC3339),
 		})
 	})
@@ -333,7 +318,7 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 
 		if cfg.TapEnabled && bg.tapConsumer != nil {
 			tapStats := bg.tapConsumer.Stats()
-			stats["tap"] = map[string]any{
+			tapInfo := map[string]any{
 				"events_received": tapStats.EventsReceived,
 				"records_created": tapStats.RecordsCreated,
 				"records_updated": tapStats.RecordsUpdated,
@@ -341,6 +326,16 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 				"identity_events": tapStats.IdentityEvents,
 				"errors":          tapStats.Errors,
 			}
+			// Include Tap sidecar health in stats for observability (non-blocking).
+			if bg.tapAdminClient != nil {
+				if err := bg.tapAdminClient.Health(reqCtx); err != nil {
+					tapInfo["sidecar"] = "unreachable"
+					tapInfo["sidecar_error"] = err.Error()
+				} else {
+					tapInfo["sidecar"] = "ok"
+				}
+			}
+			stats["tap"] = tapInfo
 		}
 
 		w.Header().Set("Content-Type", "application/json")

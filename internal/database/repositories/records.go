@@ -133,7 +133,10 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 		return Skipped, err
 	}
 
-	if existingCID == cid {
+	// Only skip if both the existing and incoming CID are non-empty and match.
+	// If cid == "" (omitted by Tap for some events), always proceed with the
+	// upsert so new records aren't silently dropped by the "" == "" comparison.
+	if cid != "" && existingCID == cid {
 		return Skipped, nil // Content unchanged
 	}
 

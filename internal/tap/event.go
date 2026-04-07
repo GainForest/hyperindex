@@ -82,11 +82,11 @@ func ParseEvent(data []byte) (*Event, error) {
 		if event.Record.Action == "" {
 			return nil, fmt.Errorf("tap record event missing action field")
 		}
-		if event.Record.Action == ActionCreate || event.Record.Action == ActionUpdate {
-			if len(event.Record.Record) == 0 {
-				return nil, fmt.Errorf("tap record event action %q missing record body", event.Record.Action)
-			}
-		}
+		// Note: create/update events may arrive without a record body (e.g. during
+		// Tap backfill when the PDS record could not be fetched). These are valid
+		// protocol events — the handler will skip them gracefully rather than
+		// treating them as errors. Rejecting them here would cause an un-acked
+		// delivery loop when TAP_DISABLE_ACKS=false.
 	}
 	// Validate identity events.
 	if event.Type == EventTypeIdentity {

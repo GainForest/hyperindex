@@ -40,15 +40,26 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 
 	switch event.Action {
 	case ActionCreate, ActionUpdate:
+		// Events may arrive without a record body (e.g. during Tap backfill when
+		// the PDS record could not be fetched). Ack and skip — nothing to store.
+		if len(event.Record) == 0 {
+			slog.Debug("Skipping create/update event with no record body", "uri", uri)
+			return nil
+		}
+
 		// Ensure actor exists (empty handle; identity events update it)
 		if err := h.actors.Upsert(ctx, event.DID, ""); err != nil {
 			slog.Debug("Failed to upsert actor", "did", event.DID, "error", err)
 		}
 
 		// Store record
-		_, err := h.records.Insert(ctx, uri, event.CID, event.DID, event.Collection, string(event.Record))
+		result, err := h.records.Insert(ctx, uri, event.CID, event.DID, event.Collection, string(event.Record))
 		if err != nil {
 			return fmt.Errorf("failed to insert record: %w", err)
+		}
+		if result == repositories.Skipped {
+			slog.Debug("Record insert skipped (unchanged CID)", "uri", uri, "cid", event.CID)
+			return nil
 		}
 
 		// Log activity (if activity repo available)
