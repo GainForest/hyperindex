@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -113,10 +114,12 @@ func (c *Consumer) Start(ctx context.Context) error {
 		default:
 		}
 
-		err := c.runOnce(ctx)
+		err, connected := c.runOnce(ctx)
 
-		// Reset backoff only after a successful connection (not failed dials).
-		if err == nil {
+		// Reset backoff if we successfully established a connection (even if it
+		// later dropped with an error). This prevents slow reconnects after a
+		// long-running session that ended with a network error.
+		if connected {
 			backoff = minBackoff
 		}
 
@@ -165,7 +168,10 @@ func (c *Consumer) Start(ctx context.Context) error {
 }
 
 // runOnce establishes one WebSocket connection and processes events until it closes.
-func (c *Consumer) runOnce(ctx context.Context) error {
+// Returns (error, connected) where connected is true if the dial succeeded (even if
+// the connection later dropped with an error). The caller uses connected to decide
+// whether to reset the reconnection backoff.
+func (c *Consumer) runOnce(ctx context.Context) (error, bool) {
 	channelURL := c.config.TapURL + tapChannelPath
 
 	slog.Info("Connecting to Tap", "url", channelURL)
@@ -177,7 +183,7 @@ func (c *Consumer) runOnce(ctx context.Context) error {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, channelURL, header)
 	if err != nil {
-		return fmt.Errorf("failed to connect to Tap: %w", err)
+		return fmt.Errorf("failed to connect to Tap: %w", err), false
 	}
 	conn.SetReadLimit(maxMessageSize)
 
@@ -198,23 +204,23 @@ func (c *Consumer) runOnce(ctx context.Context) error {
 		// Check for stop signal before reading.
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err(), true
 		case <-c.done:
-			return nil
+			return nil, true
 		default:
 		}
 
 		// Set read deadline.
 		if err := conn.SetReadDeadline(time.Now().Add(defaultReadTimeout)); err != nil {
-			return fmt.Errorf("failed to set read deadline: %w", err)
+			return fmt.Errorf("failed to set read deadline: %w", err), true
 		}
 
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return nil
+				return nil, true
 			}
-			return fmt.Errorf("read error: %w", err)
+			return fmt.Errorf("read error: %w", err), true
 		}
 
 		if msgType != websocket.TextMessage {
@@ -232,14 +238,19 @@ func (c *Consumer) runOnce(ctx context.Context) error {
 		}
 
 		if err := c.dispatch(ctx, conn, event); err != nil {
+			atomic.AddInt64(&c.errors, 1)
+			// If the error came from a write (ack failure), the connection is dead.
+			// Return immediately to reconnect rather than continuing to read and
+			// generating a cascade of identical errors.
+			if isWriteError(err) {
+				return err, true
+			}
+			// Handler errors are non-fatal — log and continue processing.
 			slog.Warn("Failed to handle Tap event",
 				"event_id", event.ID,
 				"type", event.Type,
 				"error", err,
 			)
-			atomic.AddInt64(&c.errors, 1)
-			// Do not ack on handler error.
-			continue
 		}
 	}
 }
@@ -272,8 +283,10 @@ func (c *Consumer) dispatch(ctx context.Context, conn *websocket.Conn, event *Ev
 	}
 
 	// Send ack unless disabled.
+	// The Tap server expects JSON: {"type":"ack","id":<id>}
+	// See: https://github.com/bluesky-social/indigo/blob/main/cmd/tap/types.go
 	if !c.config.DisableAcks {
-		ackMsg := fmt.Sprintf("%d", event.ID)
+		ackMsg := fmt.Sprintf(`{"type":"ack","id":%d}`, event.ID)
 		if err := c.writeText(conn, ackMsg); err != nil {
 			return fmt.Errorf("failed to send ack for event %d: %w", event.ID, err)
 		}
@@ -288,6 +301,18 @@ func (c *Consumer) writeText(conn *websocket.Conn, msg string) error {
 		return fmt.Errorf("failed to set write deadline: %w", err)
 	}
 	return conn.WriteMessage(websocket.TextMessage, []byte(msg))
+}
+
+// isWriteError reports whether err originated from a failed ack write.
+// These errors mean the connection is dead and we should reconnect immediately
+// rather than continuing to read and generating a cascade of identical errors.
+func isWriteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "failed to send ack") ||
+		strings.Contains(msg, "failed to set write deadline")
 }
 
 // incrementRecordStat increments the appropriate record stat counter.
