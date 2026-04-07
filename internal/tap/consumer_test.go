@@ -174,8 +174,10 @@ func TestConsumer_ReceivesAndAcksRecordEvent(t *testing.T) {
 
 	select {
 	case ack := <-ackReceived:
-		if ack != "12345" {
-			t.Errorf("expected ack '12345', got %q", ack)
+		// The Tap server expects JSON acks: {"type":"ack","id":<id>}
+		expected := `{"type":"ack","id":12345}`
+		if ack != expected {
+			t.Errorf("expected ack %q, got %q", expected, ack)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("did not receive ack within timeout")
@@ -222,8 +224,10 @@ func TestConsumer_ReceivesAndAcksIdentityEvent(t *testing.T) {
 
 	select {
 	case ack := <-ackReceived:
-		if ack != "12346" {
-			t.Errorf("expected ack '12346', got %q", ack)
+		// The Tap server expects JSON acks: {"type":"ack","id":<id>}
+		expected := `{"type":"ack","id":12346}`
+		if ack != expected {
+			t.Errorf("expected ack %q, got %q", expected, ack)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("did not receive ack within timeout")
@@ -571,7 +575,8 @@ func TestConsumer_BackoffResetsAfterSuccess(t *testing.T) {
 			// Read the ack so dispatch completes successfully.
 			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 			conn.ReadMessage() //nolint:errcheck
-			// Close with a normal closure so runOnce returns nil (success).
+			// Close with a normal closure. Backoff resets whenever a connection is
+			// successfully established (connected=true), regardless of how it ends.
 			conn.WriteMessage(websocket.CloseMessage, //nolint:errcheck
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		case 3:
@@ -909,5 +914,140 @@ func TestConsumer_HandlerErrorDoesNotAck(t *testing.T) {
 	stats := consumer.Stats()
 	if stats.Errors != 1 {
 		t.Errorf("Errors: want 1, got %d", stats.Errors)
+	}
+}
+
+// TestConsumer_AckFormat verifies that acks are sent as JSON matching the Tap
+// server's expected WsResponse format: {"type":"ack","id":<id>}.
+func TestConsumer_AckFormat(t *testing.T) {
+	type wsResponse struct {
+		Type string `json:"type"`
+		ID   int64  `json:"id"`
+	}
+
+	ackReceived := make(chan wsResponse, 1)
+
+	recordEvent := Event{
+		ID:   42,
+		Type: EventTypeRecord,
+		Record: &RecordEvent{
+			Live:       true,
+			DID:        "did:plc:test",
+			Collection: "app.bsky.feed.post",
+			RKey:       "rkey1",
+			Action:     ActionCreate,
+			Record:     json.RawMessage(`{"text":"hello"}`),
+		},
+	}
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		sendEvent(t, conn, recordEvent)
+		// Read and parse the ack as JSON.
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			t.Logf("read ack error: %v", err)
+			return
+		}
+		var resp wsResponse
+		if err := json.Unmarshal(data, &resp); err != nil {
+			t.Errorf("ack is not valid JSON: %v (raw: %q)", err, string(data))
+			return
+		}
+		ackReceived <- resp
+		time.Sleep(200 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	select {
+	case resp := <-ackReceived:
+		if resp.Type != "ack" {
+			t.Errorf("ack type: want %q, got %q", "ack", resp.Type)
+		}
+		if resp.ID != 42 {
+			t.Errorf("ack id: want 42, got %d", resp.ID)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not receive ack within timeout")
+	}
+
+	consumer.Stop()
+}
+
+// TestConsumer_WriteErrorCausesImmediateReconnect verifies that when an ack write
+// fails (e.g., the server closes the connection), the consumer reconnects immediately
+// rather than continuing to read and generating a cascade of errors.
+func TestConsumer_WriteErrorCausesImmediateReconnect(t *testing.T) {
+	var connectionCount int32
+	secondConnected := make(chan struct{})
+
+	recordEvent := Event{
+		ID:   1,
+		Type: EventTypeRecord,
+		Record: &RecordEvent{
+			DID:        "did:plc:write-err",
+			Collection: "app.bsky.feed.post",
+			RKey:       "rkey1",
+			Action:     ActionCreate,
+			Record:     json.RawMessage(`{"text":"hello"}`),
+		},
+	}
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		count := atomic.AddInt32(&connectionCount, 1)
+		switch count {
+		case 1:
+			// First connection: send an event, then immediately close the connection
+			// before the consumer can write the ack. This simulates the production
+			// failure where the Tap server resets the connection.
+			sendEvent(t, conn, recordEvent)
+			// Close before the ack arrives — consumer's ack write will fail.
+			conn.Close()
+		case 2:
+			// Second connection: signal that we reconnected.
+			close(secondConnected)
+			time.Sleep(200 * time.Millisecond)
+		}
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	// Consumer should reconnect quickly after the write error.
+	select {
+	case <-secondConnected:
+		elapsed := time.Since(start)
+		// Should reconnect within minBackoff (1s) + slack. If the consumer were
+		// looping on read errors before reconnecting, it would take much longer.
+		if elapsed > 2500*time.Millisecond {
+			t.Errorf("reconnect took %v; expected <2.5s after write error", elapsed)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("consumer did not reconnect after write error")
+	}
+
+	consumer.Stop()
+
+	if atomic.LoadInt32(&connectionCount) < 2 {
+		t.Errorf("expected at least 2 connections, got %d", atomic.LoadInt32(&connectionCount))
 	}
 }
