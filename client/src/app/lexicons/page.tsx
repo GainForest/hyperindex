@@ -172,13 +172,13 @@ function TreeBranch({
               if (!isDeleting) onDelete(node.lexicon!.id);
             }}
             disabled={isDeleting}
-            className="opacity-0 group-hover:opacity-100 ml-auto p-1 text-red-500 hover:text-red-400 transition-all disabled:opacity-50"
+            className="opacity-0 group-hover:opacity-100 ml-auto p-1 text-red-700 hover:text-red-600 transition-all disabled:opacity-50"
             title={`Delete ${node.lexicon.id}`}
           >
             {isDeleting ? (
               <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: "var(--border)", borderTopColor: "var(--muted-foreground)" }} />
             ) : (
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
               </svg>
             )}
