@@ -12,17 +12,18 @@
         "properties": {
           "badgeAward": {
             "type": "ref",
-            "ref": "app.certified.badge.award",
-            "description": "Reference to the badge award."
+            "ref": "com.atproto.repo.strongRef",
+            "description": "Strong reference to the badge award being responded to. The record referenced must conform with the lexicon app.certified.badge.award."
           },
           "response": {
             "type": "string",
-            "enum": ["accepted", "rejected"],
+            "knownValues": ["accepted", "rejected"],
             "description": "The recipient’s response for the badge (accepted or rejected)."
           },
           "weight": {
             "type": "string",
-            "description": "Optional relative weight for accepted badges, assigned by the recipient."
+            "description": "Optional relative weight for accepted badges, assigned by the recipient.",
+            "maxLength": 50
           },
           "createdAt": {
             "type": "string",

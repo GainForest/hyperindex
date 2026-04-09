@@ -94,6 +94,13 @@ func (b *ObjectBuilder) buildFields(contextRef string, def *lexicon.ObjectDef) g
 		}
 	}
 
+	if len(fields) == 0 {
+		fields["empty"] = &graphql.Field{
+			Type:        graphql.Boolean,
+			Description: "Placeholder field for empty object definitions",
+		}
+	}
+
 	return fields
 }
 
@@ -258,7 +265,7 @@ func (b *ObjectBuilder) buildUnionType(contextLexiconID, fieldName string, refs 
 	}
 
 	// Create union name from context and field
-	unionName := lexicon.ToTypeName(contextLexiconID) + capitalizeFirst(fieldName)
+	unionName := lexicon.ToTypeName(contextLexiconID) + capitalizeFirst(fieldName) + "Union"
 
 	// Check if union already exists
 	if u, ok := b.mapper.GetUnionType(unionName); ok {

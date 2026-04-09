@@ -1,6 +1,6 @@
 {
   "lexicon": 1,
-  "id": "org.hypercerts.claim.collection",
+  "id": "org.hypercerts.collection",
   "defs": {
     "main": {
       "type": "record",
@@ -8,15 +8,17 @@
       "key": "tid",
       "record": {
         "type": "object",
-        "required": ["title", "items", "createdAt"],
+        "required": ["title", "createdAt"],
         "properties": {
           "type": {
             "type": "string",
-            "description": "The type of this collection. Possible fields can be 'favorites', 'project', or any other type of collection."
+            "description": "The type of this collection. Values beyond the known set are permitted.",
+            "knownValues": ["favorites", "project", "portfolio", "program"],
+            "maxLength": 64
           },
           "title": {
             "type": "string",
-            "description": "The title of this collection",
+            "description": "Display name for this collection (e.g. 'Q1 2025 Impact Projects')",
             "maxLength": 800,
             "maxGraphemes": 80
           },
@@ -24,12 +26,24 @@
             "type": "string",
             "maxLength": 3000,
             "maxGraphemes": 300,
-            "description": "Short summary of this collection, suitable for previews and list views"
+            "description": "Short summary of this collection, suitable for previews and list views. Rich text annotations may be provided via `shortDescriptionFacets`."
+          },
+          "shortDescriptionFacets": {
+            "type": "array",
+            "description": "Rich text annotations for `shortDescription` (mentions, URLs, hashtags, etc).",
+            "items": {
+              "type": "ref",
+              "ref": "app.bsky.richtext.facet"
+            }
           },
           "description": {
-            "type": "ref",
-            "ref": "pub.leaflet.pages.linearDocument#main",
-            "description": "Rich-text description, represented as a Leaflet linear document."
+            "type": "union",
+            "refs": [
+              "org.hypercerts.defs#descriptionString",
+              "pub.leaflet.pages.linearDocument",
+              "com.atproto.repo.strongRef"
+            ],
+            "description": "Long-form description of the collection. An inline string for plain text or markdown, a Leaflet linear document for rich-text content, or a strong reference to an external description record."
           },
           "avatar": {
             "type": "union",
@@ -50,6 +64,7 @@
           "items": {
             "type": "array",
             "description": "Array of items in this collection with optional weights.",
+            "maxLength": 1000,
             "items": {
               "type": "ref",
               "ref": "#item"
@@ -70,16 +85,18 @@
     },
     "item": {
       "type": "object",
+      "description": "An item in a collection, with an identifier and optional weight.",
       "required": ["itemIdentifier"],
       "properties": {
         "itemIdentifier": {
           "type": "ref",
           "ref": "com.atproto.repo.strongRef",
-          "description": "Strong reference to an item in this collection. Items can be activities (org.hypercerts.claim.activity) and/or other collections (org.hypercerts.claim.collection)."
+          "description": "Strong reference to an item in this collection. Items can be activities (org.hypercerts.claim.activity) and/or other collections (org.hypercerts.collection)."
         },
         "itemWeight": {
           "type": "string",
-          "description": "Optional weight for this item (positive numeric value stored as string). Weights do not need to sum to a specific total; normalization can be performed by the consuming application as needed."
+          "description": "Optional weight for this item (positive numeric value stored as string). Weights do not need to sum to a specific total; normalization can be performed by the consuming application as needed.",
+          "maxLength": 100
         }
       }
     }

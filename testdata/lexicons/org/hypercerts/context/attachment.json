@@ -1,6 +1,6 @@
 {
   "lexicon": 1,
-  "id": "org.hypercerts.claim.attachment",
+  "id": "org.hypercerts.context.attachment",
   "defs": {
     "main": {
       "type": "record",
@@ -8,7 +8,7 @@
       "key": "tid",
       "record": {
         "type": "object",
-        "required": ["title", "content", "createdAt"],
+        "required": ["title", "createdAt"],
         "properties": {
           "subjects": {
             "type": "array",
@@ -21,8 +21,15 @@
           },
           "contentType": {
             "type": "string",
-            "maxLength": 64,
-            "description": "The type of attachment, e.g. report, audit, evidence, testimonial, methodology, etc."
+            "description": "The type of attachment. Values beyond the known set are permitted.",
+            "knownValues": [
+              "report",
+              "audit",
+              "evidence",
+              "testimonial",
+              "methodology"
+            ],
+            "maxLength": 64
           },
           "content": {
             "type": "array",
@@ -39,7 +46,7 @@
           "title": {
             "type": "string",
             "maxLength": 256,
-            "description": "Title of this attachment."
+            "description": "Display title for this attachment (e.g. 'Impact Assessment Report', 'Audit Findings')"
           },
           "shortDescription": {
             "type": "string",
@@ -56,18 +63,13 @@
             }
           },
           "description": {
-            "type": "string",
-            "description": "Optional longer description of this attachment, including context or interpretation. Rich text annotations may be provided via `descriptionFacets`.",
-            "maxLength": 30000,
-            "maxGraphemes": 3000
-          },
-          "descriptionFacets": {
-            "type": "array",
-            "description": "Rich text annotations for `description` (mentions, URLs, hashtags, etc).",
-            "items": {
-              "type": "ref",
-              "ref": "app.bsky.richtext.facet"
-            }
+            "type": "union",
+            "refs": [
+              "org.hypercerts.defs#descriptionString",
+              "pub.leaflet.pages.linearDocument",
+              "com.atproto.repo.strongRef"
+            ],
+            "description": "Long-form description of the attachment. An inline string for plain text or markdown, a Leaflet linear document for rich-text content, or a strong reference to an external description record."
           },
           "location": {
             "type": "ref",

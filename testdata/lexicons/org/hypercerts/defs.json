@@ -1,7 +1,29 @@
 {
   "lexicon": 1,
   "id": "org.hypercerts.defs",
+  "description": "Common type definitions used across all Hypercerts protocols.",
   "defs": {
+    "descriptionString": {
+      "type": "object",
+      "description": "An inline long-form description as plain text or markdown, with optional rich-text annotations.",
+      "required": ["value"],
+      "properties": {
+        "value": {
+          "type": "string",
+          "description": "The description text (plain text or markdown).",
+          "maxLength": 250000,
+          "maxGraphemes": 25000
+        },
+        "facets": {
+          "type": "array",
+          "description": "Rich text annotations for the description (mentions, URLs, hashtags, etc).",
+          "items": {
+            "type": "ref",
+            "ref": "app.bsky.richtext.facet"
+          }
+        }
+      }
+    },
     "uri": {
       "type": "object",
       "required": ["uri"],
@@ -10,7 +32,6 @@
         "uri": {
           "type": "string",
           "format": "uri",
-          "maxGraphemes": 1024,
           "description": "URI to external data"
         }
       }
@@ -51,6 +72,19 @@
           "accept": ["image/jpeg", "image/jpg", "image/png", "image/webp"],
           "maxSize": 5242880,
           "description": "Image (up to 5MB)"
+        }
+      }
+    },
+    "smallVideo": {
+      "type": "object",
+      "required": ["video"],
+      "description": "Object containing a small video",
+      "properties": {
+        "video": {
+          "type": "blob",
+          "accept": ["video/mp4", "video/webm"],
+          "maxSize": 20971520,
+          "description": "Video (up to 20MB)"
         }
       }
     },
