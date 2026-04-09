@@ -8,15 +8,25 @@
       "key": "tid",
       "record": {
         "type": "object",
-        "required": ["title", "badgeType", "icon", "createdAt"],
+        "required": ["title", "badgeType", "createdAt"],
         "properties": {
           "badgeType": {
             "type": "string",
-            "description": "Category of the badge (e.g. endorsement, participation, affiliation)."
+            "description": "Category of the badge. Values beyond the known set are permitted.",
+            "knownValues": [
+              "endorsement",
+              "verification",
+              "participation",
+              "certification",
+              "affiliation",
+              "recognition"
+            ],
+            "maxLength": 100
           },
           "title": {
             "type": "string",
-            "description": "Human-readable title of the badge."
+            "description": "Human-readable title of the badge.",
+            "maxLength": 256
           },
           "icon": {
             "type": "blob",
@@ -31,11 +41,14 @@
           },
           "description": {
             "type": "string",
-            "description": "Optional short statement describing what the badge represents."
+            "description": "Optional short statement describing what the badge represents.",
+            "maxLength": 5000,
+            "maxGraphemes": 500
           },
           "allowedIssuers": {
             "type": "array",
             "description": "Optional allowlist of DIDs allowed to issue this badge. If omitted, anyone may issue it.",
+            "maxLength": 100,
             "items": {
               "type": "ref",
               "ref": "app.certified.defs#did"

@@ -8,41 +8,55 @@
       "key": "tid",
       "record": {
         "type": "object",
-        "required": ["from", "to", "amount", "currency", "createdAt"],
+        "required": ["to", "amount", "currency", "createdAt"],
         "properties": {
           "from": {
-            "type": "ref",
-            "ref": "app.certified.defs#did",
-            "description": "DID of the sender who transferred the funds. Leave empty if sender wants to stay anonymous."
+            "type": "union",
+            "description": "The sender of the funds (a free-text string, an account DID, or a strong reference to a record). Optional — omit to represent anonymity.",
+            "refs": [
+              "#text",
+              "app.certified.defs#did",
+              "com.atproto.repo.strongRef"
+            ]
           },
           "to": {
-            "type": "string",
-            "description": "The recipient of the funds. Can be identified by DID or a clear-text name."
+            "type": "union",
+            "description": "The recipient of the funds (a free-text string, an account DID, or a strong reference to a record).",
+            "refs": [
+              "#text",
+              "app.certified.defs#did",
+              "com.atproto.repo.strongRef"
+            ]
           },
           "amount": {
             "type": "string",
-            "description": "Amount of funding received."
+            "description": "Amount of funding received as a numeric string (e.g. '1000.50').",
+            "maxLength": 50
           },
           "currency": {
             "type": "string",
-            "description": "Currency of the payment (e.g. EUR, USD, ETH)."
+            "description": "Currency of the payment (e.g. EUR, USD, ETH).",
+            "maxLength": 10
           },
           "paymentRail": {
             "type": "string",
-            "description": "How the funds were transferred (e.g. bank_transfer, credit_card, onchain, cash, check, payment_processor)."
+            "description": "How the funds were transferred (e.g. bank_transfer, credit_card, onchain, cash, check, payment_processor).",
+            "maxLength": 50
           },
           "paymentNetwork": {
             "type": "string",
-            "description": "Optional network within the payment rail (e.g. arbitrum, ethereum, sepa, visa, paypal)."
+            "description": "Optional network within the payment rail (e.g. arbitrum, ethereum, sepa, visa, paypal).",
+            "maxLength": 50
           },
           "transactionId": {
             "type": "string",
-            "description": "Identifier of the underlying payment transaction (e.g. bank reference, onchain transaction hash, or processor-specific ID). Use paymentNetwork to specify the network where applicable."
+            "description": "Identifier of the underlying payment transaction (e.g. bank reference, onchain transaction hash, or processor-specific ID). Use paymentNetwork to specify the network where applicable.",
+            "maxLength": 256
           },
           "for": {
-            "type": "string",
-            "format": "at-uri",
-            "description": "Optional reference to the activity, project, or organization this funding relates to."
+            "type": "ref",
+            "ref": "com.atproto.repo.strongRef",
+            "description": "Optional strong reference to the activity, project, or organization this funding relates to."
           },
           "notes": {
             "type": "string",
@@ -59,6 +73,18 @@
             "format": "datetime",
             "description": "Client-declared timestamp when this receipt record was created."
           }
+        }
+      }
+    },
+    "text": {
+      "type": "object",
+      "description": "A free-text string value (e.g. a display name, wallet address, or other identifier).",
+      "required": ["value"],
+      "properties": {
+        "value": {
+          "type": "string",
+          "description": "The string value.",
+          "maxLength": 2048
         }
       }
     }
