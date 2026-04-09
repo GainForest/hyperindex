@@ -12,8 +12,8 @@ function getPort(): number {
   return port ? parseInt(port, 10) : 3000;
 }
 
-const vercelBranchUrl = getEnv("NEXT_PUBLIC_VERCEL_BRANCH_URL", "");
-const publicClientUrl = getEnv("NEXT_PUBLIC_CLIENT_URL", "");
+const vercelBranchUrl = process.env.NEXT_PUBLIC_VERCEL_BRANCH_URL || "";
+const publicClientUrl = process.env.NEXT_PUBLIC_CLIENT_URL || "";
 const normalizedVercelBranchUrl =
   vercelBranchUrl && !vercelBranchUrl.startsWith("http://") && !vercelBranchUrl.startsWith("https://")
     ? `https://${vercelBranchUrl}`
@@ -35,10 +35,3 @@ export const env = {
   // Hyperindex backend URL
   HYPERINDEX_URL: getEnv("HYPERINDEX_URL", getEnv("HYPERGOAT_URL", "http://127.0.0.1:8080")),
 };
-
-console.log("CONFIGURED ENV", env)
-console.log({
-  NEXT_PUBLIC_VERCEL_BRANCH_URL: process.env.NEXT_PUBLIC_VERCEL_BRANCH_URL,
-  VERCEL_URL: process.env.VERCEL_URL,
-  VERCEL_ENV: process.env.VERCEL_ENV,
-});
