@@ -17,9 +17,9 @@ export const env = {
   COOKIE_SECRET: getEnv("COOKIE_SECRET", "development-secret-at-least-32-chars!!"),
   
   // Public URL for OAuth callbacks (empty = use localhost)
-  PUBLIC_URL: getEnv(
+  PUBLIC_CLIENT_URL: getEnv(
     "NEXT_PUBLIC_CLIENT_URL",
-    getEnv("PUBLIC_URL", getEnv("NEXT_PUBLIC_VERCEL_BRANCH_URL", ""))
+    getEnv("NEXT_PUBLIC_VERCEL_BRANCH_URL", "")
   ),
   
   // Port for the Next.js server

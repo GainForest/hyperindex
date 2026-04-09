@@ -4,7 +4,7 @@ import { env } from "@/lib/env";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const publicUrl = env.PUBLIC_URL;
+  const publicUrl = env.PUBLIC_CLIENT_URL;
   const url = publicUrl || `http://127.0.0.1:${env.PORT}`;
   const isConfidential = !!publicUrl && !!env.ATPROTO_JWK_PRIVATE;
 

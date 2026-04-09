@@ -116,7 +116,7 @@ async function getKeyset() {
 // ============================================================================
 
 export const createClient = async () => {
-  const publicUrl = env.PUBLIC_URL;
+  const publicUrl = env.PUBLIC_CLIENT_URL;
   // Must use 127.0.0.1 per RFC 8252 for ATProto OAuth localhost development
   const localhostUrl = `http://127.0.0.1:${env.PORT}`;
   const enc = encodeURIComponent;
