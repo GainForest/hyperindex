@@ -35,3 +35,5 @@ export const env = {
   // Hyperindex backend URL
   HYPERINDEX_URL: getEnv("HYPERINDEX_URL", getEnv("HYPERGOAT_URL", "http://127.0.0.1:8080")),
 };
+
+console.log("CONFIGURED ENV", env)
