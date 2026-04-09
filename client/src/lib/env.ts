@@ -37,3 +37,8 @@ export const env = {
 };
 
 console.log("CONFIGURED ENV", env)
+console.log({
+  NEXT_PUBLIC_VERCEL_BRANCH_URL: process.env.NEXT_PUBLIC_VERCEL_BRANCH_URL,
+  VERCEL_URL: process.env.VERCEL_URL,
+  VERCEL_ENV: process.env.VERCEL_ENV,
+});
