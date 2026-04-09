@@ -172,8 +172,7 @@ function TreeBranch({
               if (!isDeleting) onDelete(node.lexicon!.id);
             }}
             disabled={isDeleting}
-            className="opacity-0 group-hover:opacity-100 ml-auto p-1 hover:text-red-400 transition-all disabled:opacity-50"
-            style={{ color: "var(--border)" }}
+            className="opacity-0 group-hover:opacity-100 ml-auto p-1 text-red-500 hover:text-red-400 transition-all disabled:opacity-50"
             title={`Delete ${node.lexicon.id}`}
           >
             {isDeleting ? (
@@ -243,6 +242,7 @@ export default function LexiconsPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [deletingNsid, setDeletingNsid] = useState<string | null>(null);
+  const [confirmNsid, setConfirmNsid] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [batchPending, setBatchPending] = useState(false);
 
@@ -338,6 +338,7 @@ export default function LexiconsPage() {
 
   const tree = useMemo(() => buildTree(filteredLexicons), [filteredLexicons]);
   const roots = Array.from(tree.entries()).sort(([a], [b]) => a.localeCompare(b));
+  const isConfirmDeleting = confirmNsid !== null && confirmNsid === deletingNsid;
 
   if (fetchError) {
     return (
@@ -433,12 +434,61 @@ export default function LexiconsPage() {
               key={key}
               node={node}
               isRoot
-              onDelete={(nsid) => deleteMutation.mutate(nsid)}
+              onDelete={(nsid) => setConfirmNsid(nsid)}
               deletingNsid={deletingNsid}
               expandedId={expandedId}
               onToggleExpand={(id) => setExpandedId(expandedId === id ? null : id)}
             />
           ))}
+        </div>
+      )}
+
+      {confirmNsid && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => setConfirmNsid(null)}
+          />
+          <div
+            className="relative w-full max-w-md rounded-xl border p-5 shadow-xl"
+            style={{ backgroundColor: "var(--card)", borderColor: "var(--border)", color: "var(--foreground)" }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-lexicon-title"
+          >
+            <h3 id="delete-lexicon-title" className="text-base font-semibold">
+              Delete lexicon
+            </h3>
+            <p className="mt-2 text-sm" style={{ color: "var(--muted-foreground)" }}>
+              You are about to delete <span className="font-mono" style={{ color: "var(--foreground)" }}>{confirmNsid}</span>.
+              This action is destructive and cannot be undone.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmNsid(null)}
+                disabled={isConfirmDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                loading={isConfirmDeleting}
+                onClick={() => {
+                  if (confirmNsid) {
+                    deleteMutation.mutate(confirmNsid);
+                    setConfirmNsid(null);
+                  }
+                }}
+              >
+                Delete
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </div>
