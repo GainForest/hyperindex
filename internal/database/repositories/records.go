@@ -597,6 +597,52 @@ var directSortColumns = map[string]bool{
 	"rkey":       true,
 }
 
+// keysetSortFieldName returns the effective sort field name used by keyset pagination.
+// Nil sort defaults to indexed_at DESC.
+func keysetSortFieldName(sort *SortOption) string {
+	if sort == nil {
+		return "indexed_at"
+	}
+	return sort.Field
+}
+
+// keysetSortFieldExpr returns the SQL expression used on the record side for
+// keyset comparisons.
+func (r *RecordsRepository) keysetSortFieldExpr(sortField string) string {
+	if sortField == "indexed_at" {
+		switch r.db.Dialect() {
+		case database.PostgreSQL:
+			return "indexed_at"
+		default:
+			// SQLite stores indexed_at as TEXT and may contain mixed formats
+			// (e.g. "YYYY-MM-DD HH:MM:SS" and RFC3339). Normalize to a canonical
+			// sortable UTC representation before comparison.
+			return "strftime('%Y-%m-%dT%H:%M:%fZ', indexed_at)"
+		}
+	}
+
+	if directSortColumns[sortField] {
+		return sortField
+	}
+
+	return r.db.JSONExtract("json", sortField)
+}
+
+// keysetCursorValueExpr returns the SQL expression used on the cursor side for
+// keyset comparisons.
+func (r *RecordsRepository) keysetCursorValueExpr(sortField, placeholder string) string {
+	if sortField != "indexed_at" {
+		return placeholder
+	}
+
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		return fmt.Sprintf("%s::timestamptz", placeholder)
+	default:
+		return fmt.Sprintf("strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', %s)", placeholder)
+	}
+}
+
 // buildSortExpr builds the ORDER BY expression for a given SortOption.
 // If sort is nil, returns the default "indexed_at DESC, uri DESC".
 // If sort.Field is a direct column, uses it as-is; otherwise uses JSONExtract.
@@ -656,18 +702,10 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	if len(afterCursorValues) == 2 {
 		afterSortVal := afterCursorValues[0]
 		afterURI := afterCursorValues[1]
+		sortField := keysetSortFieldName(sort)
 
 		// Determine the sort field expression and comparison operator
-		var sortFieldExpr string
-		if sort == nil || directSortColumns[sort.Field] {
-			if sort == nil {
-				sortFieldExpr = "indexed_at"
-			} else {
-				sortFieldExpr = sort.Field
-			}
-		} else {
-			sortFieldExpr = r.db.JSONExtract("json", sort.Field)
-		}
+		sortFieldExpr := r.keysetSortFieldExpr(sortField)
 
 		// DESC uses <, ASC uses >
 		var cmp string
@@ -680,12 +718,14 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 		p1 := r.db.Placeholder(nextPlaceholder)
 		p2 := r.db.Placeholder(nextPlaceholder + 1)
 		p3 := r.db.Placeholder(nextPlaceholder + 2)
+		cursorExpr1 := r.keysetCursorValueExpr(sortField, p1)
+		cursorExpr2 := r.keysetCursorValueExpr(sortField, p2)
 
 		// Composite keyset: (sortField op afterSortVal) OR (sortField = afterSortVal AND uri op afterURI)
 		whereParts = append(whereParts, fmt.Sprintf(
 			"(%s %s %s OR (%s = %s AND uri %s %s))",
-			sortFieldExpr, cmp, p1,
-			sortFieldExpr, p2,
+			sortFieldExpr, cmp, cursorExpr1,
+			sortFieldExpr, cursorExpr2,
 			cmp, p3,
 		))
 		args = append(args, afterSortVal, afterSortVal, afterURI)
@@ -778,14 +818,10 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	if len(beforeCursorValues) == 2 {
 		beforeSortVal := beforeCursorValues[0]
 		beforeURI := beforeCursorValues[1]
+		sortField := keysetSortFieldName(reversedSort)
 
 		// Determine the sort field expression using the reversed sort's field
-		var sortFieldExpr string
-		if directSortColumns[reversedSort.Field] {
-			sortFieldExpr = reversedSort.Field
-		} else {
-			sortFieldExpr = r.db.JSONExtract("json", reversedSort.Field)
-		}
+		sortFieldExpr := r.keysetSortFieldExpr(sortField)
 
 		// Reversed comparison: ASC reversed direction uses >, DESC reversed direction uses <
 		var cmp string
@@ -798,11 +834,13 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 		p1 := r.db.Placeholder(nextPlaceholder)
 		p2 := r.db.Placeholder(nextPlaceholder + 1)
 		p3 := r.db.Placeholder(nextPlaceholder + 2)
+		cursorExpr1 := r.keysetCursorValueExpr(sortField, p1)
+		cursorExpr2 := r.keysetCursorValueExpr(sortField, p2)
 
 		whereParts = append(whereParts, fmt.Sprintf(
 			"(%s %s %s OR (%s = %s AND uri %s %s))",
-			sortFieldExpr, cmp, p1,
-			sortFieldExpr, p2,
+			sortFieldExpr, cmp, cursorExpr1,
+			sortFieldExpr, cursorExpr2,
 			cmp, p3,
 		))
 		args = append(args, beforeSortVal, beforeSortVal, beforeURI)
