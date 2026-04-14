@@ -77,8 +77,8 @@ func (kp *DPoPKeyPair) ToJWK() (*JWK, error) {
 		return nil, fmt.Errorf("unexpected public key format: got %d bytes", len(pubBytes))
 	}
 
-	xBytes := trimLeadingZeros(pubBytes[1 : 1+coordLen])
-	yBytes := trimLeadingZeros(pubBytes[1+coordLen:])
+	xBytes := pubBytes[1 : 1+coordLen]
+	yBytes := pubBytes[1+coordLen:]
 
 	return &JWK{
 		Kty: "EC",
@@ -103,8 +103,12 @@ func (kp *DPoPKeyPair) ToPrivateJWK() (*JWK, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode private key: %w", err)
 	}
+	dBytes, err = normalizePrivateScalar(dBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to normalize private key scalar: %w", err)
+	}
 
-	jwk.D = base64.RawURLEncoding.EncodeToString(trimLeadingZeros(dBytes))
+	jwk.D = base64.RawURLEncoding.EncodeToString(dBytes)
 	return jwk, nil
 }
 
@@ -483,14 +487,6 @@ func normalizePrivateScalar(b []byte) ([]byte, error) {
 	out := make([]byte, coordLen)
 	copy(out[coordLen-len(b):], b)
 	return out, nil
-}
-
-func trimLeadingZeros(b []byte) []byte {
-	i := 0
-	for i < len(b) && b[i] == 0 {
-		i++
-	}
-	return b[i:]
 }
 
 func allZero(b []byte) bool {

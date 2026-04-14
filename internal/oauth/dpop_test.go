@@ -62,6 +62,21 @@ func TestDPoPKeyPairToJWK(t *testing.T) {
 	if jwk.Y == "" {
 		t.Error("ToJWK() Y is empty")
 	}
+	coordLen := p256CoordinateSize()
+	xBytes, err := base64.RawURLEncoding.DecodeString(jwk.X)
+	if err != nil {
+		t.Fatalf("failed to decode JWK X: %v", err)
+	}
+	yBytes, err := base64.RawURLEncoding.DecodeString(jwk.Y)
+	if err != nil {
+		t.Fatalf("failed to decode JWK Y: %v", err)
+	}
+	if len(xBytes) != coordLen {
+		t.Errorf("ToJWK() decoded X len = %d, want %d", len(xBytes), coordLen)
+	}
+	if len(yBytes) != coordLen {
+		t.Errorf("ToJWK() decoded Y len = %d, want %d", len(yBytes), coordLen)
+	}
 	if jwk.D != "" {
 		t.Error("ToJWK() should not include D (private key)")
 	}
@@ -73,6 +88,77 @@ func TestDPoPKeyPairToJWK(t *testing.T) {
 	}
 	if privateJWK.D == "" {
 		t.Error("ToPrivateJWK() D is empty")
+	}
+	dBytes, err := base64.RawURLEncoding.DecodeString(privateJWK.D)
+	if err != nil {
+		t.Fatalf("failed to decode private JWK D: %v", err)
+	}
+	if len(dBytes) != coordLen {
+		t.Errorf("ToPrivateJWK() decoded D len = %d, want %d", len(dBytes), coordLen)
+	}
+}
+
+func TestDPoPKeyPairToJWK_FixedWidthWithLeadingZeroComponents(t *testing.T) {
+	coordLen := p256CoordinateSize()
+
+	var kp *DPoPKeyPair
+	for i := 0; i < 10000; i++ {
+		candidate, err := GenerateDPoPKeyPair()
+		if err != nil {
+			t.Fatalf("GenerateDPoPKeyPair() error = %v", err)
+		}
+
+		pubBytes, err := candidate.PublicKey.Bytes()
+		if err != nil {
+			t.Fatalf("PublicKey.Bytes() error = %v", err)
+		}
+		dBytes, err := candidate.PrivateKey.Bytes()
+		if err != nil {
+			t.Fatalf("PrivateKey.Bytes() error = %v", err)
+		}
+
+		hasLeadingZeroCoordinate := pubBytes[1] == 0 || pubBytes[1+coordLen] == 0
+		hasShortPrivateScalar := len(dBytes) < coordLen
+		if hasLeadingZeroCoordinate || hasShortPrivateScalar {
+			kp = candidate
+			break
+		}
+	}
+
+	if kp == nil {
+		t.Fatal("failed to find key with leading-zero coordinate or short private scalar")
+	}
+
+	jwk, err := kp.ToJWK()
+	if err != nil {
+		t.Fatalf("ToJWK() error = %v", err)
+	}
+	privateJWK, err := kp.ToPrivateJWK()
+	if err != nil {
+		t.Fatalf("ToPrivateJWK() error = %v", err)
+	}
+
+	xBytes, err := base64.RawURLEncoding.DecodeString(jwk.X)
+	if err != nil {
+		t.Fatalf("failed to decode JWK X: %v", err)
+	}
+	yBytes, err := base64.RawURLEncoding.DecodeString(jwk.Y)
+	if err != nil {
+		t.Fatalf("failed to decode JWK Y: %v", err)
+	}
+	dBytes, err := base64.RawURLEncoding.DecodeString(privateJWK.D)
+	if err != nil {
+		t.Fatalf("failed to decode private JWK D: %v", err)
+	}
+
+	if len(xBytes) != coordLen {
+		t.Errorf("decoded X len = %d, want %d", len(xBytes), coordLen)
+	}
+	if len(yBytes) != coordLen {
+		t.Errorf("decoded Y len = %d, want %d", len(yBytes), coordLen)
+	}
+	if len(dBytes) != coordLen {
+		t.Errorf("decoded D len = %d, want %d", len(dBytes), coordLen)
 	}
 }
 
