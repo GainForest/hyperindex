@@ -7,11 +7,11 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
@@ -63,18 +63,40 @@ func GenerateDPoPKeyPair() (*DPoPKeyPair, error) {
 
 // ToJWK converts the key pair to a JWK (public key only).
 func (kp *DPoPKeyPair) ToJWK() *JWK {
+	pubBytes, err := kp.PublicKey.Bytes()
+	if err != nil {
+		return &JWK{Kty: "EC", Crv: "P-256"}
+	}
+
+	coordLen := p256CoordinateSize()
+	if len(pubBytes) != 1+2*coordLen || pubBytes[0] != 0x04 {
+		return &JWK{Kty: "EC", Crv: "P-256"}
+	}
+
+	xBytes := trimLeadingZeros(pubBytes[1 : 1+coordLen])
+	yBytes := trimLeadingZeros(pubBytes[1+coordLen:])
+
 	return &JWK{
 		Kty: "EC",
 		Crv: "P-256",
-		X:   base64.RawURLEncoding.EncodeToString(kp.PublicKey.X.Bytes()),
-		Y:   base64.RawURLEncoding.EncodeToString(kp.PublicKey.Y.Bytes()),
+		X:   base64.RawURLEncoding.EncodeToString(xBytes),
+		Y:   base64.RawURLEncoding.EncodeToString(yBytes),
 	}
 }
 
 // ToPrivateJWK converts the key pair to a JWK including the private key.
 func (kp *DPoPKeyPair) ToPrivateJWK() *JWK {
 	jwk := kp.ToJWK()
-	jwk.D = base64.RawURLEncoding.EncodeToString(kp.PrivateKey.D.Bytes())
+	if kp.PrivateKey == nil {
+		return jwk
+	}
+
+	dBytes, err := kp.PrivateKey.Bytes()
+	if err != nil {
+		return jwk
+	}
+
+	jwk.D = base64.RawURLEncoding.EncodeToString(trimLeadingZeros(dBytes))
 	return jwk
 }
 
@@ -109,20 +131,33 @@ func ParseDPoPKeyPair(jwkJSON string) (*DPoPKeyPair, error) {
 		return nil, errors.New("only EC P-256 keys are supported")
 	}
 
-	xBytes, err := base64.RawURLEncoding.DecodeString(jwk.X)
+	xBytesRaw, err := base64.RawURLEncoding.DecodeString(jwk.X)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode X: %w", err)
 	}
 
-	yBytes, err := base64.RawURLEncoding.DecodeString(jwk.Y)
+	yBytesRaw, err := base64.RawURLEncoding.DecodeString(jwk.Y)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode Y: %w", err)
 	}
 
-	publicKey := &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     new(big.Int).SetBytes(xBytes),
-		Y:     new(big.Int).SetBytes(yBytes),
+	xBytes, err := normalizeCoordinate(xBytesRaw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to normalize X: %w", err)
+	}
+	yBytes, err := normalizeCoordinate(yBytesRaw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to normalize Y: %w", err)
+	}
+
+	uncompressed := make([]byte, 1+2*p256CoordinateSize())
+	uncompressed[0] = 0x04
+	copy(uncompressed[1:1+p256CoordinateSize()], xBytes)
+	copy(uncompressed[1+p256CoordinateSize():], yBytes)
+
+	publicKey, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), uncompressed)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
 	}
 
 	kp := &DPoPKeyPair{
@@ -131,14 +166,27 @@ func ParseDPoPKeyPair(jwkJSON string) (*DPoPKeyPair, error) {
 
 	// If private key component is present, parse it
 	if jwk.D != "" {
-		dBytes, err := base64.RawURLEncoding.DecodeString(jwk.D)
+		dBytesRaw, err := base64.RawURLEncoding.DecodeString(jwk.D)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode D: %w", err)
 		}
-		kp.PrivateKey = &ecdsa.PrivateKey{
-			PublicKey: *publicKey,
-			D:         new(big.Int).SetBytes(dBytes),
+
+		dBytes, err := normalizePrivateScalar(dBytesRaw)
+		if err != nil {
+			return nil, fmt.Errorf("failed to normalize D: %w", err)
 		}
+
+		privateKey, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), dBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse private key: %w", err)
+		}
+
+		if !privateKey.PublicKey.Equal(publicKey) {
+			return nil, errors.New("private key does not match public key")
+		}
+
+		kp.PrivateKey = privateKey
+		kp.PublicKey = &privateKey.PublicKey
 	}
 
 	return kp, nil
@@ -259,19 +307,32 @@ func VerifyDPoPProof(proof, method, url string, maxAgeSeconds int64) (*DPoPValid
 	}
 
 	// Parse the public key from JWK
-	xBytes, err := base64.RawURLEncoding.DecodeString(header.JWK.X)
+	xBytesRaw, err := base64.RawURLEncoding.DecodeString(header.JWK.X)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode X: %w", err)
 	}
-	yBytes, err := base64.RawURLEncoding.DecodeString(header.JWK.Y)
+	yBytesRaw, err := base64.RawURLEncoding.DecodeString(header.JWK.Y)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode Y: %w", err)
 	}
 
-	publicKey := &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     new(big.Int).SetBytes(xBytes),
-		Y:     new(big.Int).SetBytes(yBytes),
+	xBytes, err := normalizeCoordinate(xBytesRaw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to normalize X: %w", err)
+	}
+	yBytes, err := normalizeCoordinate(yBytesRaw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to normalize Y: %w", err)
+	}
+
+	uncompressed := make([]byte, 1+2*p256CoordinateSize())
+	uncompressed[0] = 0x04
+	copy(uncompressed[1:1+p256CoordinateSize()], xBytes)
+	copy(uncompressed[1+p256CoordinateSize():], yBytes)
+
+	publicKey, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), uncompressed)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
 	}
 
 	// Now verify the token with the extracted public key
@@ -356,4 +417,61 @@ func generateJTI() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func p256CoordinateSize() int {
+	return (elliptic.P256().Params().BitSize + 7) / 8
+}
+
+func normalizeCoordinate(b []byte) ([]byte, error) {
+	coordLen := p256CoordinateSize()
+	if len(b) == 0 {
+		return nil, errors.New("empty coordinate")
+	}
+	if len(b) > coordLen {
+		if !allZero(b[:len(b)-coordLen]) {
+			return nil, fmt.Errorf("coordinate too large: %d bytes", len(b))
+		}
+		b = b[len(b)-coordLen:]
+	}
+	if len(b) == coordLen {
+		out := make([]byte, coordLen)
+		copy(out, b)
+		return out, nil
+	}
+	out := make([]byte, coordLen)
+	copy(out[coordLen-len(b):], b)
+	return out, nil
+}
+
+func normalizePrivateScalar(b []byte) ([]byte, error) {
+	coordLen := p256CoordinateSize()
+	if len(b) == 0 {
+		return nil, errors.New("empty private scalar")
+	}
+	if len(b) > coordLen {
+		if !allZero(b[:len(b)-coordLen]) {
+			return nil, fmt.Errorf("private scalar too large: %d bytes", len(b))
+		}
+		b = b[len(b)-coordLen:]
+	}
+	out := make([]byte, coordLen)
+	copy(out[coordLen-len(b):], b)
+	return out, nil
+}
+
+func trimLeadingZeros(b []byte) []byte {
+	i := 0
+	for i < len(b) && b[i] == 0 {
+		i++
+	}
+	return b[i:]
+}
+
+func allZero(b []byte) bool {
+	var acc byte
+	for _, v := range b {
+		acc |= v
+	}
+	return subtle.ConstantTimeByteEq(acc, 0) == 1
 }

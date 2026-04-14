@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"testing"
@@ -25,7 +26,16 @@ func TestGenerateDPoPKeyPair(t *testing.T) {
 		t.Fatalf("GenerateDPoPKeyPair() error = %v", err)
 	}
 
-	if kp.PrivateKey.D.Cmp(kp2.PrivateKey.D) == 0 {
+	d1, err := kp.PrivateKey.Bytes()
+	if err != nil {
+		t.Fatalf("PrivateKey.Bytes() error = %v", err)
+	}
+	d2, err := kp2.PrivateKey.Bytes()
+	if err != nil {
+		t.Fatalf("PrivateKey.Bytes() error = %v", err)
+	}
+
+	if bytes.Equal(d1, d2) {
 		t.Error("GenerateDPoPKeyPair() generated identical keys")
 	}
 }
@@ -80,11 +90,8 @@ func TestDPoPKeyPairJSON(t *testing.T) {
 	if kp2.PrivateKey != nil {
 		t.Error("ParseDPoPKeyPair(public) should not have PrivateKey")
 	}
-	if kp.PublicKey.X.Cmp(kp2.PublicKey.X) != 0 {
-		t.Error("ParseDPoPKeyPair() X mismatch")
-	}
-	if kp.PublicKey.Y.Cmp(kp2.PublicKey.Y) != 0 {
-		t.Error("ParseDPoPKeyPair() Y mismatch")
+	if !kp.PublicKey.Equal(kp2.PublicKey) {
+		t.Error("ParseDPoPKeyPair() public key mismatch")
 	}
 
 	// Test private JSON roundtrip
@@ -101,8 +108,8 @@ func TestDPoPKeyPairJSON(t *testing.T) {
 	if kp3.PrivateKey == nil {
 		t.Error("ParseDPoPKeyPair(private) should have PrivateKey")
 	}
-	if kp.PrivateKey.D.Cmp(kp3.PrivateKey.D) != 0 {
-		t.Error("ParseDPoPKeyPair() D mismatch")
+	if !kp.PrivateKey.Equal(kp3.PrivateKey) {
+		t.Error("ParseDPoPKeyPair() private key mismatch")
 	}
 }
 

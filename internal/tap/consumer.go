@@ -114,7 +114,7 @@ func (c *Consumer) Start(ctx context.Context) error {
 		default:
 		}
 
-		err, connected := c.runOnce(ctx)
+		connected, err := c.runOnce(ctx)
 
 		// Reset backoff if we successfully established a connection (even if it
 		// later dropped with an error). This prevents slow reconnects after a
@@ -168,10 +168,10 @@ func (c *Consumer) Start(ctx context.Context) error {
 }
 
 // runOnce establishes one WebSocket connection and processes events until it closes.
-// Returns (error, connected) where connected is true if the dial succeeded (even if
+// Returns (connected, error) where connected is true if the dial succeeded (even if
 // the connection later dropped with an error). The caller uses connected to decide
 // whether to reset the reconnection backoff.
-func (c *Consumer) runOnce(ctx context.Context) (error, bool) {
+func (c *Consumer) runOnce(ctx context.Context) (bool, error) {
 	channelURL := c.config.TapURL + tapChannelPath
 
 	slog.Info("Connecting to Tap", "url", channelURL)
@@ -183,7 +183,7 @@ func (c *Consumer) runOnce(ctx context.Context) (error, bool) {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, channelURL, header)
 	if err != nil {
-		return fmt.Errorf("failed to connect to Tap: %w", err), false
+		return false, fmt.Errorf("failed to connect to Tap: %w", err)
 	}
 	conn.SetReadLimit(maxMessageSize)
 
@@ -204,23 +204,23 @@ func (c *Consumer) runOnce(ctx context.Context) (error, bool) {
 		// Check for stop signal before reading.
 		select {
 		case <-ctx.Done():
-			return ctx.Err(), true
+			return true, ctx.Err()
 		case <-c.done:
-			return nil, true
+			return true, nil
 		default:
 		}
 
 		// Set read deadline.
 		if err := conn.SetReadDeadline(time.Now().Add(defaultReadTimeout)); err != nil {
-			return fmt.Errorf("failed to set read deadline: %w", err), true
+			return true, fmt.Errorf("failed to set read deadline: %w", err)
 		}
 
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return nil, true
+				return true, nil
 			}
-			return fmt.Errorf("read error: %w", err), true
+			return true, fmt.Errorf("read error: %w", err)
 		}
 
 		if msgType != websocket.TextMessage {
@@ -243,7 +243,7 @@ func (c *Consumer) runOnce(ctx context.Context) (error, bool) {
 			// Return immediately to reconnect rather than continuing to read and
 			// generating a cascade of identical errors.
 			if isWriteError(err) {
-				return err, true
+				return true, err
 			}
 			// Handler errors are non-fatal — log and continue processing.
 			slog.Warn("Failed to handle Tap event",
