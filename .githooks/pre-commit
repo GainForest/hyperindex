@@ -7,6 +7,13 @@ if [[ "${SKIP_GOLANGCI:-}" == "1" ]]; then
 	exit 0
 fi
 
+if [[ -z "${BASH_VERSINFO:-}" || "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+	printf 'pre-commit: this hook requires Bash 4+ (uses mapfile and associative arrays).\n'
+	printf 'pre-commit: on macOS, install newer bash via Homebrew: brew install bash\n'
+	printf 'pre-commit: emergency bypass: SKIP_GOLANGCI=1 git commit -m "..."\n'
+	exit 1
+fi
+
 mapfile -d '' -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.go')
 
 if [[ ${#staged_go_files[@]} -eq 0 ]]; then

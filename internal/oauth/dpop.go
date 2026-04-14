@@ -62,15 +62,19 @@ func GenerateDPoPKeyPair() (*DPoPKeyPair, error) {
 }
 
 // ToJWK converts the key pair to a JWK (public key only).
-func (kp *DPoPKeyPair) ToJWK() *JWK {
+func (kp *DPoPKeyPair) ToJWK() (*JWK, error) {
+	if kp.PublicKey == nil {
+		return nil, errors.New("public key is nil")
+	}
+
 	pubBytes, err := kp.PublicKey.Bytes()
 	if err != nil {
-		return &JWK{Kty: "EC", Crv: "P-256"}
+		return nil, fmt.Errorf("failed to encode public key: %w", err)
 	}
 
 	coordLen := p256CoordinateSize()
 	if len(pubBytes) != 1+2*coordLen || pubBytes[0] != 0x04 {
-		return &JWK{Kty: "EC", Crv: "P-256"}
+		return nil, fmt.Errorf("unexpected public key format: got %d bytes", len(pubBytes))
 	}
 
 	xBytes := trimLeadingZeros(pubBytes[1 : 1+coordLen])
@@ -81,41 +85,53 @@ func (kp *DPoPKeyPair) ToJWK() *JWK {
 		Crv: "P-256",
 		X:   base64.RawURLEncoding.EncodeToString(xBytes),
 		Y:   base64.RawURLEncoding.EncodeToString(yBytes),
-	}
+	}, nil
 }
 
 // ToPrivateJWK converts the key pair to a JWK including the private key.
-func (kp *DPoPKeyPair) ToPrivateJWK() *JWK {
-	jwk := kp.ToJWK()
+func (kp *DPoPKeyPair) ToPrivateJWK() (*JWK, error) {
+	jwk, err := kp.ToJWK()
+	if err != nil {
+		return nil, err
+	}
+
 	if kp.PrivateKey == nil {
-		return jwk
+		return jwk, nil
 	}
 
 	dBytes, err := kp.PrivateKey.Bytes()
 	if err != nil {
-		return jwk
+		return nil, fmt.Errorf("failed to encode private key: %w", err)
 	}
 
 	jwk.D = base64.RawURLEncoding.EncodeToString(trimLeadingZeros(dBytes))
-	return jwk
+	return jwk, nil
 }
 
 // ToJSON returns the JWK as a JSON string (public key only).
 func (kp *DPoPKeyPair) ToJSON() (string, error) {
-	jwk := kp.ToJWK()
-	data, err := json.Marshal(jwk)
+	jwk, err := kp.ToJWK()
 	if err != nil {
 		return "", err
+	}
+
+	data, err := json.Marshal(jwk)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal public JWK: %w", err)
 	}
 	return string(data), nil
 }
 
 // ToPrivateJSON returns the JWK as a JSON string including the private key.
 func (kp *DPoPKeyPair) ToPrivateJSON() (string, error) {
-	jwk := kp.ToPrivateJWK()
-	data, err := json.Marshal(jwk)
+	jwk, err := kp.ToPrivateJWK()
 	if err != nil {
 		return "", err
+	}
+
+	data, err := json.Marshal(jwk)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal private JWK: %w", err)
 	}
 	return string(data), nil
 }
@@ -193,8 +209,13 @@ func ParseDPoPKeyPair(jwkJSON string) (*DPoPKeyPair, error) {
 }
 
 // CalculateJKT calculates the JWK Thumbprint (RFC 7638) for the public key.
-func (kp *DPoPKeyPair) CalculateJKT() string {
-	return CalculateJKTFromJWK(kp.ToJWK())
+func (kp *DPoPKeyPair) CalculateJKT() (string, error) {
+	jwk, err := kp.ToJWK()
+	if err != nil {
+		return "", err
+	}
+
+	return CalculateJKTFromJWK(jwk), nil
 }
 
 // CalculateJKTFromJWK calculates the JWK Thumbprint from a JWK.
@@ -251,7 +272,11 @@ func (kp *DPoPKeyPair) GenerateDPoPProof(method, url, accessToken, nonce string)
 
 	// Add typ and jwk to header
 	token.Header["typ"] = "dpop+jwt"
-	token.Header["jwk"] = kp.ToJWK()
+	jwk, err := kp.ToJWK()
+	if err != nil {
+		return "", fmt.Errorf("failed to create DPoP JWK header: %w", err)
+	}
+	token.Header["jwk"] = jwk
 
 	// Sign the token
 	signedToken, err := token.SignedString(kp.PrivateKey)

@@ -46,7 +46,10 @@ func TestDPoPKeyPairToJWK(t *testing.T) {
 		t.Fatalf("GenerateDPoPKeyPair() error = %v", err)
 	}
 
-	jwk := kp.ToJWK()
+	jwk, err := kp.ToJWK()
+	if err != nil {
+		t.Fatalf("ToJWK() error = %v", err)
+	}
 	if jwk.Kty != "EC" {
 		t.Errorf("ToJWK() Kty = %v, want EC", jwk.Kty)
 	}
@@ -64,7 +67,10 @@ func TestDPoPKeyPairToJWK(t *testing.T) {
 	}
 
 	// Private JWK should include D
-	privateJWK := kp.ToPrivateJWK()
+	privateJWK, err := kp.ToPrivateJWK()
+	if err != nil {
+		t.Fatalf("ToPrivateJWK() error = %v", err)
+	}
 	if privateJWK.D == "" {
 		t.Error("ToPrivateJWK() D is empty")
 	}
@@ -119,20 +125,29 @@ func TestCalculateJKT(t *testing.T) {
 		t.Fatalf("GenerateDPoPKeyPair() error = %v", err)
 	}
 
-	jkt := kp.CalculateJKT()
+	jkt, err := kp.CalculateJKT()
+	if err != nil {
+		t.Fatalf("CalculateJKT() error = %v", err)
+	}
 	if jkt == "" {
 		t.Error("CalculateJKT() returned empty string")
 	}
 
 	// JKT should be consistent for the same key
-	jkt2 := kp.CalculateJKT()
+	jkt2, err := kp.CalculateJKT()
+	if err != nil {
+		t.Fatalf("CalculateJKT() second call error = %v", err)
+	}
 	if jkt != jkt2 {
 		t.Error("CalculateJKT() returned different values for same key")
 	}
 
 	// Different keys should have different JKTs
 	kp2, _ := GenerateDPoPKeyPair()
-	jkt3 := kp2.CalculateJKT()
+	jkt3, err := kp2.CalculateJKT()
+	if err != nil {
+		t.Fatalf("CalculateJKT() different key error = %v", err)
+	}
 	if jkt == jkt3 {
 		t.Error("CalculateJKT() returned same value for different keys")
 	}
@@ -164,7 +179,10 @@ func TestGenerateAndVerifyDPoPProof(t *testing.T) {
 	}
 
 	// Check JKT matches
-	expectedJKT := kp.CalculateJKT()
+	expectedJKT, err := kp.CalculateJKT()
+	if err != nil {
+		t.Fatalf("CalculateJKT() error = %v", err)
+	}
 	if result.JKT != expectedJKT {
 		t.Errorf("VerifyDPoPProof() JKT = %v, want %v", result.JKT, expectedJKT)
 	}

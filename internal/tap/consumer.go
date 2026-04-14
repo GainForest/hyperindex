@@ -243,7 +243,7 @@ func (c *Consumer) runOnce(ctx context.Context) (bool, error) {
 			// Return immediately to reconnect rather than continuing to read and
 			// generating a cascade of identical errors.
 			if isWriteError(err) {
-				return true, err
+				return true, fmt.Errorf("failed during Tap ack write: %w", err)
 			}
 			// Handler errors are non-fatal — log and continue processing.
 			slog.Warn("Failed to handle Tap event",

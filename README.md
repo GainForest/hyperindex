@@ -342,6 +342,7 @@ This repo includes a tracked pre-commit hook at `.githooks/pre-commit`.
 - It runs on **staged Go files only**
 - Auto-formats staged `.go` files with `gofmt` and re-stages them
 - Runs `golangci-lint` on changed packages before commit
+- Requires **Bash 4+** (`mapfile` and associative arrays); macOS users may need `brew install bash`
 
 If you need to bypass it for an emergency local commit:
 
