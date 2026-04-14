@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/graphql-go/graphql"
@@ -640,12 +641,12 @@ var directSortCols = map[string]bool{
 // sortFieldValueForRecord extracts the sort field value from a record for cursor building.
 func sortFieldValueForRecord(rec *repositories.Record, value map[string]interface{}, sortOpt *repositories.SortOption) string {
 	if sortOpt == nil {
-		return rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+		return rec.IndexedAt.UTC().Format(time.RFC3339Nano)
 	}
 	if directSortCols[sortOpt.Field] {
 		switch sortOpt.Field {
 		case "indexed_at":
-			return rec.IndexedAt.Format("2006-01-02T15:04:05Z")
+			return rec.IndexedAt.UTC().Format(time.RFC3339Nano)
 		case "uri":
 			return rec.URI
 		case "did":

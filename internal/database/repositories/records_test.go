@@ -517,6 +517,93 @@ func TestRecordsRepository_GetByCollectionWithKeysetCursor(t *testing.T) {
 	})
 }
 
+func TestRecordsRepository_KeysetPagination_NormalizesIndexedAtFormats(t *testing.T) {
+	env := setupRecordsTestEnv(t)
+	repo := env.repo
+	ctx := context.Background()
+
+	sqlDB := env.db.Executor.DB()
+
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/n1", "bafyrein1", "did:plc:test1", "app.bsky.feed.post", `{"text":"n1"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 10:00:00' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/n1'`)
+
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/n2", "bafyrein2", "did:plc:test1", "app.bsky.feed.post", `{"text":"n2"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 11:00:00' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/n2'`)
+
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/n3", "bafyrein3", "did:plc:test1", "app.bsky.feed.post", `{"text":"n3"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 12:00:00' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/n3'`)
+
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/n4", "bafyrein4", "did:plc:test1", "app.bsky.feed.post", `{"text":"n4"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 13:00:00' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/n4'`)
+
+	t.Run("forward keyset cursor with RFC3339 timestamp skips newer rows", func(t *testing.T) {
+		page1, err := repo.GetByCollectionSortedWithKeysetCursor(
+			ctx,
+			"app.bsky.feed.post",
+			nil,
+			repositories.DIDFilter{},
+			nil,
+			2,
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("first page query failed: %v", err)
+		}
+		if len(page1) != 2 {
+			t.Fatalf("first page got %d records, want 2", len(page1))
+		}
+		if page1[0].URI != "at://did:plc:test1/app.bsky.feed.post/n4" || page1[1].URI != "at://did:plc:test1/app.bsky.feed.post/n3" {
+			t.Fatalf("first page URIs = [%s, %s], want [n4, n3]", page1[0].URI, page1[1].URI)
+		}
+
+		page2, err := repo.GetByCollectionSortedWithKeysetCursor(
+			ctx,
+			"app.bsky.feed.post",
+			nil,
+			repositories.DIDFilter{},
+			nil,
+			2,
+			[]string{"2026-01-15T12:00:00Z", "at://did:plc:test1/app.bsky.feed.post/n3"},
+		)
+		if err != nil {
+			t.Fatalf("second page query failed: %v", err)
+		}
+		if len(page2) != 2 {
+			t.Fatalf("second page got %d records, want 2", len(page2))
+		}
+		if page2[0].URI != "at://did:plc:test1/app.bsky.feed.post/n2" {
+			t.Errorf("second page first URI = %q, want n2", page2[0].URI)
+		}
+		if page2[1].URI != "at://did:plc:test1/app.bsky.feed.post/n1" {
+			t.Errorf("second page second URI = %q, want n1", page2[1].URI)
+		}
+	})
+
+	t.Run("backward keyset cursor with RFC3339 timestamp returns prior edges", func(t *testing.T) {
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(
+			ctx,
+			"app.bsky.feed.post",
+			nil,
+			repositories.DIDFilter{},
+			nil,
+			2,
+			[]string{"2026-01-15T10:00:00Z", "at://did:plc:test1/app.bsky.feed.post/n1"},
+		)
+		if err != nil {
+			t.Fatalf("backward query failed: %v", err)
+		}
+		if len(records) != 2 {
+			t.Fatalf("backward query got %d records, want 2", len(records))
+		}
+		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/n3" {
+			t.Errorf("records[0].URI = %q, want n3", records[0].URI)
+		}
+		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/n2" {
+			t.Errorf("records[1].URI = %q, want n2", records[1].URI)
+		}
+	})
+}
+
 func TestRecordsRepository_GetByDID(t *testing.T) {
 	repo := setupRecordsTest(t)
 	ctx := context.Background()

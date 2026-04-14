@@ -247,7 +247,10 @@ func TestAuthMiddleware_RequireAuth_DPoP_Valid(t *testing.T) {
 		t.Fatalf("failed to generate key pair: %v", err)
 	}
 
-	jkt := keyPair.CalculateJKT()
+	jkt, err := keyPair.CalculateJKT()
+	if err != nil {
+		t.Fatalf("failed to calculate JKT: %v", err)
+	}
 	userID := "did:plc:test123"
 
 	tokens := &mockTokenStore{
@@ -332,7 +335,10 @@ func TestAuthMiddleware_RequireAuth_DPoP_KeyMismatch(t *testing.T) {
 	keyPair1, _ := GenerateDPoPKeyPair()
 	keyPair2, _ := GenerateDPoPKeyPair()
 
-	jkt := keyPair1.CalculateJKT() // Token bound to key 1
+	jkt, err := keyPair1.CalculateJKT() // Token bound to key 1
+	if err != nil {
+		t.Fatalf("failed to calculate JKT: %v", err)
+	}
 	userID := "did:plc:test123"
 
 	tokens := &mockTokenStore{
@@ -372,7 +378,10 @@ func TestAuthMiddleware_RequireAuth_DPoP_KeyMismatch(t *testing.T) {
 
 func TestAuthMiddleware_RequireAuth_DPoP_Replay(t *testing.T) {
 	keyPair, _ := GenerateDPoPKeyPair()
-	jkt := keyPair.CalculateJKT()
+	jkt, err := keyPair.CalculateJKT()
+	if err != nil {
+		t.Fatalf("failed to calculate JKT: %v", err)
+	}
 	userID := "did:plc:test123"
 
 	tokens := &mockTokenStore{

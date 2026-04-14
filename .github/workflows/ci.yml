@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 jobs:
   test:
@@ -56,6 +55,24 @@ jobs:
         with:
           files: coverage-sqlite.out,coverage-postgres.out
           fail_ci_if_error: false
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run integration tests (race)
+        run: go test -v -race -tags=integration ./internal/integration/...
 
   lint:
     runs-on: ubuntu-latest

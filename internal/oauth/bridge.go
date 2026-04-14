@@ -358,8 +358,13 @@ func (b *Bridge) createClientAssertion(audience string) (string, error) {
 	header := map[string]interface{}{
 		"alg": "ES256",
 		"typ": "JWT",
-		"kid": b.signingKey.CalculateJKT(),
 	}
+
+	kid, err := b.signingKey.CalculateJKT()
+	if err != nil {
+		return "", fmt.Errorf("failed to calculate signing key thumbprint: %w", err)
+	}
+	header["kid"] = kid
 
 	claims := map[string]interface{}{
 		"iss": b.clientID,

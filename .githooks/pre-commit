@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${SKIP_GOLANGCI:-}" == "1" ]]; then
+	printf 'pre-commit: SKIP_GOLANGCI=1, skipping Go lint checks.\n'
+	exit 0
+fi
+
+if [[ -z "${BASH_VERSINFO:-}" || "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+	printf 'pre-commit: this hook requires Bash 4+ (uses mapfile and associative arrays).\n'
+	printf 'pre-commit: on macOS, install newer bash via Homebrew: brew install bash\n'
+	printf 'pre-commit: emergency bypass: SKIP_GOLANGCI=1 git commit -m "..."\n'
+	exit 1
+fi
+
+mapfile -d '' -t staged_go_files < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.go')
+
+if [[ ${#staged_go_files[@]} -eq 0 ]]; then
+	exit 0
+fi
+
+printf 'pre-commit: formatting staged Go files with gofmt...\n'
+gofmt -w "${staged_go_files[@]}"
+git add -- "${staged_go_files[@]}"
+
+declare -A seen_packages=()
+packages=()
+
+for file in "${staged_go_files[@]}"; do
+	dir=$(dirname "$file")
+	if [[ "$dir" == "." ]]; then
+		pkg="./"
+	else
+		pkg="./$dir"
+	fi
+
+	if [[ -z "${seen_packages[$pkg]+x}" ]]; then
+		seen_packages[$pkg]=1
+		packages+=("$pkg")
+	fi
+done
+
+printf 'pre-commit: running golangci-lint on staged packages...\n'
+golangci-lint run "${packages[@]}"
+
+printf 'pre-commit: lint passed.\n'
