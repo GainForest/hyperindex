@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 )
@@ -14,7 +13,6 @@ func TestApplyTapSidecarHealth(t *testing.T) {
 		timeout   time.Duration
 		healthFn  func(context.Context) error
 		wantState string
-		wantErr   string
 	}{
 		{
 			name:    "sidecar healthy",
@@ -31,7 +29,6 @@ func TestApplyTapSidecarHealth(t *testing.T) {
 				return errors.New("sidecar unavailable")
 			},
 			wantState: "unreachable",
-			wantErr:   "sidecar unavailable",
 		},
 		{
 			name:    "sidecar health times out",
@@ -41,7 +38,6 @@ func TestApplyTapSidecarHealth(t *testing.T) {
 				return ctx.Err()
 			},
 			wantState: "unreachable",
-			wantErr:   "context deadline exceeded",
 		},
 	}
 
@@ -58,19 +54,8 @@ func TestApplyTapSidecarHealth(t *testing.T) {
 				t.Fatalf("sidecar state = %q, want %q", gotState, tt.wantState)
 			}
 
-			gotErr, hasErr := tapInfo["sidecar_error"].(string)
-			if tt.wantErr == "" {
-				if hasErr {
-					t.Fatalf("unexpected sidecar_error = %q", gotErr)
-				}
-				return
-			}
-
-			if !hasErr {
-				t.Fatalf("expected sidecar_error containing %q, got none", tt.wantErr)
-			}
-			if !strings.Contains(gotErr, tt.wantErr) {
-				t.Fatalf("sidecar_error = %q, want substring %q", gotErr, tt.wantErr)
+			if _, hasErr := tapInfo["sidecar_error"]; hasErr {
+				t.Fatalf("unexpected sidecar_error in stats payload")
 			}
 		})
 	}

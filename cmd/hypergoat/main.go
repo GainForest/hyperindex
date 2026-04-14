@@ -374,7 +374,7 @@ func applyTapSidecarHealth(
 
 	if err := healthFn(sidecarCtx); err != nil {
 		tapInfo["sidecar"] = "unreachable"
-		tapInfo["sidecar_error"] = err.Error()
+		slog.Warn("Tap sidecar health check failed", "error", err)
 		return
 	}
 
