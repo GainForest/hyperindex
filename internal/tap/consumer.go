@@ -70,6 +70,10 @@ type Consumer struct {
 	config  ConsumerConfig
 	handler EventHandler
 
+	// writeTextFn allows overriding WebSocket write behavior in tests.
+	// When nil, writeText is used.
+	writeTextFn func(conn *websocket.Conn, msg string) error
+
 	// conn is the active WebSocket connection.
 	conn   *websocket.Conn
 	connMu sync.Mutex
@@ -114,7 +118,7 @@ func (c *Consumer) Start(ctx context.Context) error {
 		default:
 		}
 
-		connected, err := c.runOnce(ctx)
+		connected, immediateReconnect, err := c.runOnce(ctx)
 
 		// Reset backoff if we successfully established a connection (even if it
 		// later dropped with an error). This prevents slow reconnects after a
@@ -135,6 +139,12 @@ func (c *Consumer) Start(ctx context.Context) error {
 		// If context was cancelled, this is a graceful shutdown — do not log.
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+
+		if immediateReconnect {
+			slog.Warn("Tap ack write failed, reconnecting immediately", "error", err)
+			slog.Info("Attempting to reconnect to Tap...")
+			continue
 		}
 
 		if err != nil {
@@ -168,10 +178,11 @@ func (c *Consumer) Start(ctx context.Context) error {
 }
 
 // runOnce establishes one WebSocket connection and processes events until it closes.
-// Returns (connected, error) where connected is true if the dial succeeded (even if
-// the connection later dropped with an error). The caller uses connected to decide
-// whether to reset the reconnection backoff.
-func (c *Consumer) runOnce(ctx context.Context) (bool, error) {
+// Returns (connected, immediateReconnect, error) where connected is true if the dial
+// succeeded (even if the connection later dropped with an error), and
+// immediateReconnect indicates a known-dead connection scenario (like ack write
+// failure) that should bypass backoff.
+func (c *Consumer) runOnce(ctx context.Context) (bool, bool, error) {
 	channelURL := c.config.TapURL + tapChannelPath
 
 	slog.Info("Connecting to Tap", "url", channelURL)
@@ -183,7 +194,7 @@ func (c *Consumer) runOnce(ctx context.Context) (bool, error) {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, channelURL, header)
 	if err != nil {
-		return false, fmt.Errorf("failed to connect to Tap: %w", err)
+		return false, false, fmt.Errorf("failed to connect to Tap: %w", err)
 	}
 	conn.SetReadLimit(maxMessageSize)
 
@@ -204,23 +215,23 @@ func (c *Consumer) runOnce(ctx context.Context) (bool, error) {
 		// Check for stop signal before reading.
 		select {
 		case <-ctx.Done():
-			return true, ctx.Err()
+			return true, false, ctx.Err()
 		case <-c.done:
-			return true, nil
+			return true, false, nil
 		default:
 		}
 
 		// Set read deadline.
 		if err := conn.SetReadDeadline(time.Now().Add(defaultReadTimeout)); err != nil {
-			return true, fmt.Errorf("failed to set read deadline: %w", err)
+			return true, false, fmt.Errorf("failed to set read deadline: %w", err)
 		}
 
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return true, nil
+				return true, false, nil
 			}
-			return true, fmt.Errorf("read error: %w", err)
+			return true, false, fmt.Errorf("read error: %w", err)
 		}
 
 		if msgType != websocket.TextMessage {
@@ -243,7 +254,7 @@ func (c *Consumer) runOnce(ctx context.Context) (bool, error) {
 			// Return immediately to reconnect rather than continuing to read and
 			// generating a cascade of identical errors.
 			if isWriteError(err) {
-				return true, fmt.Errorf("failed during Tap ack write: %w", err)
+				return true, true, fmt.Errorf("failed during Tap ack write: %w", err)
 			}
 			// Handler errors are non-fatal — log and continue processing.
 			slog.Warn("Failed to handle Tap event",
@@ -287,7 +298,11 @@ func (c *Consumer) dispatch(ctx context.Context, conn *websocket.Conn, event *Ev
 	// See: https://github.com/bluesky-social/indigo/blob/main/cmd/tap/types.go
 	if !c.config.DisableAcks {
 		ackMsg := fmt.Sprintf(`{"type":"ack","id":%d}`, event.ID)
-		if err := c.writeText(conn, ackMsg); err != nil {
+		writeFn := c.writeText
+		if c.writeTextFn != nil {
+			writeFn = c.writeTextFn
+		}
+		if err := writeFn(conn, ackMsg); err != nil {
 			return fmt.Errorf("failed to send ack for event %d: %w", event.ID, err)
 		}
 	}

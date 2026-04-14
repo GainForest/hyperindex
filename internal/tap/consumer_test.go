@@ -29,9 +29,13 @@ type mockHandler struct {
 	identityEvents []*IdentityEvent
 	recordErr      error
 	identityErr    error
+	recordDelay    time.Duration
 }
 
 func (m *mockHandler) HandleRecord(_ context.Context, event *RecordEvent) error {
+	if m.recordDelay > 0 {
+		time.Sleep(m.recordDelay)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.recordEvents = append(m.recordEvents, event)
@@ -989,16 +993,20 @@ func TestConsumer_AckFormat(t *testing.T) {
 // rather than continuing to read and generating a cascade of errors.
 func TestConsumer_WriteErrorCausesImmediateReconnect(t *testing.T) {
 	var connectionCount int32
+	var writeAttempts int32
 	secondConnected := make(chan struct{})
 
 	recordEvent := Event{
 		ID:   1,
 		Type: EventTypeRecord,
 		Record: &RecordEvent{
+			Live:       true,
+			Rev:        "abc123",
 			DID:        "did:plc:write-err",
 			Collection: "app.bsky.feed.post",
 			RKey:       "rkey1",
 			Action:     ActionCreate,
+			CID:        "bafyreiabc",
 			Record:     json.RawMessage(`{"text":"hello"}`),
 		},
 	}
@@ -1007,12 +1015,14 @@ func TestConsumer_WriteErrorCausesImmediateReconnect(t *testing.T) {
 		count := atomic.AddInt32(&connectionCount, 1)
 		switch count {
 		case 1:
-			// First connection: send an event, then immediately close the connection
-			// before the consumer can write the ack. This simulates the production
-			// failure where the Tap server resets the connection.
+			// First connection: send one event. The consumer's writeTextFn is
+			// overridden to fail ack writes, which should trigger immediate reconnect.
 			sendEvent(t, conn, recordEvent)
-			// Close before the ack arrives — consumer's ack write will fail.
-			conn.Close()
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
 		case 2:
 			// Second connection: signal that we reconnected.
 			close(secondConnected)
@@ -1023,6 +1033,10 @@ func TestConsumer_WriteErrorCausesImmediateReconnect(t *testing.T) {
 
 	handler := &mockHandler{}
 	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+	consumer.writeTextFn = func(_ *websocket.Conn, _ string) error {
+		atomic.AddInt32(&writeAttempts, 1)
+		return errors.New("simulated write failure")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1036,13 +1050,13 @@ func TestConsumer_WriteErrorCausesImmediateReconnect(t *testing.T) {
 	select {
 	case <-secondConnected:
 		elapsed := time.Since(start)
-		// Should reconnect within minBackoff (1s) + slack. If the consumer were
-		// looping on read errors before reconnecting, it would take much longer.
-		if elapsed > 2500*time.Millisecond {
-			t.Errorf("reconnect took %v; expected <2.5s after write error", elapsed)
+		// Should reconnect without waiting minBackoff (1s) after write errors.
+		// Allow some scheduling/network slack in CI.
+		if elapsed > 800*time.Millisecond {
+			t.Errorf("reconnect took %v; expected <800ms after write error", elapsed)
 		}
 	case <-time.After(4 * time.Second):
-		t.Fatal("consumer did not reconnect after write error")
+		t.Fatalf("consumer did not reconnect after write error (records handled=%d, write attempts=%d)", handler.RecordCount(), atomic.LoadInt32(&writeAttempts))
 	}
 
 	consumer.Stop()
