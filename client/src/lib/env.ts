@@ -12,19 +12,34 @@ function getPort(): number {
   return port ? parseInt(port, 10) : 3000;
 }
 
+export function normalizePublicURL(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+
+  return `https://${trimmed}`;
+}
+
+export function resolvePublicClientURL(publicClientUrl: string, vercelBranchUrl: string): string {
+  const normalizedPublicClientUrl = normalizePublicURL(publicClientUrl);
+  const normalizedVercelBranchUrl = normalizePublicURL(vercelBranchUrl);
+  return normalizedPublicClientUrl || normalizedVercelBranchUrl;
+}
+
 const vercelBranchUrl = process.env.NEXT_PUBLIC_VERCEL_BRANCH_URL || "";
 const publicClientUrl = process.env.NEXT_PUBLIC_CLIENT_URL || "";
-const normalizedVercelBranchUrl =
-  vercelBranchUrl && !vercelBranchUrl.startsWith("http://") && !vercelBranchUrl.startsWith("https://")
-    ? `https://${vercelBranchUrl}`
-    : vercelBranchUrl;
 
 export const env = {
   // Secret for encrypting session cookies (must be at least 32 chars)
   COOKIE_SECRET: getEnv("COOKIE_SECRET", "development-secret-at-least-32-chars!!"),
 
   // Public URL for OAuth callbacks (empty = use localhost)
-  PUBLIC_CLIENT_URL: publicClientUrl || normalizedVercelBranchUrl,
+  PUBLIC_CLIENT_URL: resolvePublicClientURL(publicClientUrl, vercelBranchUrl),
 
   // Port for the Next.js server
   PORT: getPort(),

@@ -328,12 +328,7 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 			}
 			// Include Tap sidecar health in stats for observability (non-blocking).
 			if bg.tapAdminClient != nil {
-				if err := bg.tapAdminClient.Health(reqCtx); err != nil {
-					tapInfo["sidecar"] = "unreachable"
-					tapInfo["sidecar_error"] = err.Error()
-				} else {
-					tapInfo["sidecar"] = "ok"
-				}
+				applyTapSidecarHealth(reqCtx, tapInfo, 1500*time.Millisecond, bg.tapAdminClient.Health)
 			}
 			stats["tap"] = tapInfo
 		}
@@ -366,6 +361,24 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 	})
 
 	return r
+}
+
+func applyTapSidecarHealth(
+	reqCtx context.Context,
+	tapInfo map[string]any,
+	timeout time.Duration,
+	healthFn func(context.Context) error,
+) {
+	sidecarCtx, cancel := context.WithTimeout(reqCtx, timeout)
+	defer cancel()
+
+	if err := healthFn(sidecarCtx); err != nil {
+		tapInfo["sidecar"] = "unreachable"
+		tapInfo["sidecar_error"] = err.Error()
+		return
+	}
+
+	tapInfo["sidecar"] = "ok"
 }
 
 // setupOAuth registers all OAuth 2.0 endpoints (discovery, authorization flow,
