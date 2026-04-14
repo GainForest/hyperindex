@@ -1,4 +1,4 @@
-.PHONY: help build run test lint clean dev db-migrate db-rollback docker
+.PHONY: help build run test lint clean dev db-migrate db-rollback docker hooks-install
 
 # Default target
 help:
@@ -10,6 +10,7 @@ help:
 	@echo "  make build        - Build the binary"
 	@echo "  make test         - Run all tests"
 	@echo "  make lint         - Run linter"
+	@echo "  make hooks-install - Install local git hooks path"
 	@echo "  make clean        - Clean build artifacts"
 	@echo ""
 	@echo "Database:"
@@ -105,3 +106,9 @@ tools:
 generate:
 	@echo "Running go generate..."
 	@go generate ./...
+
+# Install local git hooks path for tracked hooks
+hooks-install:
+	@echo "Configuring git to use .githooks..."
+	@git config core.hooksPath .githooks
+	@echo "Installed. Hooks path: $$(git config --get core.hooksPath)"
