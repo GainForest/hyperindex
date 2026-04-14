@@ -277,7 +277,7 @@ func insertSortRecord(t *testing.T, repo *RecordsRepository, uri, cid, did, coll
 func TestBuildSortExpr_NilSortOption(t *testing.T) {
 	repo := newTestRepo(t)
 	expr := repo.buildSortExpr(nil)
-	want := "indexed_at DESC, uri DESC"
+	want := "strftime('%Y-%m-%dT%H:%M:%fZ', indexed_at) DESC, uri DESC"
 	if expr != want {
 		t.Errorf("buildSortExpr(nil) = %q, want %q", expr, want)
 	}
@@ -287,7 +287,7 @@ func TestBuildSortExpr_IndexedAtASC(t *testing.T) {
 	repo := newTestRepo(t)
 	sort := &SortOption{Field: "indexed_at", Direction: "ASC"}
 	expr := repo.buildSortExpr(sort)
-	want := "indexed_at ASC, uri ASC"
+	want := "strftime('%Y-%m-%dT%H:%M:%fZ', indexed_at) ASC, uri ASC"
 	if expr != want {
 		t.Errorf("buildSortExpr(indexed_at ASC) = %q, want %q", expr, want)
 	}
@@ -297,7 +297,7 @@ func TestBuildSortExpr_IndexedAtDESC(t *testing.T) {
 	repo := newTestRepo(t)
 	sort := &SortOption{Field: "indexed_at", Direction: "DESC"}
 	expr := repo.buildSortExpr(sort)
-	want := "indexed_at DESC, uri DESC"
+	want := "strftime('%Y-%m-%dT%H:%M:%fZ', indexed_at) DESC, uri DESC"
 	if expr != want {
 		t.Errorf("buildSortExpr(indexed_at DESC) = %q, want %q", expr, want)
 	}

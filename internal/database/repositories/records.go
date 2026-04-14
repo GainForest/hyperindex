@@ -317,17 +317,18 @@ func (r *RecordsRepository) GetByCollection(ctx context.Context, collection stri
 func (r *RecordsRepository) GetByCollectionWithCursor(ctx context.Context, collection string, limit int, afterTimestamp string) ([]*Record, error) {
 	var sqlStr string
 	var args []any
+	indexedAtExpr := r.normalizedIndextAtExpr()
 
 	if afterTimestamp == "" {
 		// No cursor - get first page, ordered by indexed_at DESC (newest first)
-		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
-			r.recordColumns(), r.db.Placeholder(1), limit)
+		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s ORDER BY %s DESC, uri DESC LIMIT %d",
+			r.recordColumns(), r.db.Placeholder(1), indexedAtExpr, limit)
 		args = []any{collection}
 	} else {
 		// With cursor - get records older than the cursor timestamp
 		// Using indexed_at < cursor for "load more" (older posts)
-		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s AND indexed_at < %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
-			r.recordColumns(), r.db.Placeholder(1), r.db.Placeholder(2), limit)
+		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s AND %s < %s ORDER BY %s DESC, uri DESC LIMIT %d",
+			r.recordColumns(), r.db.Placeholder(1), indexedAtExpr, r.keysetCursorValueExpr("indexed_at", r.db.Placeholder(2)), indexedAtExpr, limit)
 		args = []any{collection, afterTimestamp}
 	}
 
@@ -346,17 +347,21 @@ func (r *RecordsRepository) GetByCollectionWithCursor(ctx context.Context, colle
 func (r *RecordsRepository) GetByCollectionWithKeysetCursor(ctx context.Context, collection string, limit int, afterTimestamp, afterURI string) ([]*Record, error) {
 	var sqlStr string
 	var args []any
+	indexedAtExpr := r.normalizedIndextAtExpr()
 
 	if afterTimestamp == "" && afterURI == "" {
 		// No cursor - get first page
-		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
-			r.recordColumns(), r.db.Placeholder(1), limit)
+		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s ORDER BY %s DESC, uri DESC LIMIT %d",
+			r.recordColumns(), r.db.Placeholder(1), indexedAtExpr, limit)
 		args = []any{collection}
 	} else {
 		// Keyset pagination: get records that sort after (afterTimestamp, afterURI)
 		// ORDER BY indexed_at DESC, uri DESC means "after" = less than
-		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s AND (indexed_at < %s OR (indexed_at = %s AND uri < %s)) ORDER BY indexed_at DESC, uri DESC LIMIT %d",
-			r.recordColumns(), r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3), r.db.Placeholder(4), limit)
+		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s AND (%s < %s OR (%s = %s AND uri < %s)) ORDER BY %s DESC, uri DESC LIMIT %d",
+			r.recordColumns(), r.db.Placeholder(1),
+			indexedAtExpr, r.keysetCursorValueExpr("indexed_at", r.db.Placeholder(2)),
+			indexedAtExpr, r.keysetCursorValueExpr("indexed_at", r.db.Placeholder(3)),
+			r.db.Placeholder(4), indexedAtExpr, limit)
 		args = []any{collection, afterTimestamp, afterTimestamp, afterURI}
 	}
 
@@ -541,13 +546,16 @@ func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
 	args = append(args, collection)
 
 	nextPlaceholder := 2
+	indexedAtExpr := r.normalizedIndextAtExpr()
 
 	// Keyset cursor condition
 	if afterTimestamp != "" && afterURI != "" {
 		p2 := r.db.Placeholder(nextPlaceholder)
 		p3 := r.db.Placeholder(nextPlaceholder + 1)
 		p4 := r.db.Placeholder(nextPlaceholder + 2)
-		whereParts = append(whereParts, fmt.Sprintf("(indexed_at < %s OR (indexed_at = %s AND uri < %s))", p2, p3, p4))
+		whereParts = append(whereParts, fmt.Sprintf("(%s < %s OR (%s = %s AND uri < %s))",
+			indexedAtExpr, r.keysetCursorValueExpr("indexed_at", p2),
+			indexedAtExpr, r.keysetCursorValueExpr("indexed_at", p3), p4))
 		args = append(args, afterTimestamp, afterTimestamp, afterURI)
 		nextPlaceholder += 3
 	}
@@ -574,8 +582,8 @@ func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
-	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
-		r.recordColumns(), whereClause, limit)
+	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s DESC, uri DESC LIMIT %d",
+		r.recordColumns(), whereClause, indexedAtExpr, limit)
 
 	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
 	if err != nil {
@@ -606,19 +614,24 @@ func keysetSortFieldName(sort *SortOption) string {
 	return sort.Field
 }
 
+// normalizedIndextAtExpr returns the record-side indexed_at expression used for
+// ordering and keyset comparisons. SQLite stores indexed_at as TEXT and may
+// contain mixed formats (e.g. "YYYY-MM-DD HH:MM:SS" and RFC3339), so values are
+// normalized to a canonical sortable UTC representation.
+func (r *RecordsRepository) normalizedIndextAtExpr() string {
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		return "indexed_at"
+	default:
+		return "strftime('%Y-%m-%dT%H:%M:%fZ', indexed_at)"
+	}
+}
+
 // keysetSortFieldExpr returns the SQL expression used on the record side for
 // keyset comparisons.
 func (r *RecordsRepository) keysetSortFieldExpr(sortField string) string {
 	if sortField == "indexed_at" {
-		switch r.db.Dialect() {
-		case database.PostgreSQL:
-			return "indexed_at"
-		default:
-			// SQLite stores indexed_at as TEXT and may contain mixed formats
-			// (e.g. "YYYY-MM-DD HH:MM:SS" and RFC3339). Normalize to a canonical
-			// sortable UTC representation before comparison.
-			return "strftime('%Y-%m-%dT%H:%M:%fZ', indexed_at)"
-		}
+		return r.normalizedIndextAtExpr()
 	}
 
 	if directSortColumns[sortField] {
@@ -650,7 +663,7 @@ func (r *RecordsRepository) keysetCursorValueExpr(sortField, placeholder string)
 // The uri tiebreaker direction matches the primary sort direction.
 func (r *RecordsRepository) buildSortExpr(sort *SortOption) string {
 	if sort == nil {
-		return "indexed_at DESC, uri DESC"
+		return fmt.Sprintf("%s DESC, uri DESC", r.normalizedIndextAtExpr())
 	}
 
 	dir := sort.Direction
@@ -659,9 +672,12 @@ func (r *RecordsRepository) buildSortExpr(sort *SortOption) string {
 	}
 
 	var fieldExpr string
-	if directSortColumns[sort.Field] {
+	switch {
+	case sort.Field == "indexed_at":
+		fieldExpr = r.normalizedIndextAtExpr()
+	case directSortColumns[sort.Field]:
 		fieldExpr = sort.Field
-	} else {
+	default:
 		fieldExpr = r.db.JSONExtract("json", sort.Field)
 	}
 
@@ -894,8 +910,8 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 
 // GetByDID retrieves all records for a specific DID.
 func (r *RecordsRepository) GetByDID(ctx context.Context, did string) ([]*Record, error) {
-	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE did = %s ORDER BY indexed_at DESC",
-		r.recordColumns(), r.db.Placeholder(1))
+	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE did = %s ORDER BY %s DESC",
+		r.recordColumns(), r.db.Placeholder(1), r.normalizedIndextAtExpr())
 
 	rows, err := r.db.DB().QueryContext(ctx, sqlStr, did)
 	if err != nil {
@@ -1251,18 +1267,21 @@ func (r *RecordsRepository) Search(
 
 	// Keyset cursor
 	if afterTimestamp != "" && afterURI != "" {
+		indexedAtExpr := r.normalizedIndextAtExpr()
 		conditions = append(conditions, fmt.Sprintf(
-			"(indexed_at < %s OR (indexed_at = %s AND uri < %s))",
-			r.db.Placeholder(paramIdx),
-			r.db.Placeholder(paramIdx+1),
+			"(%s < %s OR (%s = %s AND uri < %s))",
+			indexedAtExpr,
+			r.keysetCursorValueExpr("indexed_at", r.db.Placeholder(paramIdx)),
+			indexedAtExpr,
+			r.keysetCursorValueExpr("indexed_at", r.db.Placeholder(paramIdx+1)),
 			r.db.Placeholder(paramIdx+2),
 		))
 		params = append(params, database.Text(afterTimestamp), database.Text(afterTimestamp), database.Text(afterURI))
 	}
 
 	whereClause := "WHERE " + strings.Join(conditions, " AND ")
-	sqlStr := fmt.Sprintf("SELECT %s FROM record %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
-		r.recordColumns(), whereClause, limit)
+	sqlStr := fmt.Sprintf("SELECT %s FROM record %s ORDER BY %s DESC, uri DESC LIMIT %d",
+		r.recordColumns(), whereClause, r.normalizedIndextAtExpr(), limit)
 
 	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
 	if err != nil {
