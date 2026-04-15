@@ -28,6 +28,10 @@ type SuggestedActorsResponse = {
   actors: SuggestedActor[];
 };
 
+type BlueskyProfilesResponse = {
+  profiles?: SuggestedActor[];
+};
+
 interface AdminDidBatchPickerProps {
   existingAdminDids: string[];
   pendingDids: string[];
@@ -39,6 +43,8 @@ interface AdminDidBatchPickerProps {
 const EMPTY_ACTORS: SuggestedActor[] = [];
 const DID_PATTERN = /^did:[a-z0-9]+:[A-Za-z0-9._:%-]+(?:[:][A-Za-z0-9._:%-]+)*$/;
 const BLUESKY_TYPEAHEAD_ENDPOINT = "https://public.api.bsky.app/xrpc/app.bsky.actor.searchActorsTypeahead";
+const BLUESKY_PROFILES_ENDPOINT = "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles";
+const PROFILES_CHUNK_SIZE = 25;
 
 export function AdminDidBatchPicker({
   existingAdminDids,
@@ -82,6 +88,49 @@ export function AdminDidBatchPicker({
     },
     enabled: !!normalizedSearch && !disabled,
   });
+
+  const { data: pendingProfiles = EMPTY_ACTORS } = useQuery({
+    queryKey: ["pending-admin-profiles", pendingDids],
+    queryFn: async () => {
+      const chunks: string[][] = [];
+      for (let i = 0; i < pendingDids.length; i += PROFILES_CHUNK_SIZE) {
+        chunks.push(pendingDids.slice(i, i + PROFILES_CHUNK_SIZE));
+      }
+
+      const responses = await Promise.allSettled(
+        chunks.map(async (chunk) => {
+          const params = new URLSearchParams();
+          for (const did of chunk) {
+            params.append("actors", did);
+          }
+
+          const response = await fetch(`${BLUESKY_PROFILES_ENDPOINT}?${params.toString()}`, {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+            },
+          });
+
+          if (!response.ok) {
+            return [] as SuggestedActor[];
+          }
+
+          const data = (await response.json()) as BlueskyProfilesResponse;
+          return data.profiles ?? [];
+        }),
+      );
+
+      return responses
+        .filter((result): result is PromiseFulfilledResult<SuggestedActor[]> => result.status === "fulfilled")
+        .flatMap((result) => result.value);
+    },
+    enabled: pendingDids.length > 0,
+  });
+
+  const pendingProfilesByDid = useMemo(
+    () => new Map(pendingProfiles.map((profile) => [profile.did, profile])),
+    [pendingProfiles],
+  );
 
   const addDid = (did: string) => {
     const normalized = did.trim();
@@ -229,28 +278,56 @@ export function AdminDidBatchPicker({
           </p>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {pendingDids.map((did) => (
-              <Badge
-                key={did}
-                className="gap-1 border"
-                style={{
-                  borderColor: "var(--border)",
-                  backgroundColor: "var(--muted)",
-                  color: "var(--foreground)",
-                }}
-              >
-                <span className="font-mono">{did}</span>
-                <button
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => onRemoveDid(did)}
-                  className="rounded-full p-0.5 transition-opacity hover:opacity-80 disabled:opacity-40"
-                  aria-label={`Remove ${did} from pending admins`}
+            {pendingDids.map((did) => {
+              const profile = pendingProfilesByDid.get(did);
+              const displayName = profile?.displayName || profile?.handle || did;
+
+              return (
+                <Badge
+                  key={did}
+                  className="gap-2 border py-1"
+                  style={{
+                    borderColor: "var(--border)",
+                    backgroundColor: "var(--muted)",
+                    color: "var(--foreground)",
+                  }}
                 >
-                  <X className="size-3" />
-                </button>
-              </Badge>
-            ))}
+                  {profile?.avatar ? (
+                    <Image
+                      src={profile.avatar}
+                      alt={profile.handle ? `Avatar for @${profile.handle}` : profile.displayName ? `Avatar for ${profile.displayName}` : `Avatar for ${did}`}
+                      width={18}
+                      height={18}
+                      className="rounded-full"
+                    />
+                  ) : (
+                    <div
+                      className="flex size-[18px] shrink-0 items-center justify-center rounded-full text-[9px] font-semibold"
+                      style={{ backgroundColor: "var(--card)", color: "var(--muted-foreground)" }}
+                    >
+                      {displayName.slice(0, 1).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="flex max-w-[260px] min-w-0 flex-col leading-tight">
+                    <span className="truncate text-[11px] font-medium">
+                      {profile?.handle ? `@${profile.handle}` : displayName}
+                    </span>
+                    <span className="truncate font-mono text-[10px]" style={{ color: "var(--muted-foreground)" }}>
+                      {did}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onRemoveDid(did)}
+                    className="rounded-full p-0.5 transition-opacity hover:opacity-80 disabled:opacity-40"
+                    aria-label={`Remove ${did} from pending admins`}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </Badge>
+              );
+            })}
           </div>
         )}
       </div>
