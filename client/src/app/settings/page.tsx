@@ -1,21 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import Image from "next/image";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
 import { GET_SETTINGS, GET_OAUTH_CLIENTS } from "@/lib/graphql/queries";
-import { UPDATE_SETTINGS, RESET_ALL, UPLOAD_LEXICONS } from "@/lib/graphql/mutations";
+import { UPDATE_SETTINGS, RESET_ALL, ADD_ADMIN } from "@/lib/graphql/mutations";
 import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
   Button,
   Input,
   Alert,
 } from "@/components/ui";
+import { AdminDidBatchPicker } from "@/components/admin/AdminDidBatchPicker";
 import type { SettingsResponse, OAuthClientsResponse } from "@/types";
+
+type BlueskyProfile = {
+  did: string;
+  handle: string;
+  displayName?: string;
+  avatar?: string;
+};
+
+type BlueskyProfilesResponse = {
+  profiles?: BlueskyProfile[];
+};
+
+const BLUESKY_PROFILES_ENDPOINT = "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles";
+const PROFILES_CHUNK_SIZE = 25;
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
@@ -34,26 +45,61 @@ export default function SettingsPage() {
 
   const settings = settingsData?.settings;
   const oauthClients = oauthData?.oauthClients ?? [];
+  const adminDids = settings?.adminDids ?? [];
+
+  const { data: adminProfiles = [], isFetching: isFetchingAdminProfiles } = useQuery({
+    queryKey: ["admin-profiles", adminDids],
+    queryFn: async () => {
+      const chunks: string[][] = [];
+      for (let i = 0; i < adminDids.length; i += PROFILES_CHUNK_SIZE) {
+        chunks.push(adminDids.slice(i, i + PROFILES_CHUNK_SIZE));
+      }
+
+      const responses = await Promise.allSettled(
+        chunks.map(async (chunk) => {
+          const params = new URLSearchParams();
+          for (const did of chunk) {
+            params.append("actors", did);
+          }
+
+          const response = await fetch(`${BLUESKY_PROFILES_ENDPOINT}?${params.toString()}`, {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+            },
+          });
+
+          if (!response.ok) {
+            return [] as BlueskyProfile[];
+          }
+
+          const data = (await response.json()) as BlueskyProfilesResponse;
+          return data.profiles ?? [];
+        }),
+      );
+
+      return responses
+        .filter((result): result is PromiseFulfilledResult<BlueskyProfile[]> => result.status === "fulfilled")
+        .flatMap((result) => result.value);
+    },
+    enabled: adminDids.length > 0,
+  });
+
+  const adminProfilesByDid = useMemo(
+    () => new Map(adminProfiles.map((profile) => [profile.did, profile])),
+    [adminProfiles],
+  );
 
   // Form state
-  const [domainAuthority, setDomainAuthority] = useState("");
-  const [relayUrl, setRelayUrl] = useState("");
-  const [plcDirectoryUrl, setPlcDirectoryUrl] = useState("");
-  const [jetstreamUrl, setJetstreamUrl] = useState("");
-  const [oauthScopes, setOauthScopes] = useState("");
+  const [domainAuthority, setDomainAuthority] = useState<string | null>(null);
+  const [relayUrl, setRelayUrl] = useState<string | null>(null);
+  const [plcDirectoryUrl, setPlcDirectoryUrl] = useState<string | null>(null);
+  const [jetstreamUrl, setJetstreamUrl] = useState<string | null>(null);
+  const [oauthScopes, setOauthScopes] = useState<string | null>(null);
+  const [pendingAdminDids, setPendingAdminDids] = useState<string[]>([]);
+  const [isSubmittingAdmins, setIsSubmittingAdmins] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState("");
   const [alert, setAlert] = useState<{ type: "success" | "error"; message: string } | null>(null);
-
-  // Update form when settings load
-  useState(() => {
-    if (settings) {
-      setDomainAuthority(settings.domainAuthority);
-      setRelayUrl(settings.relayUrl);
-      setPlcDirectoryUrl(settings.plcDirectoryUrl);
-      setJetstreamUrl(settings.jetstreamUrl);
-      setOauthScopes(settings.oauthSupportedScopes);
-    }
-  });
 
   // Update settings mutation
   const updateMutation = useMutation({
@@ -83,13 +129,18 @@ export default function SettingsPage() {
   });
 
   const handleSaveSettings = () => {
+    const nextDomainAuthority = domainAuthority ?? settings?.domainAuthority ?? "";
+    const nextRelayURL = relayUrl ?? settings?.relayUrl ?? "";
+    const nextPLCDirectoryURL = plcDirectoryUrl ?? settings?.plcDirectoryUrl ?? "";
+    const nextJetstreamURL = jetstreamUrl ?? settings?.jetstreamUrl ?? "";
+    const nextOAuthScopes = oauthScopes ?? settings?.oauthSupportedScopes ?? "";
+
     updateMutation.mutate({
-      domainAuthority: domainAuthority || undefined,
-      relayUrl: relayUrl || undefined,
-      plcDirectoryUrl: plcDirectoryUrl || undefined,
-      jetstreamUrl: jetstreamUrl || undefined,
-      oauthSupportedScopes: oauthScopes || undefined,
-      adminDids: settings?.adminDids,
+      domainAuthority: nextDomainAuthority || undefined,
+      relayUrl: nextRelayURL || undefined,
+      plcDirectoryUrl: nextPLCDirectoryURL || undefined,
+      jetstreamUrl: nextJetstreamURL || undefined,
+      oauthSupportedScopes: nextOAuthScopes || undefined,
     });
   };
 
@@ -97,6 +148,66 @@ export default function SettingsPage() {
     if (resetConfirmation === "RESET") {
       resetMutation.mutate("RESET");
     }
+  };
+
+  const handleAddPendingDid = (did: string) => {
+    const normalized = did.trim();
+    if (!normalized) {
+      return;
+    }
+
+    const existingAdminDids = settings?.adminDids ?? [];
+    if (existingAdminDids.includes(normalized) || pendingAdminDids.includes(normalized)) {
+      return;
+    }
+
+    setPendingAdminDids((prev) => [...prev, normalized]);
+  };
+
+  const handleRemovePendingDid = (did: string) => {
+    setPendingAdminDids((prev) => prev.filter((item) => item !== did));
+  };
+
+  const handleSubmitPendingAdmins = async () => {
+    if (pendingAdminDids.length === 0) {
+      return;
+    }
+
+    setIsSubmittingAdmins(true);
+    setAlert(null);
+
+    const results = await Promise.allSettled(
+      pendingAdminDids.map((did) =>
+        graphqlClient.request<{ addAdmin: boolean }>(ADD_ADMIN, { did }),
+      ),
+    );
+
+    const failedDids = results
+      .map((result, index) => ({ result, did: pendingAdminDids[index] }))
+      .filter(({ result }) => result.status === "rejected")
+      .map(({ did }) => did);
+
+    const addedCount = pendingAdminDids.length - failedDids.length;
+
+    if (addedCount > 0) {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    }
+
+    setPendingAdminDids(failedDids);
+    setIsSubmittingAdmins(false);
+
+    if (failedDids.length === 0) {
+      setAlert({
+        type: "success",
+        message: `Added ${addedCount} admin DID${addedCount === 1 ? "" : "s"}.`,
+      });
+      return;
+    }
+
+    setAlert({
+      type: "error",
+      message: `Added ${addedCount} DID${addedCount === 1 ? "" : "s"}, ${failedDids.length} failed. Failed DIDs remain in the batch for retry.`,
+    });
   };
 
   if (isLoading) {
@@ -133,13 +244,13 @@ export default function SettingsPage() {
           Basic Settings
         </h3>
         <div className="rounded-xl border p-6 space-y-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
-          <Input
-            label="Domain Authority"
-            placeholder="your-domain.com"
-            value={domainAuthority}
-            onChange={(e) => setDomainAuthority(e.target.value)}
-            hint="The domain that owns this AppView instance"
-          />
+            <Input
+              label="Domain Authority"
+              placeholder="your-domain.com"
+              value={domainAuthority ?? settings?.domainAuthority ?? ""}
+              onChange={(e) => setDomainAuthority(e.target.value)}
+              hint="The domain that owns this AppView instance"
+            />
           <div className="flex justify-end pt-2">
             <Button
               variant="primary"
@@ -158,30 +269,30 @@ export default function SettingsPage() {
           External Services
         </h3>
         <div className="rounded-xl border p-6 space-y-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
-          <Input
-            label="Relay URL"
-            placeholder="https://relay1.us-west.bsky.network"
-            value={relayUrl}
-            onChange={(e) => setRelayUrl(e.target.value)}
-          />
-          <Input
-            label="PLC Directory URL"
-            placeholder="https://plc.directory"
-            value={plcDirectoryUrl}
-            onChange={(e) => setPlcDirectoryUrl(e.target.value)}
-          />
-          <Input
-            label="Jetstream URL"
-            placeholder="wss://jetstream2.us-west.bsky.network/subscribe"
-            value={jetstreamUrl}
-            onChange={(e) => setJetstreamUrl(e.target.value)}
-          />
-          <Input
-            label="OAuth Supported Scopes"
-            placeholder="atproto transition:generic"
-            value={oauthScopes}
-            onChange={(e) => setOauthScopes(e.target.value)}
-          />
+            <Input
+              label="Relay URL"
+              placeholder="https://relay1.us-west.bsky.network"
+              value={relayUrl ?? settings?.relayUrl ?? ""}
+              onChange={(e) => setRelayUrl(e.target.value)}
+            />
+            <Input
+              label="PLC Directory URL"
+              placeholder="https://plc.directory"
+              value={plcDirectoryUrl ?? settings?.plcDirectoryUrl ?? ""}
+              onChange={(e) => setPlcDirectoryUrl(e.target.value)}
+            />
+            <Input
+              label="Jetstream URL"
+              placeholder="wss://jetstream2.us-west.bsky.network/subscribe"
+              value={jetstreamUrl ?? settings?.jetstreamUrl ?? ""}
+              onChange={(e) => setJetstreamUrl(e.target.value)}
+            />
+            <Input
+              label="OAuth Supported Scopes"
+              placeholder="atproto transition:generic"
+              value={oauthScopes ?? settings?.oauthSupportedScopes ?? ""}
+              onChange={(e) => setOauthScopes(e.target.value)}
+            />
           <div className="flex justify-end pt-2">
             <Button
               variant="primary"
@@ -199,20 +310,94 @@ export default function SettingsPage() {
         <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
           Administrators
         </h3>
-        <div className="rounded-xl border p-6" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
-          {settings?.adminDids.length === 0 ? (
-            <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
-              No administrators configured
+        <div className="rounded-xl border p-6 space-y-6" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
+          <div className="space-y-3">
+            <p className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
+              Current administrators
             </p>
-          ) : (
-            <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
-              {settings?.adminDids.map((did) => (
-                <li key={did} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
-                  <code className="text-sm font-mono" style={{ color: "var(--secondary-foreground)" }}>{did}</code>
-                </li>
-              ))}
-            </ul>
-          )}
+            {adminDids.length === 0 ? (
+              <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
+                No administrators configured
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {isFetchingAdminProfiles ? (
+                  <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+                    Resolving Bluesky handles...
+                  </p>
+                ) : null}
+                <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+                  {adminDids.map((did) => {
+                    const profile = adminProfilesByDid.get(did);
+                    const displayName = profile?.displayName || profile?.handle || did;
+                    const handle = profile?.handle;
+
+                    return (
+                      <li key={did} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+                        <div className="min-w-0 flex items-center gap-3">
+                          {profile?.avatar ? (
+                            <Image
+                              src={profile.avatar}
+                              alt={handle ? `Avatar for @${handle}` : profile?.displayName ? `Avatar for ${profile.displayName}` : `Avatar for ${did}`}
+                              width={28}
+                              height={28}
+                              className="rounded-full"
+                            />
+                          ) : (
+                            <div
+                              className="flex size-7 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold"
+                              style={{ backgroundColor: "var(--muted)", color: "var(--muted-foreground)" }}
+                            >
+                              {(displayName || did).slice(0, 1).toUpperCase()}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium" style={{ color: "var(--foreground)" }}>
+                              {displayName}
+                            </p>
+                            {handle ? (
+                              <p className="truncate text-xs" style={{ color: "var(--muted-foreground)" }}>
+                                @{handle}
+                              </p>
+                            ) : null}
+                            <code className="truncate text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
+                              {did}
+                            </code>
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            <p className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
+              Add administrators (batch)
+            </p>
+            <AdminDidBatchPicker
+              existingAdminDids={settings?.adminDids ?? []}
+              pendingDids={pendingAdminDids}
+              onAddDid={handleAddPendingDid}
+              onRemoveDid={handleRemovePendingDid}
+              disabled={isSubmittingAdmins}
+            />
+            <div className="flex items-center justify-end">
+              <Button
+                variant="primary"
+                onClick={handleSubmitPendingAdmins}
+                disabled={pendingAdminDids.length === 0}
+                loading={isSubmittingAdmins}
+              >
+                Add selected admins
+              </Button>
+            </div>
+            <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+              Search Bluesky actors or paste a DID manually, queue multiple entries, then submit once.
+            </p>
+          </div>
         </div>
       </div>
 
