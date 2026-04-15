@@ -38,6 +38,7 @@ interface AdminDidBatchPickerProps {
 
 const EMPTY_ACTORS: SuggestedActor[] = [];
 const DID_PATTERN = /^did:[a-z0-9]+:[A-Za-z0-9._:%-]+(?:[:][A-Za-z0-9._:%-]+)*$/;
+const BLUESKY_TYPEAHEAD_ENDPOINT = "https://public.api.bsky.app/xrpc/app.bsky.actor.searchActorsTypeahead";
 
 export function AdminDidBatchPicker({
   existingAdminDids,
@@ -65,8 +66,11 @@ export function AdminDidBatchPicker({
         limit: "10",
       });
 
-      const response = await fetch(`/api/bluesky/search-actors-typeahead?${params.toString()}`, {
+      const response = await fetch(`${BLUESKY_TYPEAHEAD_ENDPOINT}?${params.toString()}`, {
         method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
       });
 
       if (!response.ok) {
