@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+const API_ENDPOINT = process.env.NEXT_PUBLIC_HYPERINDEX_URL || "http://localhost:8080";
 
 type Tab = "http" | "websocket";
 type Language = "javascript" | "python" | "curl";

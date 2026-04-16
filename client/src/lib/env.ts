@@ -33,6 +33,7 @@ export function resolvePublicClientURL(publicClientUrl: string, vercelBranchUrl:
 
 const vercelBranchUrl = process.env.NEXT_PUBLIC_VERCEL_BRANCH_URL || "";
 const publicClientUrl = process.env.NEXT_PUBLIC_CLIENT_URL || "";
+const nextPublicHyperindexUrl = process.env.NEXT_PUBLIC_HYPERINDEX_URL || "";
 
 export const env = {
   // Secret for encrypting session cookies (must be at least 32 chars)
@@ -47,6 +48,14 @@ export const env = {
   // Private JWK for confidential OAuth client (optional, for production)
   ATPROTO_JWK_PRIVATE: getEnv("ATPROTO_JWK_PRIVATE", ""),
 
-  // Hyperindex backend URL
-  HYPERINDEX_URL: getEnv("HYPERINDEX_URL", getEnv("HYPERGOAT_URL", "http://127.0.0.1:8080")),
+  // Client-facing URL baked into the JS bundle at build time
+  NEXT_PUBLIC_HYPERINDEX_URL: normalizePublicURL(nextPublicHyperindexUrl),
+
+  // Server-side only — use this for private/internal network endpoints (e.g. Railway private networking).
+  // Falls back to NEXT_PUBLIC_HYPERINDEX_URL so you only need one var if both URLs are the same.
+  HYPERINDEX_URL: normalizePublicURL(
+    process.env.HYPERINDEX_URL ||
+    nextPublicHyperindexUrl ||
+    "http://127.0.0.1:8080"
+  ),
 };

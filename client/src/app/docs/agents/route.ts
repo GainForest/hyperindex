@@ -1,5 +1,6 @@
-const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-const WS_ENDPOINT = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace("https://", "wss://").replace("http://", "ws://");
+import { env } from "@/lib/env";
+const API_ENDPOINT = env.NEXT_PUBLIC_HYPERINDEX_URL || "http://localhost:8080";
+const WS_ENDPOINT = API_ENDPOINT.replace("https://", "wss://").replace("http://", "ws://");
 
 const agentsMd = `# Hyperindex API - Complete Integration Guide for AI Agents
 

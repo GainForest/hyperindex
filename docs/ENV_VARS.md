@@ -9,8 +9,8 @@ It also calls out legacy aliases and config drift discovered during a repo audit
 - `INDEXER_URL` is **not used** anywhere in this repository.
 - Backend canonical public URL is `EXTERNAL_BASE_URL`.
 - Client uses both:
-  - `NEXT_PUBLIC_API_URL` (build-time/public-facing)
-  - `HYPERINDEX_URL` (runtime/server-side)
+  - `NEXT_PUBLIC_HYPERINDEX_URL` (build-time/public-facing)
+  - `HYPERINDEX_URL` (runtime/server-side, falls back to `NEXT_PUBLIC_HYPERINDEX_URL`)
 
 ---
 
@@ -80,9 +80,8 @@ Primary env parser: `client/src/lib/env.ts`
 
 | Variable | Required | Why it exists |
 |---|---:|---|
-| `NEXT_PUBLIC_API_URL` | Yes for non-local deploys | Build-time/public API URL used by Next rewrites and docs/examples shown in UI. |
-| `HYPERINDEX_URL` | Yes for non-local deploys | Runtime server-side URL used by Next API proxy routes and SSR backend calls. |
-| `HYPERGOAT_URL` | No | Legacy fallback alias for `HYPERINDEX_URL`. |
+| `NEXT_PUBLIC_HYPERINDEX_URL` | Yes for non-local deploys | Build-time/public API URL baked into the JS bundle. Used by Next rewrites and docs/examples shown in UI. |
+| `HYPERINDEX_URL` | No | Server-side only — prefer this for private/internal network endpoints (e.g. Railway private networking). Falls back to `NEXT_PUBLIC_HYPERINDEX_URL`. |
 
 ### OAuth and session
 
@@ -101,7 +100,8 @@ Primary env parser: `client/src/lib/env.ts`
 | Name | Status | Notes |
 |---|---|---|
 | `INDEXER_URL` | Unused | No references found in code. |
-| `HYPERGOAT_URL` | Legacy alias | Still supported as fallback to avoid breaking older configs. |
+| `NEXT_PUBLIC_API_URL` | Removed | Renamed to `NEXT_PUBLIC_HYPERINDEX_URL`. |
+| `HYPERGOAT_URL` | Removed | Dropped entirely. Use `HYPERINDEX_URL` or `NEXT_PUBLIC_HYPERINDEX_URL`. |
 | `PUBLIC_URL` | Docs/skill drift | Referenced in deployment skill docs, but app code expects `NEXT_PUBLIC_CLIENT_URL`. |
 
 ---
@@ -111,5 +111,5 @@ Primary env parser: `client/src/lib/env.ts`
 The Railway deployment skill should stay aligned with runtime code expectations:
 
 - Prefer `NEXT_PUBLIC_CLIENT_URL` over `PUBLIC_URL` in frontend deployment instructions.
-- Keep both `NEXT_PUBLIC_API_URL` (build-time) and `HYPERINDEX_URL` (runtime) documented.
+- Keep both `NEXT_PUBLIC_HYPERINDEX_URL` (build-time/public) and `HYPERINDEX_URL` (runtime/private) documented.
 - Keep backend `EXTERNAL_BASE_URL` explicitly scheme-qualified (`https://...`).

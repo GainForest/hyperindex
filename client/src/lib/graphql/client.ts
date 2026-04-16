@@ -1,4 +1,5 @@
 import { GraphQLClient } from "graphql-request";
+import { env } from "@/lib/env";
 
 // Get the base URL for API requests
 // - In browser: use current origin
@@ -12,7 +13,7 @@ function getBaseUrl(): string {
 
 // Get Hyperindex URL for direct backend access (public API)
 function getHyperindexUrl(): string {
-  return process.env.HYPERINDEX_URL || process.env.HYPERGOAT_URL || "http://127.0.0.1:8080";
+  return env.HYPERINDEX_URL;
 }
 
 // Lazy-initialized clients to ensure proper URL detection after hydration

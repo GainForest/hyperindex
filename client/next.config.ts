@@ -1,5 +1,12 @@
 import type { NextConfig } from "next";
 
+function normalizeUrl(url: string): string {
+  const trimmed = url.trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
+  return `https://${trimmed}`;
+}
+
 const nextConfig: NextConfig = {
   // Enable standalone output for Docker deployment
   output: "standalone",
@@ -15,7 +22,7 @@ const nextConfig: NextConfig = {
   },
   // Proxy API requests to Hyperindex backend during development
   async rewrites() {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+    const apiUrl = normalizeUrl(process.env.NEXT_PUBLIC_HYPERINDEX_URL || "http://localhost:8080");
     return [
       {
         source: "/admin/graphql",

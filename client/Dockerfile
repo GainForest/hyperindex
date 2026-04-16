@@ -4,8 +4,9 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 # Accept build-time env vars for Next.js (NEXT_PUBLIC_* are inlined at build time)
-ARG NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# NEXT_PUBLIC_HYPERINDEX_URL: public/client-facing URL baked into the JS bundle
+ARG NEXT_PUBLIC_HYPERINDEX_URL
+ENV NEXT_PUBLIC_HYPERINDEX_URL=$NEXT_PUBLIC_HYPERINDEX_URL
 
 # Copy package files
 COPY package.json package-lock.json* ./
