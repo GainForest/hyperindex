@@ -2,7 +2,9 @@ package tap_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/GainForest/hypergoat/internal/graphql/subscription"
@@ -469,6 +471,94 @@ func TestIndexHandler_HandleIdentity_UpdatesHandle(t *testing.T) {
 	}
 	if actor.Handle != "frank-new.bsky.social" {
 		t.Errorf("expected updated handle %q, got %q", "frank-new.bsky.social", actor.Handle)
+	}
+}
+
+func TestIndexHandler_HandleIdentity_PurgePolicy(t *testing.T) {
+	tests := []struct {
+		name       string
+		isActive   bool
+		status     string
+		wantPurged bool
+	}{
+		{name: "active status keeps data", isActive: true, status: "active", wantPurged: false},
+		{name: "deleted status purges", isActive: false, status: "deleted", wantPurged: true},
+		{name: "deactivated status purges", isActive: false, status: "deactivated", wantPurged: true},
+		{name: "suspended status purges", isActive: true, status: "suspended", wantPurged: true},
+		{name: "takendown status purges", isActive: true, status: "takendown", wantPurged: true},
+		{name: "mixed-case status purges", isActive: true, status: "Suspended", wantPurged: true},
+		{name: "inactive unknown status purges", isActive: false, status: "mystery", wantPurged: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, db, _ := setupHandler(t)
+			ctx := context.Background()
+
+			did := "did:plc:testpurge"
+			if err := db.Actors.Upsert(ctx, did, "old-handle.bsky.social"); err != nil {
+				t.Fatalf("failed to seed actor: %v", err)
+			}
+
+			_, err := db.Records.Insert(ctx,
+				"at://did:plc:testpurge/app.certified.actor.profile/p1",
+				"bafyreitest1",
+				did,
+				"app.certified.actor.profile",
+				`{"displayName":"Seed"}`,
+			)
+			if err != nil {
+				t.Fatalf("failed to seed profile record: %v", err)
+			}
+
+			_, err = db.Records.Insert(ctx,
+				"at://did:plc:testpurge/app.certified.actor.organization/o1",
+				"bafyreitest2",
+				did,
+				"app.certified.actor.organization",
+				`{"organizationType":"ngo"}`,
+			)
+			if err != nil {
+				t.Fatalf("failed to seed organization record: %v", err)
+			}
+
+			event := &tap.IdentityEvent{
+				DID:      did,
+				Handle:   "new-handle.bsky.social",
+				IsActive: tt.isActive,
+				Status:   tt.status,
+			}
+
+			if err := handler.HandleIdentity(ctx, event); err != nil {
+				t.Fatalf("HandleIdentity returned error: %v", err)
+			}
+
+			records, err := db.Records.GetByDID(ctx, did)
+			if err != nil {
+				t.Fatalf("GetByDID(records) error: %v", err)
+			}
+
+			actor, actorErr := db.Actors.GetByDID(ctx, did)
+			if tt.wantPurged {
+				if len(records) != 0 {
+					t.Fatalf("expected records purged, got %d", len(records))
+				}
+				if !errors.Is(actorErr, sql.ErrNoRows) {
+					t.Fatalf("expected actor deleted (sql.ErrNoRows), got actor=%v err=%v", actor, actorErr)
+				}
+				return
+			}
+
+			if len(records) == 0 {
+				t.Fatal("expected records to remain for active identity")
+			}
+			if actorErr != nil {
+				t.Fatalf("expected actor to remain, got error: %v", actorErr)
+			}
+			if actor.Handle != "new-handle.bsky.social" {
+				t.Fatalf("expected updated handle %q, got %q", "new-handle.bsky.social", actor.Handle)
+			}
+		})
 	}
 }
 

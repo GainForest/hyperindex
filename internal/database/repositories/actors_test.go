@@ -240,6 +240,46 @@ func TestActorsRepository_DeleteAll(t *testing.T) {
 	}
 }
 
+func TestActorsRepository_DeleteByDID(t *testing.T) {
+	t.Run("deletes only target actor", func(t *testing.T) {
+		repo := setupActorsTest(t)
+		ctx := context.Background()
+
+		if err := repo.Upsert(ctx, "did:plc:alice", "alice.bsky.social"); err != nil {
+			t.Fatalf("failed to upsert alice: %v", err)
+		}
+		if err := repo.Upsert(ctx, "did:plc:bob", "bob.bsky.social"); err != nil {
+			t.Fatalf("failed to upsert bob: %v", err)
+		}
+
+		if err := repo.DeleteByDID(ctx, "did:plc:alice"); err != nil {
+			t.Fatalf("DeleteByDID() error = %v", err)
+		}
+
+		_, err := repo.GetByDID(ctx, "did:plc:alice")
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("expected sql.ErrNoRows for deleted actor, got %v", err)
+		}
+
+		bob, err := repo.GetByDID(ctx, "did:plc:bob")
+		if err != nil {
+			t.Fatalf("expected bob actor to remain, got error: %v", err)
+		}
+		if bob.DID != "did:plc:bob" {
+			t.Fatalf("bob.DID = %q, want %q", bob.DID, "did:plc:bob")
+		}
+	})
+
+	t.Run("non-existing did is no-op", func(t *testing.T) {
+		repo := setupActorsTest(t)
+		ctx := context.Background()
+
+		if err := repo.DeleteByDID(ctx, "did:plc:does-not-exist"); err != nil {
+			t.Fatalf("DeleteByDID(non-existing) should not error, got %v", err)
+		}
+	})
+}
+
 func TestActorsRepository_Exists(t *testing.T) {
 	repo := setupActorsTest(t)
 	ctx := context.Background()

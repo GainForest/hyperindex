@@ -662,6 +662,119 @@ func TestRecordsRepository_Delete(t *testing.T) {
 	})
 }
 
+func TestRecordsRepository_DeleteByDID(t *testing.T) {
+	t.Run("deletes only target did records", func(t *testing.T) {
+		repo := setupRecordsTest(t)
+		ctx := context.Background()
+
+		insertTestRecord(t, repo,
+			"at://did:plc:alice/app.certified.actor.profile/p1",
+			"bafyreialice1",
+			"did:plc:alice",
+			"app.certified.actor.profile",
+			`{"displayName":"Alice"}`,
+		)
+		insertTestRecord(t, repo,
+			"at://did:plc:alice/app.certified.actor.organization/o1",
+			"bafyreialice2",
+			"did:plc:alice",
+			"app.certified.actor.organization",
+			`{"organizationType":"ngo"}`,
+		)
+		insertTestRecord(t, repo,
+			"at://did:plc:bob/app.certified.actor.profile/p2",
+			"bafyreibob1",
+			"did:plc:bob",
+			"app.certified.actor.profile",
+			`{"displayName":"Bob"}`,
+		)
+
+		if err := repo.DeleteByDID(ctx, "did:plc:alice"); err != nil {
+			t.Fatalf("DeleteByDID() error = %v", err)
+		}
+
+		aliceRecords, err := repo.GetByDID(ctx, "did:plc:alice")
+		if err != nil {
+			t.Fatalf("GetByDID(alice) error = %v", err)
+		}
+		if len(aliceRecords) != 0 {
+			t.Fatalf("expected 0 alice records after purge, got %d", len(aliceRecords))
+		}
+
+		bobRecords, err := repo.GetByDID(ctx, "did:plc:bob")
+		if err != nil {
+			t.Fatalf("GetByDID(bob) error = %v", err)
+		}
+		if len(bobRecords) != 1 {
+			t.Fatalf("expected 1 bob record, got %d", len(bobRecords))
+		}
+	})
+
+	t.Run("non-existing did is no-op", func(t *testing.T) {
+		repo := setupRecordsTest(t)
+		ctx := context.Background()
+
+		if err := repo.DeleteByDID(ctx, "did:plc:does-not-exist"); err != nil {
+			t.Fatalf("DeleteByDID(non-existing) should not error, got %v", err)
+		}
+	})
+}
+
+func TestRecordsRepository_PurgeActorData(t *testing.T) {
+	env := setupRecordsTestEnv(t)
+	ctx := context.Background()
+
+	if err := env.db.Actors.Upsert(ctx, "did:plc:alice", "alice.bsky.social"); err != nil {
+		t.Fatalf("failed to seed alice actor: %v", err)
+	}
+	if err := env.db.Actors.Upsert(ctx, "did:plc:bob", "bob.bsky.social"); err != nil {
+		t.Fatalf("failed to seed bob actor: %v", err)
+	}
+
+	insertTestRecord(t, env.repo,
+		"at://did:plc:alice/app.certified.actor.profile/p1",
+		"bafyreialice1",
+		"did:plc:alice",
+		"app.certified.actor.profile",
+		`{"displayName":"Alice"}`,
+	)
+	insertTestRecord(t, env.repo,
+		"at://did:plc:bob/app.certified.actor.profile/p1",
+		"bafyreibob1",
+		"did:plc:bob",
+		"app.certified.actor.profile",
+		`{"displayName":"Bob"}`,
+	)
+
+	if err := env.repo.PurgeActorData(ctx, "did:plc:alice"); err != nil {
+		t.Fatalf("PurgeActorData() error = %v", err)
+	}
+
+	aliceRecords, err := env.repo.GetByDID(ctx, "did:plc:alice")
+	if err != nil {
+		t.Fatalf("GetByDID(alice) error = %v", err)
+	}
+	if len(aliceRecords) != 0 {
+		t.Fatalf("expected 0 alice records after purge, got %d", len(aliceRecords))
+	}
+
+	if _, err := env.db.Actors.GetByDID(ctx, "did:plc:alice"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected alice actor deleted (sql.ErrNoRows), got %v", err)
+	}
+
+	bobRecords, err := env.repo.GetByDID(ctx, "did:plc:bob")
+	if err != nil {
+		t.Fatalf("GetByDID(bob) error = %v", err)
+	}
+	if len(bobRecords) != 1 {
+		t.Fatalf("expected 1 bob record retained, got %d", len(bobRecords))
+	}
+
+	if _, err := env.db.Actors.GetByDID(ctx, "did:plc:bob"); err != nil {
+		t.Fatalf("expected bob actor retained, got %v", err)
+	}
+}
+
 func TestRecordsRepository_DeleteAll(t *testing.T) {
 	repo := setupRecordsTest(t)
 	ctx := context.Background()
@@ -721,6 +834,39 @@ func TestRecordsRepository_GetCount(t *testing.T) {
 				t.Errorf("GetCount() = %d, want %d", count, tt.wantCount)
 			}
 		})
+	}
+}
+
+func TestRecordsRepository_GetCountByDID(t *testing.T) {
+	repo := setupRecordsTest(t)
+	ctx := context.Background()
+
+	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/1", "cid1", "did:plc:alice", "app.bsky.feed.post", `{"text":"a1"}`)
+	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/2", "cid2", "did:plc:alice", "app.bsky.feed.post", `{"text":"a2"}`)
+	insertTestRecord(t, repo, "at://did:plc:bob/app.bsky.feed.post/1", "cid3", "did:plc:bob", "app.bsky.feed.post", `{"text":"b1"}`)
+
+	aliceCount, err := repo.GetCountByDID(ctx, "did:plc:alice")
+	if err != nil {
+		t.Fatalf("GetCountByDID(alice) error: %v", err)
+	}
+	if aliceCount != 2 {
+		t.Fatalf("GetCountByDID(alice) = %d, want 2", aliceCount)
+	}
+
+	bobCount, err := repo.GetCountByDID(ctx, "did:plc:bob")
+	if err != nil {
+		t.Fatalf("GetCountByDID(bob) error: %v", err)
+	}
+	if bobCount != 1 {
+		t.Fatalf("GetCountByDID(bob) = %d, want 1", bobCount)
+	}
+
+	missingCount, err := repo.GetCountByDID(ctx, "did:plc:missing")
+	if err != nil {
+		t.Fatalf("GetCountByDID(missing) error: %v", err)
+	}
+	if missingCount != 0 {
+		t.Fatalf("GetCountByDID(missing) = %d, want 0", missingCount)
 	}
 }
 

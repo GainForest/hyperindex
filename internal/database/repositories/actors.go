@@ -192,6 +192,13 @@ func (r *ActorsRepository) DeleteAll(ctx context.Context) error {
 	return err
 }
 
+// DeleteByDID removes an actor by DID.
+func (r *ActorsRepository) DeleteByDID(ctx context.Context, did string) error {
+	sqlStr := fmt.Sprintf("DELETE FROM actor WHERE did = %s", r.db.Placeholder(1))
+	_, err := r.db.Exec(ctx, sqlStr, []database.Value{database.Text(did)})
+	return err
+}
+
 // Exists checks if an actor exists by DID.
 func (r *ActorsRepository) Exists(ctx context.Context, did string) (bool, error) {
 	var count int64

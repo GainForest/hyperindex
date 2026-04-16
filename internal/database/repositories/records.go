@@ -929,6 +929,38 @@ func (r *RecordsRepository) Delete(ctx context.Context, uri string) error {
 	return err
 }
 
+// DeleteByDID removes all records for a specific DID.
+func (r *RecordsRepository) DeleteByDID(ctx context.Context, did string) error {
+	sqlStr := fmt.Sprintf("DELETE FROM record WHERE did = %s", r.db.Placeholder(1))
+	_, err := r.db.Exec(ctx, sqlStr, []database.Value{database.Text(did)})
+	return err
+}
+
+// PurgeActorData atomically removes all records and the actor row for a DID.
+func (r *RecordsRepository) PurgeActorData(ctx context.Context, did string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Rollback is a no-op after successful commit.
+
+	deleteRecordsSQL := fmt.Sprintf("DELETE FROM record WHERE did = %s", r.db.Placeholder(1))
+	if _, err := tx.ExecContext(ctx, deleteRecordsSQL, did); err != nil {
+		return fmt.Errorf("failed to delete records by did: %w", err)
+	}
+
+	deleteActorSQL := fmt.Sprintf("DELETE FROM actor WHERE did = %s", r.db.Placeholder(1))
+	if _, err := tx.ExecContext(ctx, deleteActorSQL, did); err != nil {
+		return fmt.Errorf("failed to delete actor by did: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
 // DeleteAll removes all records.
 func (r *RecordsRepository) DeleteAll(ctx context.Context) error {
 	_, err := r.db.Exec(ctx, "DELETE FROM record", nil)
@@ -947,6 +979,14 @@ func (r *RecordsRepository) GetCollectionCount(ctx context.Context, collection s
 	sqlStr := fmt.Sprintf("SELECT COUNT(*) FROM record WHERE collection = %s", r.db.Placeholder(1))
 	var count int64
 	err := r.db.QueryRow(ctx, sqlStr, []database.Value{database.Text(collection)}, &count)
+	return count, err
+}
+
+// GetCountByDID returns the number of records for a specific DID.
+func (r *RecordsRepository) GetCountByDID(ctx context.Context, did string) (int64, error) {
+	sqlStr := fmt.Sprintf("SELECT COUNT(*) FROM record WHERE did = %s", r.db.Placeholder(1))
+	var count int64
+	err := r.db.QueryRow(ctx, sqlStr, []database.Value{database.Text(did)}, &count)
 	return count, err
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/GainForest/hypergoat/internal/database/repositories"
@@ -108,5 +109,35 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 
 // HandleIdentity processes an identity event by updating the actor's handle.
 func (h *IndexHandler) HandleIdentity(ctx context.Context, event *IdentityEvent) error {
+	if shouldPurgeIdentity(event) {
+		if err := h.records.DeleteByDID(ctx, event.DID); err != nil {
+			return fmt.Errorf("failed to delete records by did: %w", err)
+		}
+		if err := h.actors.DeleteByDID(ctx, event.DID); err != nil {
+			return fmt.Errorf("failed to delete actor by did: %w", err)
+		}
+
+		slog.Info("Purged identity from index",
+			"did", event.DID,
+			"is_active", event.IsActive,
+			"status", event.Status,
+		)
+		return nil
+	}
+
 	return h.actors.Upsert(ctx, event.DID, event.Handle)
+}
+
+func shouldPurgeIdentity(event *IdentityEvent) bool {
+	if !event.IsActive {
+		return true
+	}
+
+	status := strings.ToLower(strings.TrimSpace(event.Status))
+	switch status {
+	case "deleted", "deactivated", "suspended", "takendown":
+		return true
+	default:
+		return false
+	}
 }
