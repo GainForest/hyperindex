@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { Agent } from "@atproto/api";
 import { getGlobalOAuthClient } from "@/lib/auth/client";
 import { getRawSession } from "@/lib/session";
+import { env } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -76,16 +77,18 @@ export async function GET(request: NextRequest) {
     await session.save();
 
     // Redirect to the page the user was on before login
+    // Use PUBLIC_CLIENT_URL to avoid redirecting to the internal Railway address (0.0.0.0:8080)
     const requestUrl = new URL(request.url);
-    const origin = requestUrl.origin;
+    const baseUrl = env.PUBLIC_CLIENT_URL || requestUrl.origin;
     const redirectPath = returnTo.startsWith("/") ? returnTo : "/";
 
-    return Response.redirect(`${origin}${redirectPath}`, 303);
+    return Response.redirect(`${baseUrl}${redirectPath}`, 303);
   } catch (error) {
     console.error("OAuth callback failed:", error);
     const requestUrl = new URL(request.url);
+    const baseUrl = env.PUBLIC_CLIENT_URL || requestUrl.origin;
     return Response.redirect(
-      `${requestUrl.origin}/?error=${encodeURIComponent("Authentication failed - please try again")}`,
+      `${baseUrl}/?error=${encodeURIComponent("Authentication failed - please try again")}`,
       303
     );
   }
