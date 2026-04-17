@@ -12,14 +12,14 @@ function getPort(): number {
   return port ? parseInt(port, 10) : 3000;
 }
 
-function getOrigin(value: string): string {
+function getHostname(value: string): string {
   const normalized = normalizePublicURL(value);
   if (!normalized) {
     return "";
   }
 
   try {
-    return new URL(normalized).origin;
+    return new URL(normalized).hostname;
   } catch {
     return "";
   }
@@ -49,12 +49,12 @@ export function validateHyperindexURLConfiguration(
   vercelBranchUrl: string,
   hyperindexUrl: string,
 ): void {
-  const clientOrigin = getOrigin(resolvePublicClientURL(publicClientUrl, vercelBranchUrl));
-  const hyperindexOrigin = getOrigin(hyperindexUrl);
+  const clientHostname = getHostname(resolvePublicClientURL(publicClientUrl, vercelBranchUrl));
+  const hyperindexHostname = getHostname(hyperindexUrl);
 
-  if (clientOrigin && hyperindexOrigin && clientOrigin === hyperindexOrigin) {
+  if (clientHostname && hyperindexHostname && clientHostname === hyperindexHostname) {
     throw new Error(
-      `Invalid config: HYPERINDEX_URL / NEXT_PUBLIC_HYPERINDEX_URL points to the client origin (${clientOrigin}). ` +
+      `Invalid config: HYPERINDEX_URL / NEXT_PUBLIC_HYPERINDEX_URL points to the client hostname (${clientHostname}). ` +
         `It must point to the backend/Hyperindex URL, not the frontend.`,
     );
   }

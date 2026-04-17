@@ -33,13 +33,17 @@ describe("resolvePublicClientURL", () => {
 });
 
 describe("validateHyperindexURLConfiguration", () => {
-  it("throws when the backend url matches the client origin", () => {
+  it("throws when the backend hostname matches the client hostname", () => {
     expect(() =>
-      validateHyperindexURLConfiguration("www.dev.hi.gainforest.app", "", "https://www.dev.hi.gainforest.app"),
-    ).toThrow(/points to the client origin/);
+      validateHyperindexURLConfiguration(
+        "www.dev.hi.gainforest.app",
+        "",
+        "https://www.dev.hi.gainforest.app/graphql",
+      ),
+    ).toThrow(/points to the client hostname/);
   });
 
-  it("allows different backend and client origins", () => {
+  it("allows different backend and client hostnames", () => {
     expect(() =>
       validateHyperindexURLConfiguration(
         "www.dev.hi.gainforest.app",
