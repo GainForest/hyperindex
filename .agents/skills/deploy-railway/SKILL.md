@@ -98,12 +98,12 @@ railway up --path-as-root client/ -s frontend -d
 |----------|-------|
 | `PORT` | `3000` |
 | `NEXT_PUBLIC_CLIENT_URL` | `https://hi.gainforest.app` |
-| `NEXT_PUBLIC_API_URL` | `https://api.hi.gainforest.app` |
+| `NEXT_PUBLIC_HYPERINDEX_URL` | `https://api.hi.gainforest.app` |
 | `HYPERINDEX_URL` | `https://api.hi.gainforest.app` |
 | `COOKIE_SECRET` | *(set on Railway, do not change)* |
 | `ATPROTO_JWK_PRIVATE` | *(ES256 JWK, set on Railway, do not change)* |
 
-**Note:** `NEXT_PUBLIC_API_URL` is a build-time variable (inlined by Next.js during `npm run build`). The `client/Dockerfile` declares `ARG NEXT_PUBLIC_API_URL` so Railway passes it during Docker build.
+**Note:** `NEXT_PUBLIC_HYPERINDEX_URL` is a build-time variable (inlined by Next.js during `npm run build`). The `client/Dockerfile` declares `ARG NEXT_PUBLIC_HYPERINDEX_URL` so Railway passes it during Docker build. If you set the old variable name instead, the frontend can fall back to `http://127.0.0.1:8080`, which breaks production.
 
 ## Troubleshooting
 
