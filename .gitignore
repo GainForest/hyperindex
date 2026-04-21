@@ -55,7 +55,30 @@ logs/
 # Temporary files
 tmp/
 temp/
-.beads/
+
+# Beads local/runtime artifacts
+.beads/*.db
+.beads/*.db?*
+.beads/*.db-journal
+.beads/*.db-wal
+.beads/*.db-shm
+.beads/daemon.log
+.beads/daemon.lock
+.beads/daemon.pid
+.beads/last-touched
+.beads/.jsonl.lock
+.beads/.local_version
+.beads/sync-state.json
+.beads/beads.base.jsonl
+.beads/beads.base.meta.json
+.beads/beads.left.jsonl
+.beads/beads.left.meta.json
+.beads/beads.right.jsonl
+.beads/beads.right.meta.json
+.beads/.sync.lock
+.beads/export-state/
+.beads/redirect
+.beads/bd.sock
 
 # AI tools
 .opencode/
