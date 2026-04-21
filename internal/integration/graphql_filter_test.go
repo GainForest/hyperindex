@@ -6,6 +6,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/graphql-go/graphql"
@@ -32,7 +33,15 @@ const testLexiconJSON = `{
 					"score": {"type": "integer"},
 					"createdAt": {"type": "string", "format": "datetime"},
 					"active": {"type": "boolean"},
-					"optionalField": {"type": "string"}
+					"optionalField": {"type": "string"},
+					"field1": {"type": "string"},
+					"field2": {"type": "string"},
+					"field3": {"type": "string"},
+					"field4": {"type": "string"},
+					"field5": {"type": "string"},
+					"field6": {"type": "string"},
+					"field7": {"type": "string"},
+					"field8": {"type": "string"}
 				}
 			}
 		}
@@ -197,6 +206,14 @@ func getNodeField(t *testing.T, edge interface{}, field string) interface{} {
 		t.Fatalf("Expected node map, got %T", edgeMap["node"])
 	}
 	return node[field]
+}
+
+func buildQuotedValues(prefix string, count int) string {
+	values := make([]string, count)
+	for i := range values {
+		values[i] = fmt.Sprintf("%q", fmt.Sprintf("%s-%d", prefix, i))
+	}
+	return strings.Join(values, ", ")
 }
 
 // TestFilterSort_FilterByStringEq tests filtering by string equality.
@@ -844,6 +861,36 @@ func TestFilterSort_TotalCountWithFilter(t *testing.T) {
 	edges := conn["edges"].([]interface{})
 	if len(edges) != 3 {
 		t.Errorf("Expected 3 edges, got %d", len(edges))
+	}
+}
+
+// TestFilterSort_TotalCountAggregateOverflow tests that large filtered totalCount queries fail cleanly.
+func TestFilterSort_TotalCountAggregateOverflow(t *testing.T) {
+	env := setupFilterTestEnv(t)
+
+	fields := []string{"title", "optionalField", "field1", "field2", "field3", "field4", "field5", "field6", "field7", "field8"}
+	clauses := make([]string, len(fields))
+	for i, field := range fields {
+		clauses[i] = fmt.Sprintf("%s: {in: [%s]}", field, buildQuotedValues(field, 100))
+	}
+
+	query := fmt.Sprintf(`{
+		testCollection(where: {%s}) {
+			totalCount
+		}
+	}`, strings.Join(clauses, ", "))
+
+	result := env.runQuery(query)
+	if len(result.Errors) == 0 {
+		t.Fatal("Expected GraphQL error for aggregate parameter overflow, got none")
+	}
+
+	message := result.Errors[0].Message
+	if !strings.Contains(message, "sqlite query parameter count exceeds maximum allowed") {
+		t.Fatalf("Expected application aggregate-limit error, got %q", message)
+	}
+	if strings.Contains(message, "too many SQL variables") {
+		t.Fatalf("Expected application-level error, got raw SQLite error %q", message)
 	}
 }
 

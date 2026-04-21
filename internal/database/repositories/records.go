@@ -40,6 +40,9 @@ const (
 	MaxFilterConditions = 20
 )
 
+// ErrSQLiteAggregateParameterLimit indicates a query exceeded SQLite's bound parameter limit.
+var ErrSQLiteAggregateParameterLimit = errors.New("sqlite query parameter count exceeds maximum allowed")
+
 // Record represents an AT Protocol record stored in the database.
 type Record struct {
 	URI        string
@@ -125,11 +128,7 @@ func (r *RecordsRepository) validateSQLiteAggregateParameterCount(paramCount int
 	}
 
 	if paramCount > SQLiteAggregateParameterLimit {
-		return fmt.Errorf(
-			"sqlite query parameter count %d exceeds maximum allowed %d",
-			paramCount,
-			SQLiteAggregateParameterLimit,
-		)
+		return fmt.Errorf("%w: %d exceeds maximum allowed %d", ErrSQLiteAggregateParameterLimit, paramCount, SQLiteAggregateParameterLimit)
 	}
 
 	return nil
