@@ -21,15 +21,18 @@ const (
 	// SQLParamBatchSize is the batch size for IN-clause queries, kept under SQLite's 999 param limit.
 	SQLParamBatchSize = 900
 
+	// SQLiteAggregateParameterLimit is SQLite's hard per-query parameter limit.
+	SQLiteAggregateParameterLimit = 999
+
 	// DefaultIterateBatchSize is the default batch size for IterateAll when none specified.
 	DefaultIterateBatchSize = 1000
 
 	// SearchTimeout is the maximum duration for a search query.
 	SearchTimeout = 10 * time.Second
 
-	// MaxINListSize is the maximum number of values allowed in an IN filter clause.
-	// SQLite has a hard 999 parameter limit (SQLITE_MAX_VARIABLE_NUMBER).
-	// We cap well below that to leave room for other query parameters.
+	// MaxINListSize is the maximum number of values allowed in a single IN filter clause.
+	// It does not, by itself, guarantee the overall query stays within SQLite's
+	// aggregate parameter limit when combined with other bound arguments.
 	MaxINListSize = 100
 
 	// MaxFilterConditions is the maximum number of individual filter conditions allowed per query.
@@ -112,6 +115,24 @@ type RecordsRepository struct {
 // NewRecordsRepository creates a new records repository.
 func NewRecordsRepository(db database.Executor) *RecordsRepository {
 	return &RecordsRepository{db: db}
+}
+
+// validateSQLiteAggregateParameterCount ensures SQLite queries stay within the
+// hard per-query parameter limit. Non-SQLite dialects are not capped here.
+func (r *RecordsRepository) validateSQLiteAggregateParameterCount(paramCount int) error {
+	if r.db.Dialect() != database.SQLite {
+		return nil
+	}
+
+	if paramCount > SQLiteAggregateParameterLimit {
+		return fmt.Errorf(
+			"sqlite query parameter count %d exceeds maximum allowed %d",
+			paramCount,
+			SQLiteAggregateParameterLimit,
+		)
+	}
+
+	return nil
 }
 
 // recordColumns returns the columns to select based on dialect.
@@ -475,24 +496,26 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 
 // buildDIDFilterClause builds a SQL WHERE clause fragment for a DIDFilter.
 // startPlaceholder is the 1-based index of the first placeholder to use.
-// Returns the clause string (without leading "AND"), the parameter values, and
-// the number of placeholders consumed. Returns empty string and nil params if
-// the filter is empty.
-func (r *RecordsRepository) buildDIDFilterClause(f DIDFilter, startPlaceholder int) (string, []database.Value, int) {
+// Returns the clause string (without leading "AND"), the parameter values, the
+// number of placeholders consumed, and any validation error.
+// Returns empty string and nil params if the filter is empty.
+func (r *RecordsRepository) buildDIDFilterClause(f DIDFilter, startPlaceholder int) (string, []database.Value, int, error) {
 	if f.IsEmpty() {
-		return "", nil, 0
+		return "", nil, 0, nil
 	}
 
 	// EQ takes precedence over IN when both are set.
 	if f.EQ != "" {
 		clause := fmt.Sprintf("did = %s", r.db.Placeholder(startPlaceholder))
-		return clause, []database.Value{database.Text(f.EQ)}, 1
+		return clause, []database.Value{database.Text(f.EQ)}, 1, nil
 	}
 
 	// IN list
 	if len(f.IN) == 0 {
-		// Empty IN list — always false
-		return "1 = 0", nil, 0
+		return "", nil, 0, nil
+	}
+	if len(f.IN) > MaxINListSize {
+		return "", nil, 0, fmt.Errorf("DID filter IN list exceeds maximum of %d values", MaxINListSize)
 	}
 	placeholders := r.db.Placeholders(len(f.IN), startPlaceholder)
 	clause := fmt.Sprintf("did IN (%s)", placeholders)
@@ -500,7 +523,7 @@ func (r *RecordsRepository) buildDIDFilterClause(f DIDFilter, startPlaceholder i
 	for i, did := range f.IN {
 		params[i] = database.Text(did)
 	}
-	return clause, params, len(f.IN)
+	return clause, params, len(f.IN), nil
 }
 
 // toDBValue converts an interface{} value to a database.Value.
@@ -574,7 +597,9 @@ func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
 	}
 
 	// DID filter
-	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+	if didClause, didParams, _, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
+		return nil, fmt.Errorf("failed to build DID filter clause: %w", err)
+	} else if didClause != "" {
 		whereParts = append(whereParts, didClause)
 		for _, p := range didParams {
 			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
@@ -584,6 +609,10 @@ func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
 	whereClause := strings.Join(whereParts, " AND ")
 	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s DESC, uri DESC LIMIT %d",
 		r.recordColumns(), whereClause, indexedAtExpr, limit)
+
+	if err := r.validateSQLiteAggregateParameterCount(len(args)); err != nil {
+		return nil, err
+	}
 
 	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
 	if err != nil {
@@ -762,7 +791,9 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	}
 
 	// DID filter
-	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+	if didClause, didParams, _, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
+		return nil, fmt.Errorf("failed to build DID filter clause: %w", err)
+	} else if didClause != "" {
 		whereParts = append(whereParts, didClause)
 		for _, p := range didParams {
 			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
@@ -773,6 +804,10 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	orderBy := r.buildSortExpr(sort)
 	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s LIMIT %d",
 		r.recordColumns(), whereClause, orderBy, limit)
+
+	if err := r.validateSQLiteAggregateParameterCount(len(args)); err != nil {
+		return nil, err
+	}
 
 	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
 	if err != nil {
@@ -877,7 +912,9 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	}
 
 	// DID filter
-	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+	if didClause, didParams, _, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
+		return nil, fmt.Errorf("failed to build DID filter clause: %w", err)
+	} else if didClause != "" {
 		whereParts = append(whereParts, didClause)
 		for _, p := range didParams {
 			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
@@ -888,6 +925,10 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	orderBy := r.buildSortExpr(reversedSort)
 	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s LIMIT %d",
 		r.recordColumns(), whereClause, orderBy, limit)
+
+	if err := r.validateSQLiteAggregateParameterCount(len(args)); err != nil {
+		return nil, err
+	}
 
 	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
 	if err != nil {
@@ -1014,13 +1055,19 @@ func (r *RecordsRepository) GetCollectionCountFiltered(
 	}
 
 	// DID filter
-	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+	if didClause, didParams, _, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
+		return 0, fmt.Errorf("failed to build DID filter clause: %w", err)
+	} else if didClause != "" {
 		whereParts = append(whereParts, didClause)
 		params = append(params, didParams...)
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
 	sqlStr := fmt.Sprintf("SELECT COUNT(*) FROM record WHERE %s", whereClause)
+
+	if err := r.validateSQLiteAggregateParameterCount(len(params)); err != nil {
+		return 0, err
+	}
 
 	var count int64
 	err = r.db.QueryRow(ctx, sqlStr, params, &count)
