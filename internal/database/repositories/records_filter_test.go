@@ -3,6 +3,7 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -924,8 +925,8 @@ func TestGetByCollectionSortedWithKeysetCursor_AggregateINOverflow(t *testing.T)
 	if err == nil {
 		t.Fatal("expected error for aggregate parameter overflow, got nil")
 	}
-	if !strings.Contains(err.Error(), "exceeds maximum allowed") {
-		t.Fatalf("error = %q, want to contain %q", err.Error(), "exceeds maximum allowed")
+	if !errors.Is(err, ErrSQLiteAggregateParameterLimit) {
+		t.Fatalf("error = %v, want ErrSQLiteAggregateParameterLimit", err)
 	}
 }
 
@@ -999,8 +1000,26 @@ func TestGetByCollectionFilteredWithKeysetCursor_AggregateOverflow(t *testing.T)
 	if err == nil {
 		t.Fatal("expected error for aggregate parameter overflow, got nil")
 	}
-	if !strings.Contains(err.Error(), "sqlite query parameter count") {
-		t.Fatalf("error = %q, want repository aggregate limit error", err.Error())
+	if !errors.Is(err, ErrSQLiteAggregateParameterLimit) {
+		t.Fatalf("error = %v, want ErrSQLiteAggregateParameterLimit", err)
+	}
+}
+
+func TestGetByCollectionFilteredWithKeysetCursor_AggregateBoundary(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	_, err := repo.GetByCollectionFilteredWithKeysetCursor(
+		ctx,
+		"col",
+		makeAggregateOverflowFilters(),
+		DIDFilter{IN: makeAggregateOverflowDIDs(15)},
+		10,
+		"2026-01-15T12:00:00Z",
+		"at://did:plc:test/col/r1",
+	)
+	if err != nil {
+		t.Fatalf("expected query to succeed at SQLite aggregate limit, got %v", err)
 	}
 }
 
@@ -1020,8 +1039,26 @@ func TestGetByCollectionReversedWithKeysetCursor_AggregateOverflow(t *testing.T)
 	if err == nil {
 		t.Fatal("expected error for aggregate parameter overflow, got nil")
 	}
-	if !strings.Contains(err.Error(), "sqlite query parameter count") {
-		t.Fatalf("error = %q, want repository aggregate limit error", err.Error())
+	if !errors.Is(err, ErrSQLiteAggregateParameterLimit) {
+		t.Fatalf("error = %v, want ErrSQLiteAggregateParameterLimit", err)
+	}
+}
+
+func TestGetByCollectionReversedWithKeysetCursor_AggregateBoundary(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	_, err := repo.GetByCollectionReversedWithKeysetCursor(
+		ctx,
+		"col",
+		makeAggregateOverflowFilters(),
+		DIDFilter{IN: makeAggregateOverflowDIDs(15)},
+		&SortOption{Field: "indexed_at", Direction: "DESC"},
+		10,
+		[]string{"2026-01-15T12:00:00Z", "at://did:plc:test/col/r1"},
+	)
+	if err != nil {
+		t.Fatalf("expected query to succeed at SQLite aggregate limit, got %v", err)
 	}
 }
 
@@ -1038,7 +1075,22 @@ func TestGetCollectionCountFiltered_AggregateOverflow(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for aggregate parameter overflow, got nil")
 	}
-	if !strings.Contains(err.Error(), "sqlite query parameter count") {
-		t.Fatalf("error = %q, want repository aggregate limit error", err.Error())
+	if !errors.Is(err, ErrSQLiteAggregateParameterLimit) {
+		t.Fatalf("error = %v, want ErrSQLiteAggregateParameterLimit", err)
+	}
+}
+
+func TestGetCollectionCountFiltered_AggregateBoundary(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	_, err := repo.GetCollectionCountFiltered(
+		ctx,
+		"col",
+		makeAggregateOverflowFilters(),
+		DIDFilter{IN: makeAggregateOverflowDIDs(18)},
+	)
+	if err != nil {
+		t.Fatalf("expected query to succeed at SQLite aggregate limit, got %v", err)
 	}
 }
