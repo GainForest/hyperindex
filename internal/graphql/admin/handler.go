@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -14,17 +15,16 @@ import (
 
 // Handler handles admin GraphQL requests with authentication.
 type Handler struct {
-	schema            *graphql.Schema
-	resolver          *Resolver
-	middleware        *oauth.AuthMiddleware
-	configRepo        *repositories.ConfigRepository
-	trustProxyHeaders bool
+	schema      *graphql.Schema
+	resolver    *Resolver
+	middleware  *oauth.AuthMiddleware
+	configRepo  *repositories.ConfigRepository
+	adminAPIKey string
 }
 
 // NewHandler creates a new admin GraphQL handler.
-// trustProxyHeaders controls whether the X-User-DID header is trusted for authentication.
-// This should only be true when running behind a trusted reverse proxy.
-func NewHandler(repos *Repositories, middleware *oauth.AuthMiddleware, configRepo *repositories.ConfigRepository, domainDID string, trustProxyHeaders bool) (*Handler, error) {
+// adminAPIKey gates when the X-User-DID header may be trusted for authentication.
+func NewHandler(repos *Repositories, middleware *oauth.AuthMiddleware, configRepo *repositories.ConfigRepository, domainDID, adminAPIKey string) (*Handler, error) {
 	resolver := NewResolver(repos, domainDID)
 
 	builder := NewSchemaBuilder(resolver)
@@ -34,12 +34,23 @@ func NewHandler(repos *Repositories, middleware *oauth.AuthMiddleware, configRep
 	}
 
 	return &Handler{
-		schema:            schema,
-		resolver:          resolver,
-		middleware:        middleware,
-		configRepo:        configRepo,
-		trustProxyHeaders: trustProxyHeaders,
+		schema:      schema,
+		resolver:    resolver,
+		middleware:  middleware,
+		configRepo:  configRepo,
+		adminAPIKey: adminAPIKey,
 	}, nil
+}
+
+func isValidBearerToken(authorizationHeader, expectedToken string) bool {
+	const bearerPrefix = "Bearer "
+
+	token, ok := strings.CutPrefix(authorizationHeader, bearerPrefix)
+	if !ok {
+		return false
+	}
+
+	return subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) == 1
 }
 
 // ServeHTTP handles admin GraphQL HTTP requests.
@@ -71,15 +82,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userDID := oauth.UserIDFromContext(ctx)
 
-	// Only trust X-User-DID header when explicitly configured (TRUST_PROXY_HEADERS=true).
-	// This is intended for deployments behind a trusted reverse proxy (e.g., Next.js frontend).
-	// WARNING: Without a trusted proxy, this header can be spoofed by any client.
-	if userDID == "" && h.trustProxyHeaders {
-		userDID = r.Header.Get("X-User-DID")
-		if userDID != "" {
-			slog.Warn("[admin] Auth via X-User-DID proxy header",
-				"did", userDID,
-				"remote_addr", r.RemoteAddr)
+	// Only trust X-User-DID when the request presents a valid admin API key.
+	if userDID == "" {
+		proxiedUserDID := r.Header.Get("X-User-DID")
+		if proxiedUserDID != "" {
+			if isValidBearerToken(r.Header.Get("Authorization"), h.adminAPIKey) {
+				userDID = proxiedUserDID
+				slog.Warn("[admin] Auth via X-User-DID admin API key",
+					"did", userDID,
+					"remote_addr", r.RemoteAddr)
+			} else {
+				slog.Warn("[admin] Ignoring X-User-DID without valid admin API key",
+					"remote_addr", r.RemoteAddr)
+			}
 		}
 	}
 	handle := "" // Would need to resolve from DID

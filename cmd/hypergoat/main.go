@@ -270,7 +270,7 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 	}
 	r.Use(server.CORSMiddleware(server.CORSConfig{
 		AllowedOrigins:    allowedOrigins,
-		TrustProxyHeaders: cfg.TrustProxyHeaders,
+		TrustProxyHeaders: cfg.AdminAPIKey != "",
 	}))
 
 	// Health check — reflects hyperindex's own health only.
@@ -474,7 +474,7 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 		domainDID = "did:web:" + cfg.Host
 	}
 
-	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, svc.config, domainDID, cfg.TrustProxyHeaders)
+	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, svc.config, domainDID, cfg.AdminAPIKey)
 	if err != nil {
 		slog.Error("Failed to create admin GraphQL handler", "error", err)
 		return nil
