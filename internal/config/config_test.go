@@ -1,7 +1,10 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -257,14 +260,24 @@ func TestConfigValidate(t *testing.T) {
 			config: Config{
 				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
 				Port:          8080,
+				AdminAPIKey:   "admin-secret",
 			},
 			wantErr: false,
+		},
+		{
+			name: "admin api key empty",
+			config: Config{
+				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
+				Port:          8080,
+			},
+			wantErr: true,
 		},
 		{
 			name: "secret key too short",
 			config: Config{
 				SecretKeyBase: "short_key",
 				Port:          8080,
+				AdminAPIKey:   "admin-secret",
 			},
 			wantErr: true,
 		},
@@ -273,6 +286,7 @@ func TestConfigValidate(t *testing.T) {
 			config: Config{
 				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
 				Port:          0,
+				AdminAPIKey:   "admin-secret",
 			},
 			wantErr: true,
 		},
@@ -281,6 +295,7 @@ func TestConfigValidate(t *testing.T) {
 			config: Config{
 				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
 				Port:          70000,
+				AdminAPIKey:   "admin-secret",
 			},
 			wantErr: true,
 		},
@@ -293,6 +308,46 @@ func TestConfigValidate(t *testing.T) {
 				t.Errorf("Config.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestLoadAdminAPIKey(t *testing.T) {
+	os.Setenv("ADMIN_API_KEY", "admin-secret")
+	os.Setenv("SECRET_KEY_BASE", "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing")
+	defer func() {
+		os.Unsetenv("ADMIN_API_KEY")
+		os.Unsetenv("SECRET_KEY_BASE")
+	}()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.AdminAPIKey != "admin-secret" {
+		t.Fatalf("AdminAPIKey = %q, want %q", cfg.AdminAPIKey, "admin-secret")
+	}
+}
+
+func TestConfigLogConfigRedactsAdminAPIKey(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(original) })
+
+	cfg := Config{AdminAPIKey: "super-secret", TapAdminPassword: "tap-secret"}
+	cfg.LogConfig()
+
+	output := buf.String()
+	if !strings.Contains(output, "admin_api_key_set=true") {
+		t.Fatalf("LogConfig() output missing admin_api_key_set flag: %s", output)
+	}
+	if strings.Contains(output, "super-secret") {
+		t.Fatalf("LogConfig() leaked admin API key: %s", output)
+	}
+	if strings.Contains(output, "tap-secret") {
+		t.Fatalf("LogConfig() leaked tap admin password: %s", output)
 	}
 }
 
