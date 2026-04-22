@@ -338,6 +338,32 @@ make lint
 make build
 ```
 
+## Changelog workflow
+
+We use [Changie](https://github.com/miniscruff/changie) for release-note fragments.
+
+```bash
+go install github.com/miniscruff/changie@v1.24.0
+make tools
+make changie-new
+```
+
+- Add a changelog fragment for user-facing changes, operator-facing changes, bug fixes, and other work that should appear in the next release notes.
+- You do not need a fragment for docs-only edits, tests-only changes, or internal refactors that do not affect behavior.
+- Release/tag automation is intentionally out of scope for this phase.
+
+### Affects and body guidance
+
+`Affects` describes who or what the change impacts most. Use the smallest audience that still fits the change.
+
+Recommended values:
+
+- `user` — changes that affect product behavior, APIs, queries, or UX
+- `operator` — changes that affect deployment, configuration, monitoring, or runtime behavior
+- `developer` — changes that affect contributor workflows, tooling, tests, or documentation
+
+Write the release-note body as a short description of the impact, not the implementation. Good bodies explain what changed, why it matters, and what readers should expect. Bad bodies focus on internal code paths, file names, or implementation details instead of the visible effect.
+
 ### Local pre-commit linting
 
 This repo includes a tracked pre-commit hook at `.githooks/pre-commit`.

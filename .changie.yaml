@@ -1,0 +1,31 @@
+changesDir: .changes
+unreleasedDir: unreleased
+headerPath: header.tpl.md
+changelogPath: CHANGELOG.md
+versionExt: md
+kindFormat: '### {{.Kind}}'
+changeFormat: '- {{.Body}}'
+kinds:
+  - label: Added
+    key: added
+    auto: minor
+  - label: Changed
+    key: changed
+    auto: major
+  - label: Deprecated
+    key: deprecated
+    auto: minor
+  - label: Removed
+    key: removed
+    auto: minor
+  - label: Fixed
+    key: fixed
+    auto: patch
+  - label: Security
+    key: security
+    auto: patch
+custom:
+  - key: Affects
+    label: Affects
+    type: string
+    minLength: 1
