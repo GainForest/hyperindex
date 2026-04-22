@@ -1,10 +1,17 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/graphql-go/graphql"
+
+	"github.com/GainForest/hypergoat/internal/database/repositories"
+	"github.com/GainForest/hypergoat/internal/database/sqlite"
 )
 
 // Helper to check if enum has a value with the given name
@@ -15,6 +22,162 @@ func enumHasValue(enum *graphql.Enum, name string) bool {
 		}
 	}
 	return false
+}
+
+func newTestAdminHandler(t *testing.T, adminDIDs, adminAPIKey string) *Handler {
+	t.Helper()
+
+	exec, err := sqlite.NewExecutor("sqlite::memory:")
+	if err != nil {
+		t.Fatalf("failed to create sqlite executor: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = exec.Close()
+	})
+
+	if _, err := exec.DB().Exec(`CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
+		t.Fatalf("failed to create config table: %v", err)
+	}
+
+	if _, err := exec.DB().Exec(`INSERT INTO config (key, value) VALUES ('admin_dids', ?)`, adminDIDs); err != nil {
+		t.Fatalf("failed to seed admin_dids config: %v", err)
+	}
+
+	configRepo := repositories.NewConfigRepository(exec)
+	handler, err := NewHandler(&Repositories{}, nil, configRepo, "did:web:example.com", adminAPIKey)
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
+
+	return handler
+}
+
+type currentSessionResponse struct {
+	Data struct {
+		CurrentSession *struct {
+			DID     string `json:"did"`
+			Handle  string `json:"handle"`
+			IsAdmin bool   `json:"isAdmin"`
+		} `json:"currentSession"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+func decodeCurrentSessionResponse(t *testing.T, rr *httptest.ResponseRecorder) *currentSessionResponse {
+	t.Helper()
+
+	var payload currentSessionResponse
+
+	if err := json.NewDecoder(rr.Body).Decode(&payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	return &payload
+}
+
+func TestIsValidBearerToken(t *testing.T) {
+	t.Parallel()
+
+	const expected = "super-secret-key"
+
+	tests := []struct {
+		name                string
+		authorizationHeader string
+		expectedToken       string
+		want                bool
+	}{
+		{name: "valid bearer token", authorizationHeader: "Bearer super-secret-key", expectedToken: expected, want: true},
+		{name: "wrong token", authorizationHeader: "Bearer wrong-key", expectedToken: expected, want: false},
+		{name: "missing header", authorizationHeader: "", expectedToken: expected, want: false},
+		{name: "wrong scheme", authorizationHeader: "Token super-secret-key", expectedToken: expected, want: false},
+		{name: "empty bearer value", authorizationHeader: "Bearer ", expectedToken: expected, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := isValidBearerToken(tt.authorizationHeader, tt.expectedToken)
+			if got != tt.want {
+				t.Fatalf("isValidBearerToken() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandlerServeHTTP_AuthViaXUserDIDWithValidBearer(t *testing.T) {
+	handler := newTestAdminHandler(t, "did:plc:admin1", "super-secret-key")
+
+	body := bytes.NewBufferString(`{"query":"{ currentSession { did handle isAdmin } }"}`)
+	req := httptest.NewRequest(http.MethodPost, "/graphql", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer super-secret-key")
+	req.Header.Set("X-User-DID", "did:plc:admin1")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	payload := decodeCurrentSessionResponse(t, rr)
+	if len(payload.Errors) != 0 {
+		t.Fatalf("unexpected GraphQL errors: %+v", payload.Errors)
+	}
+	if payload.Data.CurrentSession == nil {
+		t.Fatal("expected currentSession data, got nil")
+	}
+	if got := payload.Data.CurrentSession.DID; got != "did:plc:admin1" {
+		t.Fatalf("did = %q, want %q", got, "did:plc:admin1")
+	}
+	if got := payload.Data.CurrentSession.Handle; got != "" {
+		t.Fatalf("handle = %q, want empty string", got)
+	}
+	if !payload.Data.CurrentSession.IsAdmin {
+		t.Fatal("expected isAdmin to be true")
+	}
+}
+
+func TestHandlerServeHTTP_IgnoresXUserDIDWithoutValidBearer(t *testing.T) {
+	handler := newTestAdminHandler(t, "did:plc:admin1", "super-secret-key")
+
+	tests := []struct {
+		name string
+		auth string
+	}{
+		{name: "wrong bearer token", auth: "Bearer wrong-key"},
+		{name: "missing bearer token", auth: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := bytes.NewBufferString(`{"query":"{ currentSession { did handle isAdmin } }"}`)
+			req := httptest.NewRequest(http.MethodPost, "/graphql", body)
+			req.Header.Set("Content-Type", "application/json")
+			if tt.auth != "" {
+				req.Header.Set("Authorization", tt.auth)
+			}
+			req.Header.Set("X-User-DID", "did:plc:admin1")
+
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+			}
+
+			payload := decodeCurrentSessionResponse(t, rr)
+			if len(payload.Errors) != 0 {
+				t.Fatalf("unexpected GraphQL errors: %+v", payload.Errors)
+			}
+			if payload.Data.CurrentSession != nil {
+				t.Fatalf("expected currentSession to be nil, got %+v", payload.Data.CurrentSession)
+			}
+		})
+	}
 }
 
 func TestEnumTypes(t *testing.T) {

@@ -85,16 +85,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Only trust X-User-DID when the request presents a valid admin API key.
 	if userDID == "" {
 		proxiedUserDID := r.Header.Get("X-User-DID")
-		if proxiedUserDID != "" {
-			if isValidBearerToken(r.Header.Get("Authorization"), h.adminAPIKey) {
-				userDID = proxiedUserDID
-				slog.Warn("[admin] Auth via X-User-DID admin API key",
-					"did", userDID,
-					"remote_addr", r.RemoteAddr)
-			} else {
-				slog.Warn("[admin] Ignoring X-User-DID without valid admin API key",
-					"remote_addr", r.RemoteAddr)
-			}
+		switch {
+		case proxiedUserDID == "":
+		case isValidBearerToken(r.Header.Get("Authorization"), h.adminAPIKey):
+			userDID = proxiedUserDID
+			slog.Warn("[admin] Auth via X-User-DID admin API key",
+				"did", userDID,
+				"remote_addr", r.RemoteAddr)
+		default:
+			slog.Warn("[admin] Ignoring X-User-DID without valid admin API key",
+				"remote_addr", r.RemoteAddr)
 		}
 	}
 	handle := "" // Would need to resolve from DID

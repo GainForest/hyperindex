@@ -268,9 +268,10 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 			allowedOrigins = append(allowedOrigins, strings.TrimSpace(o))
 		}
 	}
+	allowAdminAPIKeyAuth := cfg.AdminAPIKey != ""
 	r.Use(server.CORSMiddleware(server.CORSConfig{
-		AllowedOrigins:    allowedOrigins,
-		TrustProxyHeaders: cfg.AdminAPIKey != "",
+		AllowedOrigins:       allowedOrigins,
+		AllowAdminAPIKeyAuth: allowAdminAPIKeyAuth,
 	}))
 
 	// Health check — reflects hyperindex's own health only.
