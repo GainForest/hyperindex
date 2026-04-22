@@ -4,7 +4,7 @@ This repository uses [Changie](https://github.com/miniscruff/changie) to curate 
 
 ## Source of truth
 
-Release notes come from `.changes/unreleased/*.yaml`, not from commit history. Keep fragments focused on user-facing or operator-facing changes that should appear in the next changelog entry.
+Release notes come from `.changes/unreleased/*.yaml`, not from commit history. Keep fragments focused on user-facing, operator-facing, or developer-facing changes that should appear in the next changelog entry.
 
 ## Affects
 

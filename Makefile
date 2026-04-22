@@ -1,4 +1,4 @@
-.PHONY: help build run test lint clean dev db-migrate db-rollback docker hooks-install changie-new
+.PHONY: help build run test test-coverage lint fmt clean dev db-migrate db-rollback db-status db-create-migration docker docker-run tools generate hooks-install changie-new
 
 # Default target
 help:

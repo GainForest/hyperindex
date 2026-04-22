@@ -146,19 +146,19 @@ Focus on impact, not file names or internal code structure.
 ### Example: operator-facing fix
 
 - kind: `fixed`
-- affects: `operator`
+- Affects: `operator`
 - body: `Fix startup failures when invalid database configuration is present so misconfigured deployments fail with a clearer path to recovery.`
 
 ### Example: user-facing feature
 
 - kind: `added`
-- affects: `user`
+- Affects: `user`
 - body: `Add curated release-note fragments so important behavior changes can be surfaced in the changelog instead of being reconstructed from commits.`
 
 ### Example: developer-facing workflow change
 
 - kind: `changed`
-- affects: `developer`
+- Affects: `developer`
 - body: `Update the local changelog workflow so contributors can create release-note fragments with a single make target.`
 
 ## Goal

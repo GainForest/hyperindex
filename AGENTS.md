@@ -38,7 +38,7 @@ go fmt ./...                   # Format only
 
 # Install dev tools
 make tools                     # Install air, golangci-lint, gofumpt, migrate
-go install github.com/miniscruff/changie/v1@v1.24.0  # Install pinned Changie CLI
+go install github.com/miniscruff/changie@v1.24.0  # Install pinned Changie CLI
 make changie-new               # Create a new changelog fragment
 ```
 
