@@ -99,6 +99,7 @@ railway up --path-as-root client/ -s frontend -d
 | `PORT` | `3000` |
 | `NEXT_PUBLIC_CLIENT_URL` | `https://hi.gainforest.app` |
 | `NEXT_PUBLIC_HYPERINDEX_URL` | `https://api.hi.gainforest.app` |
+| `NEXT_PUBLIC_ADMIN_DIDS` | `did:plc:qc42fmqqlsmdq7jiypiiigww` (UI gating only; backend `ADMIN_DIDS` remains authoritative) |
 | `HYPERINDEX_URL` | `https://api.hi.gainforest.app` |
 | `COOKIE_SECRET` | *(set on Railway, do not change)* |
 | `ATPROTO_JWK_PRIVATE` | *(ES256 JWK, set on Railway, do not change)* |
