@@ -160,6 +160,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ADMIN_API_KEY must be set")
 	}
 
+	if len(c.AdminAPIKey) < 16 {
+		return fmt.Errorf("ADMIN_API_KEY must be at least 16 characters long")
+	}
+
 	if len(c.SecretKeyBase) < 64 {
 		return fmt.Errorf("SECRET_KEY_BASE must be at least 64 characters")
 	}

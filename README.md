@@ -17,6 +17,8 @@ Hyperindex (hi) connects to the AT Protocol network, indexes records matching yo
 git clone https://github.com/GainForest/hypergoat.git
 cd hypergoat
 cp .env.example .env
+# Replace the placeholder secrets in .env (especially SECRET_KEY_BASE and ADMIN_API_KEY)
+# before using the server in production or against real data.
 go run ./cmd/hypergoat
 ```
 
@@ -227,6 +229,8 @@ Default sort is `indexed_at DESC` (newest first). Available sort fields are gene
 
 Create a `.env` file or set environment variables:
 
+The `.env.example` file includes placeholder values for required secrets. After copying it to `.env`, replace those placeholders with real random secrets before running in production or against real data.
+
 ```bash
 # Database (SQLite or PostgreSQL)
 DATABASE_URL=sqlite:data/hypergoat.db
@@ -246,7 +250,7 @@ NEXT_PUBLIC_ADMIN_DIDS=did:plc:your-did-here
 # Security — required for session encryption (min 64 chars)
 SECRET_KEY_BASE=your-secret-key-at-least-64-characters-long-generate-with-openssl-rand
 
-# Admin API key — required; startup validation fails if this is not set.
+# Admin API key — required for trusted X-User-DID requests.
 # X-User-DID is trusted only when the request also includes:
 # Authorization: Bearer <key>
 # Example: openssl rand -base64 32

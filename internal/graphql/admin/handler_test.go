@@ -93,6 +93,7 @@ func TestIsValidBearerToken(t *testing.T) {
 		{name: "missing header", authorizationHeader: "", expectedToken: expected, want: false},
 		{name: "wrong scheme", authorizationHeader: "Token super-secret-key", expectedToken: expected, want: false},
 		{name: "empty bearer value", authorizationHeader: "Bearer ", expectedToken: expected, want: false},
+		{name: "empty expected token", authorizationHeader: "Bearer ", expectedToken: "", want: false},
 	}
 
 	for _, tt := range tests {

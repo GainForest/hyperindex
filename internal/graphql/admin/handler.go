@@ -45,8 +45,15 @@ func NewHandler(repos *Repositories, middleware *oauth.AuthMiddleware, configRep
 func isValidBearerToken(authorizationHeader, expectedToken string) bool {
 	const bearerPrefix = "Bearer "
 
+	if expectedToken == "" {
+		return false
+	}
+
 	token, ok := strings.CutPrefix(authorizationHeader, bearerPrefix)
 	if !ok {
+		return false
+	}
+	if token == "" {
 		return false
 	}
 

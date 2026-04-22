@@ -251,16 +251,17 @@ func TestRedactPassword(t *testing.T) {
 
 func TestConfigValidate(t *testing.T) {
 	tests := []struct {
-		name    string
-		config  Config
-		wantErr bool
+		name            string
+		config          Config
+		wantErr         bool
+		wantErrContains string
 	}{
 		{
 			name: "valid config",
 			config: Config{
 				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
 				Port:          8080,
-				AdminAPIKey:   "admin-secret",
+				AdminAPIKey:   "admin-secret-123",
 			},
 			wantErr: false,
 		},
@@ -270,14 +271,25 @@ func TestConfigValidate(t *testing.T) {
 				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
 				Port:          8080,
 			},
-			wantErr: true,
+			wantErr:         true,
+			wantErrContains: "ADMIN_API_KEY",
+		},
+		{
+			name: "admin api key too short",
+			config: Config{
+				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
+				Port:          8080,
+				AdminAPIKey:   "short-admin-key",
+			},
+			wantErr:         true,
+			wantErrContains: "16 characters",
 		},
 		{
 			name: "secret key too short",
 			config: Config{
 				SecretKeyBase: "short_key",
 				Port:          8080,
-				AdminAPIKey:   "admin-secret",
+				AdminAPIKey:   "admin-secret-123",
 			},
 			wantErr: true,
 		},
@@ -286,7 +298,7 @@ func TestConfigValidate(t *testing.T) {
 			config: Config{
 				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
 				Port:          0,
-				AdminAPIKey:   "admin-secret",
+				AdminAPIKey:   "admin-secret-123",
 			},
 			wantErr: true,
 		},
@@ -295,7 +307,7 @@ func TestConfigValidate(t *testing.T) {
 			config: Config{
 				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
 				Port:          70000,
-				AdminAPIKey:   "admin-secret",
+				AdminAPIKey:   "admin-secret-123",
 			},
 			wantErr: true,
 		},
@@ -306,6 +318,9 @@ func TestConfigValidate(t *testing.T) {
 			err := tt.config.Validate()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Config.Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErrContains != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErrContains)) {
+				t.Errorf("Config.Validate() error = %v, want substring %q", err, tt.wantErrContains)
 			}
 		})
 	}
