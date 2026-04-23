@@ -9,9 +9,6 @@ import (
 	"testing"
 
 	"github.com/graphql-go/graphql"
-
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/database/sqlite"
 )
 
 // Helper to check if enum has a value with the given name
@@ -27,24 +24,7 @@ func enumHasValue(enum *graphql.Enum, name string) bool {
 func newTestAdminHandler(t *testing.T, adminDIDs, adminAPIKey string) *Handler {
 	t.Helper()
 
-	exec, err := sqlite.NewExecutor("sqlite::memory:")
-	if err != nil {
-		t.Fatalf("failed to create sqlite executor: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = exec.Close()
-	})
-
-	if _, err := exec.DB().Exec(`CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
-		t.Fatalf("failed to create config table: %v", err)
-	}
-
-	if _, err := exec.DB().Exec(`INSERT INTO config (key, value) VALUES ('admin_dids', ?)`, adminDIDs); err != nil {
-		t.Fatalf("failed to seed admin_dids config: %v", err)
-	}
-
-	configRepo := repositories.NewConfigRepository(exec)
-	handler, err := NewHandler(&Repositories{}, nil, configRepo, "did:web:example.com", adminAPIKey)
+	handler, err := NewHandler(&Repositories{}, nil, "did:web:example.com", adminAPIKey, ParseAdminDIDs(adminDIDs))
 	if err != nil {
 		t.Fatalf("failed to create handler: %v", err)
 	}
@@ -77,44 +57,43 @@ func decodeCurrentSessionResponse(t *testing.T, rr *httptest.ResponseRecorder) *
 	return &payload
 }
 
-func TestIsValidBearerToken(t *testing.T) {
+func TestIsValidAdminAPIKey(t *testing.T) {
 	t.Parallel()
 
 	const expected = "super-secret-key"
 
 	tests := []struct {
-		name                string
-		authorizationHeader string
-		expectedToken       string
-		want                bool
+		name        string
+		providedKey string
+		expectedKey string
+		want        bool
 	}{
-		{name: "valid bearer token", authorizationHeader: "Bearer super-secret-key", expectedToken: expected, want: true},
-		{name: "wrong token", authorizationHeader: "Bearer wrong-key", expectedToken: expected, want: false},
-		{name: "missing header", authorizationHeader: "", expectedToken: expected, want: false},
-		{name: "wrong scheme", authorizationHeader: "Token super-secret-key", expectedToken: expected, want: false},
-		{name: "empty bearer value", authorizationHeader: "Bearer ", expectedToken: expected, want: false},
-		{name: "empty expected token", authorizationHeader: "Bearer ", expectedToken: "", want: false},
+		{name: "valid api key", providedKey: "super-secret-key", expectedKey: expected, want: true},
+		{name: "wrong key", providedKey: "wrong-key", expectedKey: expected, want: false},
+		{name: "missing provided key", providedKey: "", expectedKey: expected, want: false},
+		{name: "empty expected key", providedKey: "super-secret-key", expectedKey: "", want: false},
+		{name: "whitespace-only provided key", providedKey: "   ", expectedKey: expected, want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := isValidBearerToken(tt.authorizationHeader, tt.expectedToken)
+			got := isValidAdminAPIKey(tt.providedKey, tt.expectedKey)
 			if got != tt.want {
-				t.Fatalf("isValidBearerToken() = %v, want %v", got, tt.want)
+				t.Fatalf("isValidAdminAPIKey() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestHandlerServeHTTP_AuthViaXUserDIDWithValidBearer(t *testing.T) {
+func TestHandlerServeHTTP_AuthViaXUserDIDWithValidAdminAPIKey(t *testing.T) {
 	handler := newTestAdminHandler(t, "did:plc:admin1", "super-secret-key")
 
 	body := bytes.NewBufferString(`{"query":"{ currentSession { did handle isAdmin } }"}`)
 	req := httptest.NewRequest(http.MethodPost, "/graphql", body)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer super-secret-key")
+	req.Header.Set("X-Admin-API-Key", "super-secret-key")
 	req.Header.Set("X-User-DID", "did:plc:admin1")
 
 	rr := httptest.NewRecorder()
@@ -142,15 +121,15 @@ func TestHandlerServeHTTP_AuthViaXUserDIDWithValidBearer(t *testing.T) {
 	}
 }
 
-func TestHandlerServeHTTP_IgnoresXUserDIDWithoutValidBearer(t *testing.T) {
+func TestHandlerServeHTTP_IgnoresXUserDIDWithoutValidAdminAPIKey(t *testing.T) {
 	handler := newTestAdminHandler(t, "did:plc:admin1", "super-secret-key")
 
 	tests := []struct {
-		name string
-		auth string
+		name   string
+		apiKey string
 	}{
-		{name: "wrong bearer token", auth: "Bearer wrong-key"},
-		{name: "missing bearer token", auth: ""},
+		{name: "wrong admin api key", apiKey: "wrong-key"},
+		{name: "missing admin api key", apiKey: ""},
 	}
 
 	for _, tt := range tests {
@@ -158,8 +137,8 @@ func TestHandlerServeHTTP_IgnoresXUserDIDWithoutValidBearer(t *testing.T) {
 			body := bytes.NewBufferString(`{"query":"{ currentSession { did handle isAdmin } }"}`)
 			req := httptest.NewRequest(http.MethodPost, "/graphql", body)
 			req.Header.Set("Content-Type", "application/json")
-			if tt.auth != "" {
-				req.Header.Set("Authorization", tt.auth)
+			if tt.apiKey != "" {
+				req.Header.Set("X-Admin-API-Key", tt.apiKey)
 			}
 			req.Header.Set("X-User-DID", "did:plc:admin1")
 
@@ -313,6 +292,33 @@ func TestSettingsTypeFields(t *testing.T) {
 	for _, name := range expectedFields {
 		if fields[name] == nil {
 			t.Errorf("Expected field %s not found in SettingsType", name)
+		}
+	}
+}
+
+func TestSchemaRemovesAdminMutationPaths(t *testing.T) {
+	handler := newTestAdminHandler(t, "did:plc:admin1", "super-secret-key")
+
+	mutationType := handler.Schema().MutationType()
+	if mutationType == nil {
+		t.Fatal("expected mutation type")
+	}
+
+	fields := mutationType.Fields()
+	if fields["addAdmin"] != nil {
+		t.Fatal("expected addAdmin mutation to be removed")
+	}
+	if fields["removeAdmin"] != nil {
+		t.Fatal("expected removeAdmin mutation to be removed")
+	}
+
+	updateSettings := fields["updateSettings"]
+	if updateSettings == nil {
+		t.Fatal("expected updateSettings mutation")
+	}
+	for _, arg := range updateSettings.Args {
+		if arg.PrivateName == "adminDids" {
+			t.Fatal("expected updateSettings.adminDids argument to be removed")
 		}
 	}
 }

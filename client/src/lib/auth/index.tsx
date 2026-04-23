@@ -7,6 +7,11 @@ import {
   createContext,
   useContext,
 } from "react";
+import { useQuery } from "@tanstack/react-query";
+
+import { graphqlClient } from "@/lib/graphql/client";
+import { GET_CURRENT_SESSION } from "@/lib/graphql/queries";
+import type { CurrentSessionResponse } from "@/types";
 
 export interface AuthSession {
   did: string;
@@ -153,5 +158,43 @@ export function useAuth() {
     isAuthenticated: state.status === "authenticated",
     login,
     logout,
+  };
+}
+
+export function useAdminSession() {
+  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+
+  const query = useQuery({
+    queryKey: ["admin-session"],
+    queryFn: () => graphqlClient.request<CurrentSessionResponse>(GET_CURRENT_SESSION),
+    enabled: isAuthenticated,
+    retry: false,
+  });
+
+  if (isAuthLoading) {
+    return {
+      adminSession: null,
+      isAdmin: false,
+      isLoading: true,
+      error: null,
+    };
+  }
+
+  if (!isAuthenticated) {
+    return {
+      adminSession: null,
+      isAdmin: false,
+      isLoading: false,
+      error: null,
+    };
+  }
+
+  const adminSession = query.data?.currentSession ?? null;
+
+  return {
+    adminSession,
+    isAdmin: adminSession?.isAdmin ?? false,
+    isLoading: query.isLoading,
+    error: query.error,
   };
 }

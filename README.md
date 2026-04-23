@@ -242,17 +242,15 @@ PORT=8080
 EXTERNAL_BASE_URL=http://localhost:8080
 
 # Admin access (comma-separated DIDs)
+# Managed via deployment environment; shown read-only in the admin UI.
 ADMIN_DIDS=did:plc:your-did-here
-
-# Client-side/public/UI-only admin gating; backend ADMIN_DIDS remains authoritative and is the only server-side authorization source
-NEXT_PUBLIC_ADMIN_DIDS=did:plc:your-did-here
 
 # Security — required for session encryption (min 64 chars)
 SECRET_KEY_BASE=your-secret-key-at-least-64-characters-long-generate-with-openssl-rand
 
 # Admin API key — required for trusted X-User-DID requests.
 # X-User-DID is trusted only when the request also includes:
-# Authorization: Bearer <key>
+# X-Admin-API-Key: <key>
 # Example: openssl rand -base64 32
 ADMIN_API_KEY=replace-with-a-random-secret
 

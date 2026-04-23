@@ -9,7 +9,6 @@ import (
 
 	"github.com/graphql-go/graphql"
 
-	"github.com/GainForest/hypergoat/internal/database/repositories"
 	"github.com/GainForest/hypergoat/internal/oauth"
 )
 
@@ -18,14 +17,14 @@ type Handler struct {
 	schema      *graphql.Schema
 	resolver    *Resolver
 	middleware  *oauth.AuthMiddleware
-	configRepo  *repositories.ConfigRepository
+	adminDIDs   []string
 	adminAPIKey string
 }
 
 // NewHandler creates a new admin GraphQL handler.
 // adminAPIKey gates when the X-User-DID header may be trusted for authentication.
-func NewHandler(repos *Repositories, middleware *oauth.AuthMiddleware, configRepo *repositories.ConfigRepository, domainDID, adminAPIKey string) (*Handler, error) {
-	resolver := NewResolver(repos, domainDID)
+func NewHandler(repos *Repositories, middleware *oauth.AuthMiddleware, domainDID, adminAPIKey string, adminDIDs []string) (*Handler, error) {
+	resolver := NewResolver(repos, domainDID, adminDIDs)
 
 	builder := NewSchemaBuilder(resolver)
 	schema, err := builder.Build()
@@ -37,27 +36,23 @@ func NewHandler(repos *Repositories, middleware *oauth.AuthMiddleware, configRep
 		schema:      schema,
 		resolver:    resolver,
 		middleware:  middleware,
-		configRepo:  configRepo,
+		adminDIDs:   adminDIDs,
 		adminAPIKey: adminAPIKey,
 	}, nil
 }
 
-func isValidBearerToken(authorizationHeader, expectedToken string) bool {
-	const bearerPrefix = "Bearer "
+func isValidAdminAPIKey(providedKey, expectedKey string) bool {
+	providedKey = strings.TrimSpace(providedKey)
+	expectedKey = strings.TrimSpace(expectedKey)
 
-	if expectedToken == "" {
+	if expectedKey == "" {
+		return false
+	}
+	if providedKey == "" {
 		return false
 	}
 
-	token, ok := strings.CutPrefix(authorizationHeader, bearerPrefix)
-	if !ok {
-		return false
-	}
-	if token == "" {
-		return false
-	}
-
-	return subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) == 1
+	return subtle.ConstantTimeCompare([]byte(providedKey), []byte(expectedKey)) == 1
 }
 
 // ServeHTTP handles admin GraphQL HTTP requests.
@@ -94,7 +89,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		proxiedUserDID := r.Header.Get("X-User-DID")
 		switch {
 		case proxiedUserDID == "":
-		case isValidBearerToken(r.Header.Get("Authorization"), h.adminAPIKey):
+		case isValidAdminAPIKey(r.Header.Get("X-Admin-API-Key"), h.adminAPIKey):
 			userDID = proxiedUserDID
 			slog.Warn("[admin] Auth via X-User-DID admin API key",
 				"did", userDID,
@@ -106,29 +101,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	handle := "" // Would need to resolve from DID
 
-	// Get admin DIDs from config
-	adminDidsStr, err := h.configRepo.Get(ctx, "admin_dids")
-	if err != nil {
-		slog.Warn("Failed to get admin DIDs", "error", err)
-		adminDidsStr = ""
-	}
-
-	var adminDIDs []string
-	if adminDidsStr != "" {
-		adminDIDs = strings.Split(adminDidsStr, ",")
-		for i := range adminDIDs {
-			adminDIDs[i] = strings.TrimSpace(adminDIDs[i])
-		}
-	}
-
-	// Check if user is admin
-	isAdmin := false
-	for _, adminDID := range adminDIDs {
-		if adminDID == userDID {
-			isAdmin = true
-			break
-		}
-	}
+	isAdmin := isAdminDID(userDID, h.adminDIDs)
 
 	// Debug logging for auth
 	if userDID != "" {
@@ -136,7 +109,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Inject auth info into context
-	ctx = ContextWithAuth(ctx, userDID, handle, isAdmin, adminDIDs)
+	ctx = ContextWithAuth(ctx, userDID, handle, isAdmin, h.adminDIDs)
 
 	// Execute the query
 	result := graphql.Do(graphql.Params{

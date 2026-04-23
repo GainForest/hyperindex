@@ -12,21 +12,6 @@ function getPort(): number {
   return port ? parseInt(port, 10) : 3000;
 }
 
-export function parseAdminDIDs(value: string): string[] {
-  return value
-    .split(",")
-    .map((did) => did.trim())
-    .filter((did) => did.length > 0);
-}
-
-export function isAdminDID(did: string | null | undefined, adminDIDs: readonly string[]): boolean {
-  if (!did) {
-    return false;
-  }
-
-  return adminDIDs.includes(did.trim());
-}
-
 function getOrigin(value: string): string {
   const normalized = normalizePublicURL(value);
   if (!normalized) {
@@ -78,11 +63,9 @@ export function validateHyperindexURLConfiguration(
 const vercelBranchUrl = process.env.NEXT_PUBLIC_VERCEL_BRANCH_URL || "";
 const publicClientUrl = process.env.NEXT_PUBLIC_CLIENT_URL || "";
 const nextPublicHyperindexUrl = process.env.NEXT_PUBLIC_HYPERINDEX_URL || "";
-const nextPublicAdminDIDs = process.env.NEXT_PUBLIC_ADMIN_DIDS || "";
 const normalizedNextPublicHyperindexUrl = normalizePublicURL(nextPublicHyperindexUrl);
 const normalizedHyperindexUrl = normalizePublicURL(process.env.HYPERINDEX_URL || "");
 const resolvedHyperindexUrl = normalizedHyperindexUrl || normalizedNextPublicHyperindexUrl || "http://127.0.0.1:8080";
-const parsedAdminDIDs = parseAdminDIDs(nextPublicAdminDIDs);
 
 validateHyperindexURLConfiguration(publicClientUrl, vercelBranchUrl, resolvedHyperindexUrl);
 
@@ -99,11 +82,11 @@ export const env = {
   // Private JWK for confidential OAuth client (optional, for production)
   ATPROTO_JWK_PRIVATE: getEnv("ATPROTO_JWK_PRIVATE", ""),
 
+  // Server-side only admin API key used by the Next.js proxy when calling Hyperindex admin routes.
+  HYPERINDEX_ADMIN_API_KEY: getEnv("HYPERINDEX_ADMIN_API_KEY", ""),
+
   // Client-facing URL baked into the JS bundle at build time
   NEXT_PUBLIC_HYPERINDEX_URL: normalizedNextPublicHyperindexUrl,
-
-  // Client-visible admin DIDs used for UI gating only.
-  ADMIN_DIDS: parsedAdminDIDs,
 
   // Server-side only — use this for private/internal network endpoints (e.g. Railway private networking).
   // Falls back to NEXT_PUBLIC_HYPERINDEX_URL so you only need one var if both URLs are the same.
