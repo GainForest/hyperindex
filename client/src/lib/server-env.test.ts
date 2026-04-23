@@ -28,24 +28,26 @@ describe("serverEnv", () => {
     delete process.env.COOKIE_SECRET;
     process.env.NODE_ENV = "development";
 
-    const { serverEnv } = await import("./server-env");
+    const { getCookieSecret } = await import("./server-env");
 
-    expect(serverEnv.COOKIE_SECRET).toBe("development-secret-at-least-32-chars!!");
+    expect(getCookieSecret()).toBe("development-secret-at-least-32-chars!!");
   });
 
   it("throws in production when COOKIE_SECRET is missing", async () => {
     delete process.env.COOKIE_SECRET;
     process.env.NODE_ENV = "production";
 
-    await expect(import("./server-env")).rejects.toThrow(
-      /COOKIE_SECRET must be set in production and be at least 32 characters long/,
-    );
+    const { getCookieSecret } = await import("./server-env");
+
+    expect(() => getCookieSecret()).toThrow(/COOKIE_SECRET must be set in production and be at least 32 characters long/);
   });
 
   it("throws in production when COOKIE_SECRET is too short", async () => {
     process.env.COOKIE_SECRET = "too-short";
     process.env.NODE_ENV = "production";
 
-    await expect(import("./server-env")).rejects.toThrow(/at least 32 characters long in production/);
+    const { getCookieSecret } = await import("./server-env");
+
+    expect(() => getCookieSecret()).toThrow(/at least 32 characters long in production/);
   });
 });

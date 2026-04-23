@@ -257,7 +257,7 @@ func TestConfigValidate(t *testing.T) {
 		wantErrContains string
 	}{
 		{
-			name: "valid config",
+			name: "clean 16+ char admin api key",
 			config: Config{
 				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
 				Port:          8080,
@@ -275,6 +275,16 @@ func TestConfigValidate(t *testing.T) {
 			wantErrContains: "ADMIN_API_KEY",
 		},
 		{
+			name: "admin api key whitespace only",
+			config: Config{
+				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
+				Port:          8080,
+				AdminAPIKey:   "   ",
+			},
+			wantErr:         true,
+			wantErrContains: "whitespace",
+		},
+		{
 			name: "admin api key too short",
 			config: Config{
 				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
@@ -283,6 +293,16 @@ func TestConfigValidate(t *testing.T) {
 			},
 			wantErr:         true,
 			wantErrContains: "16 characters",
+		},
+		{
+			name: "admin api key padded valid key",
+			config: Config{
+				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
+				Port:          8080,
+				AdminAPIKey:   " admin-secret-123 ",
+			},
+			wantErr:         true,
+			wantErrContains: "whitespace",
 		},
 		{
 			name: "secret key too short",

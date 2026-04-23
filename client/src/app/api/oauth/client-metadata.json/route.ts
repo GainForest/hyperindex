@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { env } from "@/lib/env";
+import { serverEnv } from "@/lib/server-env";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const publicUrl = env.PUBLIC_CLIENT_URL;
   const url = publicUrl || `http://127.0.0.1:${env.PORT}`;
-  const isConfidential = !!publicUrl && !!env.ATPROTO_JWK_PRIVATE;
+  const isConfidential = !!publicUrl && !!serverEnv.ATPROTO_JWK_PRIVATE;
 
   const metadata: Record<string, unknown> = {
     client_name: "Hypergoat Admin",

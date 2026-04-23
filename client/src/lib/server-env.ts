@@ -4,7 +4,7 @@ function getEnv(key: string, defaultValue: string = ""): string {
   return process.env[key] || defaultValue;
 }
 
-function getCookieSecret(): string {
+export function getCookieSecret(): string {
   const isProduction = process.env.NODE_ENV === "production";
   const fallback = "development-secret-at-least-32-chars!!";
   const secret = process.env.COOKIE_SECRET || (isProduction ? "" : fallback);
@@ -23,9 +23,6 @@ function getCookieSecret(): string {
 }
 
 export const serverEnv = {
-  // Secret for encrypting session cookies (must be at least 32 chars)
-  COOKIE_SECRET: getCookieSecret(),
-
   // Private JWK for confidential OAuth client (optional, for production)
   ATPROTO_JWK_PRIVATE: getEnv("ATPROTO_JWK_PRIVATE", ""),
 

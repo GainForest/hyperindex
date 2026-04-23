@@ -162,12 +162,16 @@ export function useAuth() {
 }
 
 export function useAdminSession() {
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const {
+    isAuthenticated,
+    isLoading: isAuthLoading,
+    session,
+  } = useAuth();
 
   const query = useQuery({
-    queryKey: ["admin-session"],
+    queryKey: ["admin-session", session?.did ?? null],
     queryFn: () => graphqlClient.request<CurrentSessionResponse>(GET_CURRENT_SESSION),
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && Boolean(session?.did),
     retry: false,
   });
 

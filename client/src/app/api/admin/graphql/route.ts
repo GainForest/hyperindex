@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/session";
 import { env } from "@/lib/env";
+import { getSession } from "@/lib/session";
+import { serverEnv } from "@/lib/server-env";
 
 export const dynamic = "force-dynamic";
 
@@ -21,14 +22,14 @@ export async function POST(request: NextRequest) {
     // If user is authenticated, pass their DID
     if (session.did) {
       headers["X-User-DID"] = session.did;
-      if (!env.HYPERINDEX_ADMIN_API_KEY) {
+      if (!serverEnv.HYPERINDEX_ADMIN_API_KEY) {
         console.error("[admin-graphql] Missing HYPERINDEX_ADMIN_API_KEY for proxied admin request");
         return NextResponse.json(
           { errors: [{ message: "Admin proxy is not configured" }] },
           { status: 500 },
         );
       }
-      headers["X-Admin-API-Key"] = env.HYPERINDEX_ADMIN_API_KEY;
+      headers["X-Admin-API-Key"] = serverEnv.HYPERINDEX_ADMIN_API_KEY;
       console.log("[admin-graphql] Authenticated request", { did: session.did });
     } else {
       console.log("[admin-graphql] Unauthenticated request - no session DID");

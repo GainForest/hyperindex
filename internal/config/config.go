@@ -160,7 +160,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("ADMIN_API_KEY must be set")
 	}
 
-	if len(c.AdminAPIKey) < 16 {
+	trimmedAdminAPIKey := strings.TrimSpace(c.AdminAPIKey)
+	if trimmedAdminAPIKey != c.AdminAPIKey {
+		return fmt.Errorf("ADMIN_API_KEY must not have leading or trailing whitespace")
+	}
+
+	if len(trimmedAdminAPIKey) < 16 {
 		return fmt.Errorf("ADMIN_API_KEY must be at least 16 characters long")
 	}
 

@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockGetSession = vi.hoisted(() => vi.fn());
 const mockEnv = vi.hoisted(() => ({
-  HYPERINDEX_ADMIN_API_KEY: "test-admin-key",
   HYPERINDEX_URL: "https://hyperindex.example.com",
+}));
+const mockServerEnv = vi.hoisted(() => ({
+  HYPERINDEX_ADMIN_API_KEY: "test-admin-key",
 }));
 
 vi.mock("@/lib/session", () => ({
@@ -13,6 +15,10 @@ vi.mock("@/lib/session", () => ({
 
 vi.mock("@/lib/env", () => ({
   env: mockEnv,
+}));
+
+vi.mock("@/lib/server-env", () => ({
+  serverEnv: mockServerEnv,
 }));
 
 import { POST } from "./route";
@@ -32,8 +38,8 @@ function createRequest() {
 describe("POST /api/admin/graphql", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockEnv.HYPERINDEX_ADMIN_API_KEY = "test-admin-key";
     mockEnv.HYPERINDEX_URL = "https://hyperindex.example.com";
+    mockServerEnv.HYPERINDEX_ADMIN_API_KEY = "test-admin-key";
     global.fetch = vi.fn();
   });
 
@@ -66,7 +72,7 @@ describe("POST /api/admin/graphql", () => {
   });
 
   it("returns 500 when the admin proxy key is missing", async () => {
-    mockEnv.HYPERINDEX_ADMIN_API_KEY = "";
+    mockServerEnv.HYPERINDEX_ADMIN_API_KEY = "";
     mockGetSession.mockResolvedValue({ did: "did:plc:admin", handle: "admin.bsky.social" });
 
     const response = await POST(createRequest());

@@ -2,6 +2,7 @@ import { NodeOAuthClient } from "@atproto/oauth-client-node";
 import { JoseKey } from "@atproto/jwk-jose";
 import { env } from "../env";
 import { getRawSession } from "../session";
+import { serverEnv } from "../server-env";
 
 const oauthClientKey = "globalOAuthClient";
 
@@ -95,7 +96,7 @@ async function getKeyset() {
     return cachedKeyset;
   }
 
-  const jwkPrivate = env.ATPROTO_JWK_PRIVATE;
+  const jwkPrivate = serverEnv.ATPROTO_JWK_PRIVATE;
   if (!jwkPrivate) {
     return null; // Public client mode
   }
