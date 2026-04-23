@@ -38,7 +38,16 @@ go fmt ./...                   # Format only
 
 # Install dev tools
 make tools                     # Install air, golangci-lint, gofumpt, migrate
+go install github.com/miniscruff/changie@v1.24.0  # Install pinned Changie CLI
+make changie-new               # Create a new changelog fragment
 ```
+
+## Changelog Fragments
+
+Add a Changie fragment when a change should be recorded in the next release notes.
+Use `Affects` values of `user`, `operator`, or `developer` as appropriate.
+Release notes are generated from fragments under `.changes/unreleased/`.
+When writing fragments, agents should use the local skill at `.agents/skills/writing-changie/SKILL.md`.
 
 ## Code Style Guidelines
 

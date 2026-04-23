@@ -1,0 +1,4 @@
+kind: added
+body: Add a curated release-note workflow so noteworthy changes can be captured in a consistent, reviewable format.
+custom:
+  Affects: developer

@@ -1,0 +1,37 @@
+name: Changelog validation
+
+on:
+  pull_request:
+    paths:
+      - .changie.yaml
+      - .changes/**
+      - CHANGELOG.md
+      - .github/workflows/changelog.yml
+  push:
+    branches: [main]
+    paths:
+      - .changie.yaml
+      - .changes/**
+      - CHANGELOG.md
+      - .github/workflows/changelog.yml
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install Changie v1.24.0
+        run: go install github.com/miniscruff/changie@v1.24.0
+
+      - name: Validate Changie config and fragments
+        run: changie batch auto --dry-run
