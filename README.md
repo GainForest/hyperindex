@@ -248,8 +248,8 @@ ADMIN_DIDS=did:plc:your-did-here
 # Security — required for session encryption (min 64 chars)
 SECRET_KEY_BASE=your-secret-key-at-least-64-characters-long-generate-with-openssl-rand
 
-# Admin API key — required for trusted X-User-DID requests.
-# X-User-DID is trusted only when the request also includes:
+# Admin API key — required at startup; the server will not start without it.
+# Also enables trusted X-User-DID proxy requests when the request includes:
 # X-Admin-API-Key: <key>
 # Example: openssl rand -base64 32
 ADMIN_API_KEY=replace-with-a-random-secret
