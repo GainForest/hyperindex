@@ -1,0 +1,4 @@
+kind: added
+body: Automate release-note batching so maintainers can generate a reviewable release PR from GitHub Actions on main.
+custom:
+  Affects: developer

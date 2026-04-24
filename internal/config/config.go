@@ -162,7 +162,7 @@ func (c *Config) Validate() error {
 
 	trimmedAdminAPIKey := strings.TrimSpace(c.AdminAPIKey)
 	if trimmedAdminAPIKey != c.AdminAPIKey {
-		return fmt.Errorf("ADMIN_API_KEY must not have leading or trailing whitespace")
+		return fmt.Errorf("ADMIN API key must not have leading or trailing white space (whitespace)")
 	}
 
 	if len(trimmedAdminAPIKey) < 16 {
