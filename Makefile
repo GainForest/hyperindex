@@ -1,5 +1,7 @@
 .PHONY: help build run test test-coverage lint fmt clean dev db-migrate db-rollback db-status db-create-migration docker docker-run tools generate hooks-install changie-new
 
+GO_TOOLCHAIN := GOTOOLCHAIN=go1.26.0
+
 # Default target
 help:
 	@echo "Hypergoat - Makefile Commands"
@@ -99,11 +101,11 @@ docker-run:
 # Install development tools
 tools:
 	@echo "Installing development tools..."
-	@go install github.com/air-verse/air@latest
-	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-	@go install mvdan.cc/gofumpt@latest
-	@go install -tags 'postgres sqlite' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
-	@go install github.com/miniscruff/changie@v1.24.0
+	@$(GO_TOOLCHAIN) go install github.com/air-verse/air@latest
+	@$(GO_TOOLCHAIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	@$(GO_TOOLCHAIN) go install mvdan.cc/gofumpt@latest
+	@$(GO_TOOLCHAIN) go install -tags 'postgres sqlite' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+	@$(GO_TOOLCHAIN) go install github.com/miniscruff/changie@v1.24.0
 
 # Generate (placeholder for future code generation)
 generate:

@@ -82,7 +82,6 @@ func (db *testDB) seedTestData(t *testing.T, ctx context.Context) {
 
 	configs := map[string]string{
 		"domain_authority": "example.com",
-		"admin_dids":       "did:plc:admin1",
 		"relay_url":        "wss://relay.example.com",
 	}
 
@@ -339,7 +338,7 @@ func buildAdminSchema(db *testDB) (*graphql.Schema, error) {
 		Config:       db.Config,
 		OAuthClients: db.OAuthClients,
 	}
-	resolver := admin.NewResolver(repos, "did:plc:test-labeler")
+	resolver := admin.NewResolver(repos, "did:plc:test-labeler", []string{"did:plc:admin1"})
 	builder := admin.NewSchemaBuilder(resolver)
 	return builder.Build()
 }
@@ -422,6 +421,42 @@ func TestAdminGraphQL_Settings(t *testing.T) {
 
 	if settings["domainAuthority"] != "example.com" {
 		t.Errorf("Expected 'example.com', got '%v'", settings["domainAuthority"])
+	}
+
+	adminDids, ok := settings["adminDids"].([]interface{})
+	if !ok {
+		t.Fatalf("Expected adminDids list, got %T", settings["adminDids"])
+	}
+	if len(adminDids) != 1 || adminDids[0] != "did:plc:admin1" {
+		t.Fatalf("Expected env-backed adminDids, got %v", adminDids)
+	}
+}
+
+func TestAdminGraphQL_SettingsUsesEnvAdminDIDsInsteadOfDB(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+	db.seedTestData(t, ctx)
+
+	if err := db.Config.Set(ctx, "admin_dids", "did:plc:stale-admin"); err != nil {
+		t.Fatalf("Failed to seed stale admin_dids config: %v", err)
+	}
+
+	schema, err := buildAdminSchema(db)
+	if err != nil {
+		t.Fatalf("Failed to build schema: %v", err)
+	}
+
+	adminCtx := admin.ContextWithAuth(ctx, "did:plc:admin1", "admin.example.com", true, []string{"did:plc:admin1"})
+	result := executeQuery(schema, `{ settings { adminDids } }`, adminCtx)
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	settings := data["settings"].(map[string]interface{})
+	adminDids := settings["adminDids"].([]interface{})
+	if len(adminDids) != 1 || adminDids[0] != "did:plc:admin1" {
+		t.Fatalf("Expected env adminDids to win over DB value, got %v", adminDids)
 	}
 }
 

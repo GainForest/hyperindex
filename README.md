@@ -17,6 +17,8 @@ Hyperindex (hi) connects to the AT Protocol network, indexes records matching yo
 git clone https://github.com/GainForest/hypergoat.git
 cd hypergoat
 cp .env.example .env
+# Replace the placeholder secrets in .env (especially SECRET_KEY_BASE and ADMIN_API_KEY)
+# before using the server in production or against real data.
 go run ./cmd/hypergoat
 ```
 
@@ -227,6 +229,8 @@ Default sort is `indexed_at DESC` (newest first). Available sort fields are gene
 
 Create a `.env` file or set environment variables:
 
+The `.env.example` file includes placeholder values for required secrets. After copying it to `.env`, replace those placeholders with real random secrets before running in production or against real data.
+
 ```bash
 # Database (SQLite or PostgreSQL)
 DATABASE_URL=sqlite:data/hypergoat.db
@@ -238,18 +242,17 @@ PORT=8080
 EXTERNAL_BASE_URL=http://localhost:8080
 
 # Admin access (comma-separated DIDs)
+# Managed via deployment environment; shown read-only in the admin UI.
 ADMIN_DIDS=did:plc:your-did-here
-
-# Client-side/public/UI-only admin gating; backend ADMIN_DIDS remains authoritative and is the only server-side authorization source
-NEXT_PUBLIC_ADMIN_DIDS=did:plc:your-did-here
 
 # Security — required for session encryption (min 64 chars)
 SECRET_KEY_BASE=your-secret-key-at-least-64-characters-long-generate-with-openssl-rand
 
-# Proxy auth — set to true when running behind a trusted reverse proxy
-# (e.g. Next.js frontend on Vercel) that sets the X-User-DID header.
-# WARNING: Never enable this when the server is directly exposed to the internet.
-TRUST_PROXY_HEADERS=false
+# Admin API key — required at startup; the server will not start without it.
+# Also enables trusted X-User-DID proxy requests when the request includes:
+# X-Admin-API-Key: <key>
+# Example: openssl rand -base64 32
+ADMIN_API_KEY=replace-with-a-random-secret
 
 # WebSocket origins — comma-separated allowed origins for subscriptions.
 # Empty = same-origin only. Set to "*" for development.

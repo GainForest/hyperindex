@@ -4,7 +4,6 @@ import { gql } from "graphql-request";
 export const UPDATE_SETTINGS = gql`
   mutation UpdateSettings(
     $domainAuthority: String
-    $adminDids: [String!]
     $relayUrl: String
     $plcDirectoryUrl: String
     $jetstreamUrl: String
@@ -12,7 +11,6 @@ export const UPDATE_SETTINGS = gql`
   ) {
     updateSettings(
       domainAuthority: $domainAuthority
-      adminDids: $adminDids
       relayUrl: $relayUrl
       plcDirectoryUrl: $plcDirectoryUrl
       jetstreamUrl: $jetstreamUrl
@@ -111,20 +109,6 @@ export const UPDATE_OAUTH_CLIENT = gql`
 export const DELETE_OAUTH_CLIENT = gql`
   mutation DeleteOAuthClient($clientId: String!) {
     deleteOAuthClient(clientId: $clientId)
-  }
-`;
-
-// Add Admin
-export const ADD_ADMIN = gql`
-  mutation AddAdmin($did: String!) {
-    addAdmin(did: $did)
-  }
-`;
-
-// Remove Admin
-export const REMOVE_ADMIN = gql`
-  mutation RemoveAdmin($did: String!) {
-    removeAdmin(did: $did)
   }
 `;
 

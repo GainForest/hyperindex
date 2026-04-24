@@ -276,10 +276,6 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 						Type:        graphql.String,
 						Description: "Domain authority (e.g., example.com)",
 					},
-					"adminDids": &graphql.ArgumentConfig{
-						Type:        graphql.String,
-						Description: "Comma-separated list of admin DIDs",
-					},
 					"relayUrl": &graphql.ArgumentConfig{
 						Type:        graphql.String,
 						Description: "AT Protocol relay URL",
@@ -303,18 +299,14 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 					}
 
 					domainAuthority, _ := p.Args["domainAuthority"].(string)
-					adminDids, _ := p.Args["adminDids"].(string)
 					relayURL, _ := p.Args["relayUrl"].(string)
 					plcDirectoryURL, _ := p.Args["plcDirectoryUrl"].(string)
 					jetstreamURL, _ := p.Args["jetstreamUrl"].(string)
 					oauthScopes, _ := p.Args["oauthSupportedScopes"].(string)
 
-					var domainPtr, adminPtr, relayPtr, plcPtr, jetPtr, scopesPtr *string
+					var domainPtr, relayPtr, plcPtr, jetPtr, scopesPtr *string
 					if domainAuthority != "" {
 						domainPtr = &domainAuthority
-					}
-					if adminDids != "" {
-						adminPtr = &adminDids
 					}
 					if relayURL != "" {
 						relayPtr = &relayURL
@@ -329,7 +321,7 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 						scopesPtr = &oauthScopes
 					}
 
-					return b.resolver.UpdateSettings(p.Context, domainPtr, adminPtr, relayPtr, plcPtr, jetPtr, scopesPtr)
+					return b.resolver.UpdateSettings(p.Context, domainPtr, relayPtr, plcPtr, jetPtr, scopesPtr)
 				},
 			},
 			"resetAll": &graphql.Field{
@@ -637,40 +629,6 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 					}
 					clientID, _ := p.Args["clientId"].(string)
 					return b.resolver.DeleteOAuthClient(p.Context, clientID)
-				},
-			},
-			"addAdmin": &graphql.Field{
-				Type:        graphql.NewNonNull(graphql.Boolean),
-				Description: "Add a DID to the admin list (admin only)",
-				Args: graphql.FieldConfigArgument{
-					"did": &graphql.ArgumentConfig{
-						Type:        graphql.NewNonNull(graphql.String),
-						Description: "DID to add as admin",
-					},
-				},
-				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-					if err := requireAdmin(p.Context); err != nil {
-						return nil, err
-					}
-					did, _ := p.Args["did"].(string)
-					return b.resolver.AddAdmin(p.Context, did)
-				},
-			},
-			"removeAdmin": &graphql.Field{
-				Type:        graphql.NewNonNull(graphql.Boolean),
-				Description: "Remove a DID from the admin list (admin only)",
-				Args: graphql.FieldConfigArgument{
-					"did": &graphql.ArgumentConfig{
-						Type:        graphql.NewNonNull(graphql.String),
-						Description: "DID to remove from admin list",
-					},
-				},
-				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-					if err := requireAdmin(p.Context); err != nil {
-						return nil, err
-					}
-					did, _ := p.Args["did"].(string)
-					return b.resolver.RemoveAdmin(p.Context, did)
 				},
 			},
 			"registerLexicon": &graphql.Field{

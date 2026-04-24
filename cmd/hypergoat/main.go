@@ -200,17 +200,6 @@ func initServices(cfg *config.Config) (*services, error) {
 		slog.Warn("Failed to initialize config defaults", "error", err)
 	}
 
-	if adminDIDs := cfg.AdminDIDs; adminDIDs != "" {
-		existingAdmins := svc.config.GetAdminDIDs(ctx)
-		if len(existingAdmins) == 0 {
-			if err := svc.config.Set(ctx, "admin_dids", adminDIDs); err != nil {
-				slog.Warn("Failed to set admin_dids from environment", "error", err)
-			} else {
-				slog.Info("Initialized admin DIDs from environment", "dids", adminDIDs)
-			}
-		}
-	}
-
 	// Auto-populate activity from existing records if activity table is empty
 	go populateActivityIfEmpty(ctx, svc)
 
@@ -268,9 +257,10 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 			allowedOrigins = append(allowedOrigins, strings.TrimSpace(o))
 		}
 	}
+	allowAdminAPIKeyAuth := cfg.AdminAPIKey != ""
 	r.Use(server.CORSMiddleware(server.CORSConfig{
-		AllowedOrigins:    allowedOrigins,
-		TrustProxyHeaders: cfg.TrustProxyHeaders,
+		AllowedOrigins:       allowedOrigins,
+		AllowAdminAPIKeyAuth: allowAdminAPIKeyAuth,
 	}))
 
 	// Health check — reflects hyperindex's own health only.
@@ -474,7 +464,7 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 		domainDID = "did:web:" + cfg.Host
 	}
 
-	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, svc.config, domainDID, cfg.TrustProxyHeaders)
+	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, domainDID, cfg.AdminAPIKey, admin.ParseAdminDIDs(cfg.AdminDIDs))
 	if err != nil {
 		slog.Error("Failed to create admin GraphQL handler", "error", err)
 		return nil

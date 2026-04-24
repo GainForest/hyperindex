@@ -1,7 +1,11 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/graphql-go/graphql"
@@ -15,6 +19,145 @@ func enumHasValue(enum *graphql.Enum, name string) bool {
 		}
 	}
 	return false
+}
+
+func newTestAdminHandler(t *testing.T, adminDIDs, adminAPIKey string) *Handler {
+	t.Helper()
+
+	handler, err := NewHandler(&Repositories{}, nil, "did:web:example.com", adminAPIKey, ParseAdminDIDs(adminDIDs))
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
+
+	return handler
+}
+
+type currentSessionResponse struct {
+	Data struct {
+		CurrentSession *struct {
+			DID     string `json:"did"`
+			Handle  string `json:"handle"`
+			IsAdmin bool   `json:"isAdmin"`
+		} `json:"currentSession"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+func decodeCurrentSessionResponse(t *testing.T, rr *httptest.ResponseRecorder) *currentSessionResponse {
+	t.Helper()
+
+	var payload currentSessionResponse
+
+	if err := json.NewDecoder(rr.Body).Decode(&payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	return &payload
+}
+
+func TestIsValidAdminAPIKey(t *testing.T) {
+	t.Parallel()
+
+	const expected = "super-secret-key"
+
+	tests := []struct {
+		name        string
+		providedKey string
+		expectedKey string
+		want        bool
+	}{
+		{name: "valid api key", providedKey: "super-secret-key", expectedKey: expected, want: true},
+		{name: "wrong key", providedKey: "wrong-key", expectedKey: expected, want: false},
+		{name: "missing provided key", providedKey: "", expectedKey: expected, want: false},
+		{name: "empty expected key", providedKey: "super-secret-key", expectedKey: "", want: false},
+		{name: "whitespace-only provided key", providedKey: "   ", expectedKey: expected, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := isValidAdminAPIKey(tt.providedKey, tt.expectedKey)
+			if got != tt.want {
+				t.Fatalf("isValidAdminAPIKey() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandlerServeHTTP_AuthViaXUserDIDWithValidAdminAPIKey(t *testing.T) {
+	handler := newTestAdminHandler(t, "did:plc:admin1", "super-secret-key")
+
+	body := bytes.NewBufferString(`{"query":"{ currentSession { did handle isAdmin } }"}`)
+	req := httptest.NewRequest(http.MethodPost, "/graphql", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Admin-API-Key", "super-secret-key")
+	req.Header.Set("X-User-DID", "did:plc:admin1")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	payload := decodeCurrentSessionResponse(t, rr)
+	if len(payload.Errors) != 0 {
+		t.Fatalf("unexpected GraphQL errors: %+v", payload.Errors)
+	}
+	if payload.Data.CurrentSession == nil {
+		t.Fatal("expected currentSession data, got nil")
+	}
+	if got := payload.Data.CurrentSession.DID; got != "did:plc:admin1" {
+		t.Fatalf("did = %q, want %q", got, "did:plc:admin1")
+	}
+	if got := payload.Data.CurrentSession.Handle; got != "" {
+		t.Fatalf("handle = %q, want empty string", got)
+	}
+	if !payload.Data.CurrentSession.IsAdmin {
+		t.Fatal("expected isAdmin to be true")
+	}
+}
+
+func TestHandlerServeHTTP_IgnoresXUserDIDWithoutValidAdminAPIKey(t *testing.T) {
+	handler := newTestAdminHandler(t, "did:plc:admin1", "super-secret-key")
+
+	tests := []struct {
+		name   string
+		apiKey string
+	}{
+		{name: "wrong admin api key", apiKey: "wrong-key"},
+		{name: "missing admin api key", apiKey: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := bytes.NewBufferString(`{"query":"{ currentSession { did handle isAdmin } }"}`)
+			req := httptest.NewRequest(http.MethodPost, "/graphql", body)
+			req.Header.Set("Content-Type", "application/json")
+			if tt.apiKey != "" {
+				req.Header.Set("X-Admin-API-Key", tt.apiKey)
+			}
+			req.Header.Set("X-User-DID", "did:plc:admin1")
+
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+			}
+
+			payload := decodeCurrentSessionResponse(t, rr)
+			if len(payload.Errors) != 0 {
+				t.Fatalf("unexpected GraphQL errors: %+v", payload.Errors)
+			}
+			if payload.Data.CurrentSession != nil {
+				t.Fatalf("expected currentSession to be nil, got %+v", payload.Data.CurrentSession)
+			}
+		})
+	}
 }
 
 func TestEnumTypes(t *testing.T) {
@@ -149,6 +292,33 @@ func TestSettingsTypeFields(t *testing.T) {
 	for _, name := range expectedFields {
 		if fields[name] == nil {
 			t.Errorf("Expected field %s not found in SettingsType", name)
+		}
+	}
+}
+
+func TestSchemaRemovesAdminMutationPaths(t *testing.T) {
+	handler := newTestAdminHandler(t, "did:plc:admin1", "super-secret-key")
+
+	mutationType := handler.Schema().MutationType()
+	if mutationType == nil {
+		t.Fatal("expected mutation type")
+	}
+
+	fields := mutationType.Fields()
+	if fields["addAdmin"] != nil {
+		t.Fatal("expected addAdmin mutation to be removed")
+	}
+	if fields["removeAdmin"] != nil {
+		t.Fatal("expected removeAdmin mutation to be removed")
+	}
+
+	updateSettings := fields["updateSettings"]
+	if updateSettings == nil {
+		t.Fatal("expected updateSettings mutation")
+	}
+	for _, arg := range updateSettings.Args {
+		if arg.PrivateName == "adminDids" {
+			t.Fatal("expected updateSettings.adminDids argument to be removed")
 		}
 	}
 }
