@@ -15,6 +15,9 @@ kinds:
   - label: Added
     key: added
     auto: minor
+  - label: Breaking
+    key: breaking
+    auto: major
   - label: Changed
     key: changed
     auto: major

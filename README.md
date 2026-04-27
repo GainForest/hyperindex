@@ -356,6 +356,16 @@ make changie-new
 - Maintainers prepare release notes by running the manual **Release** GitHub Actions workflow on `main`, which batches pending fragments and opens or updates a release PR.
 - Tagging and GitHub Release publishing still happen separately.
 
+Recommended fragment kinds:
+
+- `added` — new functionality
+- `breaking` — behavior or interface changes that require users, operators, or developers to adapt
+- `changed` — changed behavior, enhancements, or workflow changes
+- `deprecated` — functionality that still works now but should be migrated away from
+- `removed` — functionality removed
+- `fixed` — bug fixes
+- `security` — security-relevant fixes or hardening worth calling out
+
 ### Affects and body guidance
 
 `Affects` describes who or what the change impacts most. Use the smallest audience that still fits the change.

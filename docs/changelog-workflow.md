@@ -20,6 +20,18 @@ Recommended values:
 
 Write the body as a short description of the impact, not the implementation. Good release-note bodies explain what changed, why it matters, and what readers should expect. Bad ones describe internal code paths, file names, or implementation details instead of the visible effect.
 
+## Kinds
+
+Use these fragment kinds:
+
+- `added` — new functionality
+- `breaking` — behavior or interface changes that require users, operators, or developers to adapt
+- `changed` — changed behavior, enhancements, or workflow changes
+- `deprecated` — functionality that still works now but should be migrated away from
+- `removed` — functionality removed
+- `fixed` — bug fixes
+- `security` — security-relevant fixes or hardening worth calling out
+
 ## Contributor workflow
 
 1. Add release-note fragments in feature PRs.
