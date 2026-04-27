@@ -94,7 +94,7 @@ jobs:
 
       - name: Create or update release PR
         if: steps.fragments.outputs.found == 'true' && steps.changes.outputs.created == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           branch-token: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
