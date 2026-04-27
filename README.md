@@ -353,7 +353,8 @@ make changie-new
 
 - Add a changelog fragment for user-facing changes, operator-facing changes, bug fixes, and other work that should appear in the next release notes.
 - You do not need a fragment for docs-only edits, tests-only changes, or internal refactors that do not affect behavior.
-- Release/tag automation is intentionally out of scope for this phase.
+- Maintainers prepare release notes by running the manual **Release** GitHub Actions workflow on `main`, which batches pending fragments and opens or updates a release PR.
+- Tagging and GitHub Release publishing still happen separately.
 
 ### Affects and body guidance
 
@@ -366,6 +367,14 @@ Recommended values:
 - `developer` — changes that affect contributor workflows, tooling, tests, or documentation
 
 Write the release-note body as a short description of the impact, not the implementation. Good bodies explain what changed, why it matters, and what readers should expect. Bad bodies focus on internal code paths, file names, or implementation details instead of the visible effect.
+
+### Release PR automation
+
+- Merge feature PRs with their Changie fragments into `main`.
+- Run the **Release** workflow from GitHub Actions on `main` and choose `auto`, `patch`, `minor`, or `major` batching.
+- The workflow first checks for unreleased fragments and exits cleanly if none are present.
+- When fragments exist, it runs `go build ./...`, `go test ./...`, `changie batch <release_type>`, and `changie merge`.
+- If release notes were generated, it creates or updates a PR from `release/changelog` back into `main` for review.
 
 ### Local pre-commit linting
 

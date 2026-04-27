@@ -1,4 +1,4 @@
-# Changelog workflow (Phase 1)
+# Changelog workflow
 
 This repository uses [Changie](https://github.com/miniscruff/changie) to curate release notes from fragment files.
 
@@ -20,9 +20,9 @@ Recommended values:
 
 Write the body as a short description of the impact, not the implementation. Good release-note bodies explain what changed, why it matters, and what readers should expect. Bad ones describe internal code paths, file names, or implementation details instead of the visible effect.
 
-## Maintainer workflow
+## Contributor workflow
 
-1. Review the pending fragments in `.changes/unreleased/`.
+1. Add release-note fragments in feature PRs.
 2. If you need a new entry, create one with:
 
    ```bash
@@ -35,31 +35,56 @@ Write the body as a short description of the impact, not the implementation. Goo
    changie new
    ```
 
-3. When the fragments are ready to batch, generate the next version note:
+## Release PR workflow
+
+1. Merge feature PRs with their `.changes/unreleased/*.yaml` fragments into `main`.
+2. When you are ready to prepare release notes, run the **Release** GitHub Actions workflow from `main`.
+3. Choose a `release_type` input:
+
+   - `auto` — let Changie infer the next version bump from fragment kinds
+   - `patch`, `minor`, or `major` — force the batch level
+
+4. The workflow checks for unreleased fragments first and exits cleanly if none are present.
+5. When fragments exist, it runs `go build ./...` and `go test ./...`, then generates the next version note with:
 
    ```bash
-   changie batch auto
+   changie batch <release_type>
    ```
 
-   Use `major`, `minor`, `patch`, or a concrete version if the release target is already known.
+   The workflow passes `auto`, `patch`, `minor`, or `major` directly to `changie batch`.
 
-4. Merge the version files into the root changelog:
+6. The workflow then merges the version files into the root changelog with:
 
    ```bash
    changie merge
    ```
 
-5. Inspect the generated changelog diff before anything else:
+7. If Changie produced release changes, the workflow creates or updates a PR from `release/changelog` back into `main`.
+8. Inspect the generated changelog diff in that PR before merging.
+
+## Manual fallback
+
+If GitHub Actions is unavailable, a maintainer can still generate the release PR locally from a branch cut from `main`:
+
+1. Create a branch from the latest `main`.
+2. Run:
+
+   ```bash
+   changie batch auto
+   changie merge
+   ```
+
+3. Inspect the generated changelog diff before anything else:
 
    ```bash
    git diff -- CHANGELOG.md
    ```
 
-6. If the changelog looks right, commit the change and leave tags and releases for a later phase.
+4. If the changelog looks right, commit the change and open a PR back to `main`.
 
 ## Notes
 
 - Keep release notes curated from fragments, not commit messages.
 - Do not add Node-based tooling for this workflow.
 - Do not treat backend version bumps as part of this phase.
-- Tagging and release publishing are intentionally deferred to a future phase.
+- Release-note batching is automated through the Release workflow, but tagging and release publishing are still intentionally deferred.
