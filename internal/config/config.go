@@ -24,7 +24,7 @@ type Config struct {
 
 	// Security
 	SecretKeyBase  string
-	AllowedOrigins string // Comma-separated allowed WebSocket/CORS origins (empty = same-origin only, "*" = allow all)
+	AllowedOrigins string // Comma-separated allowed WebSocket/CORS origins (empty or "*" = allow all)
 
 	// OAuth
 	ExternalBaseURL   string
