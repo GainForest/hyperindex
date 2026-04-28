@@ -1,4 +1,0 @@
-kind: changed
-body: Update the release workflow so rerunning it after the release PR is merged creates the version tag and publishes the matching GitHub Release from the generated Changie release file.
-custom:
-  Affects: developer
