@@ -1,6 +1,7 @@
 changesDir: .changes
 unreleasedDir: unreleased
 headerPath: header.tpl.md
+versionFormat: '## {{ .Version }}'
 changelogPath: CHANGELOG.md
 versionExt: md
 kindFormat: '### {{.Kind}}'
