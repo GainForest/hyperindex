@@ -6,8 +6,6 @@
 
 **A Go AT Protocol AppView server that indexes records and exposes them via GraphQL**
 
-*Formerly known as Hypergoat.*
-
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for local setup, verification, and pull request guidance.
 
 Hyperindex (hi) connects to the AT Protocol network, indexes records matching your configured Lexicons, and provides a GraphQL API for querying them. It's a Go port of [Quickslice](https://github.com/quickslice/quickslice).
@@ -16,8 +14,8 @@ Hyperindex (hi) connects to the AT Protocol network, indexes records matching yo
 
 ```bash
 # Clone and run
-git clone https://github.com/GainForest/hypergoat.git
-cd hypergoat
+git clone git@github.com:GainForest/hyperindex.git
+cd hyperindex
 cp .env.example .env
 # Replace the placeholder secrets in .env (especially SECRET_KEY_BASE and ADMIN_API_KEY)
 # before using the server in production or against real data.
@@ -414,7 +412,7 @@ Migrations run automatically on startup.
 
 ## History
 
-Hyperindex was incubated and created by [GainForest](https://gainforest.earth) and [Claude Opus 4.5](https://www.anthropic.com/claude) (Anthropic), originally under the name *Hypergoat*. It has since been moved to [hypercerts-org](https://github.com/hypercerts-org) for community maintenance.
+Hyperindex was incubated and created by [GainForest](https://gainforest.earth) and [Claude Opus 4.5](https://www.anthropic.com/claude) (Anthropic). It has since been moved to [hypercerts-org](https://github.com/hypercerts-org) for community maintenance.
 
 ## License
 
