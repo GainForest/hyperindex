@@ -1,4 +1,0 @@
-kind: changed
-body: Change admin access management so ADMIN_DIDS on the backend is the source of truth, removing in-app admin DID mutation paths and showing the admin list as read-only in onboarding and settings.
-custom:
-  Affects: user

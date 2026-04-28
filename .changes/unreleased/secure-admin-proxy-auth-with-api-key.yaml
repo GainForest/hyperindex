@@ -1,4 +1,0 @@
-kind: security
-body: Require ADMIN_API_KEY for proxied admin requests and trust X-User-DID only when requests include a matching admin API key, replacing the previous trusted-header configuration.
-custom:
-  Affects: operator
