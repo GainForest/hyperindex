@@ -2,7 +2,7 @@
 
 ## Repository orientation
 
-- Product name is **Hyperindex**. The repo still uses the older **`hypergoat`** name in the Go module path, binary name, and entrypoint directories.
+- Product name is **Hyperindex**. The project was renamed from Hypergoat; current technical identifiers should use **`hyperindex`**.
 - This repo contains two codebases:
   - the **Go backend** at the repo root
   - the **Next.js frontend** in `client/`
@@ -10,7 +10,7 @@
 
 ## Key boundaries and entrypoints
 
-- Backend entrypoint: `cmd/hypergoat/`
+- Backend entrypoint: `cmd/hyperindex/`
 - Backend database schema source of truth: `internal/database/migrations/`
 - Frontend app: `client/`
 - Tap ingestion support is available and should be preferred for new ingestion work when applicable; Jetstream + backfill is the legacy path.
@@ -19,7 +19,7 @@
 
 ### Backend
 
-- `make build` — build backend binary to `bin/hypergoat`
+- `make build` — build backend binary to `bin/hyperindex`
 - `make run` — build and run backend
 - `make dev` — run backend with hot reload (`air` required)
 - `make test` — run Go tests with `-race`
@@ -53,7 +53,7 @@ Run verification based on what changed.
 
 - If you changed **database code, migrations, repositories, or dialect-specific behavior**:
   - also run:
-    - `DATABASE_URL=postgres://hypergoat:hypergoat@localhost:5432/hypergoat_test?sslmode=disable go test -v -race ./...`
+    - `DATABASE_URL=postgres://hyperindex:hyperindex@localhost:5432/hyperindex_test?sslmode=disable go test -v -race ./...`
 
 - If you changed **integration behavior**:
   - `go test -v -race -tags=integration ./internal/integration/...`

@@ -1,4 +1,4 @@
-// Package server contains HTTP handlers for the hypergoat server.
+// Package server contains HTTP handlers for the hyperindex server.
 // OAuth client registration endpoint (RFC 7591).
 package server
 
@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
 // RegistrationRequest is the OAuth client registration request.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/database"
+	"github.com/GainForest/hyperindex/internal/database"
 )
 
 // Label represents an applied label on a record or account.

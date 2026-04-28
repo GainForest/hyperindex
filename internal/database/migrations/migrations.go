@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/GainForest/hypergoat/internal/database"
+	"github.com/GainForest/hyperindex/internal/database"
 )
 
 //go:embed sqlite/*.sql

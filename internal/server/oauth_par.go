@@ -1,4 +1,4 @@
-// Package server contains HTTP handlers for the hypergoat server.
+// Package server contains HTTP handlers for the hyperindex server.
 // OAuth Pushed Authorization Request (PAR) endpoint (RFC 9126).
 package server
 
@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
 // PARResponse is the PAR response.

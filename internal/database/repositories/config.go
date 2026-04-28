@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/GainForest/hypergoat/internal/database"
+	"github.com/GainForest/hyperindex/internal/database"
 )
 
 // Default values for external services

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 )
 
 // IndexHandler implements EventHandler and stores events in the database.

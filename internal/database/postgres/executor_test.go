@@ -3,7 +3,7 @@ package postgres
 import (
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/database"
+	"github.com/GainForest/hyperindex/internal/database"
 )
 
 func TestExecutor_Dialect(t *testing.T) {

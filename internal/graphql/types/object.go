@@ -6,7 +6,7 @@ import (
 
 	"github.com/graphql-go/graphql"
 
-	"github.com/GainForest/hypergoat/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
 // ReservedRecordFields are field names injected as metadata and must not be overwritten by lexicon properties.

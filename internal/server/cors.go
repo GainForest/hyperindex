@@ -1,4 +1,4 @@
-// Package server provides HTTP handlers and middleware for the Hypergoat server.
+// Package server provides HTTP handlers and middleware for the Hyperindex server.
 package server
 
 import (

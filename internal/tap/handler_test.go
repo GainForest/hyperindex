@@ -7,9 +7,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/graphql/subscription"
-	"github.com/GainForest/hypergoat/internal/tap"
-	"github.com/GainForest/hypergoat/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/tap"
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 // setupHandler creates an IndexHandler backed by a real in-memory SQLite database.

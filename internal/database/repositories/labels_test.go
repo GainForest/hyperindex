@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 func setupLabelsTest(t *testing.T) *repositories.LabelsRepository {

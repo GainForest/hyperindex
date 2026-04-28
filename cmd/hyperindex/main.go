@@ -1,6 +1,6 @@
-// Package main is the entry point for the Hypergoat server.
+// Package main is the entry point for the Hyperindex server.
 //
-// Hypergoat is a Go implementation of Quickslice - an AT Protocol AppView server
+// Hyperindex is a Go implementation of Quickslice - an AT Protocol AppView server
 // that indexes Lexicon-defined records and exposes them via a dynamically-generated
 // GraphQL API.
 //
@@ -24,22 +24,22 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/GainForest/hypergoat/internal/atproto"
-	"github.com/GainForest/hypergoat/internal/backfill"
-	"github.com/GainForest/hypergoat/internal/config"
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/database/migrations"
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	hgraphql "github.com/GainForest/hypergoat/internal/graphql"
-	"github.com/GainForest/hypergoat/internal/graphql/admin"
-	"github.com/GainForest/hypergoat/internal/graphql/resolver"
-	"github.com/GainForest/hypergoat/internal/graphql/subscription"
-	"github.com/GainForest/hypergoat/internal/jetstream"
-	"github.com/GainForest/hypergoat/internal/lexicon"
-	"github.com/GainForest/hypergoat/internal/oauth"
-	"github.com/GainForest/hypergoat/internal/server"
-	"github.com/GainForest/hypergoat/internal/tap"
-	"github.com/GainForest/hypergoat/internal/workers"
+	"github.com/GainForest/hyperindex/internal/atproto"
+	"github.com/GainForest/hyperindex/internal/backfill"
+	"github.com/GainForest/hyperindex/internal/config"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/database/migrations"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	hgraphql "github.com/GainForest/hyperindex/internal/graphql"
+	"github.com/GainForest/hyperindex/internal/graphql/admin"
+	"github.com/GainForest/hyperindex/internal/graphql/resolver"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/jetstream"
+	"github.com/GainForest/hyperindex/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/server"
+	"github.com/GainForest/hyperindex/internal/tap"
+	"github.com/GainForest/hyperindex/internal/workers"
 )
 
 func main() {

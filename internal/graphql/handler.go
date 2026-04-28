@@ -7,9 +7,9 @@ import (
 
 	"github.com/graphql-go/graphql"
 
-	"github.com/GainForest/hypergoat/internal/graphql/resolver"
-	"github.com/GainForest/hypergoat/internal/graphql/schema"
-	"github.com/GainForest/hypergoat/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/graphql/resolver"
+	"github.com/GainForest/hyperindex/internal/graphql/schema"
+	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
 // Handler handles GraphQL requests.

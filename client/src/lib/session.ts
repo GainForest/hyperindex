@@ -19,7 +19,7 @@ const isProduction = process.env.NODE_ENV === "production";
 
 function getSessionOptions(): SessionOptions {
   return {
-    cookieName: "hypergoat_sid",
+    cookieName: "hyperindex_sid",
     password: getCookieSecret(),
     cookieOptions: {
       secure: isProduction,

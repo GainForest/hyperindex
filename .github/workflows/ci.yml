@@ -13,9 +13,9 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: hypergoat
-          POSTGRES_PASSWORD: hypergoat
-          POSTGRES_DB: hypergoat_test
+          POSTGRES_USER: hyperindex
+          POSTGRES_PASSWORD: hyperindex
+          POSTGRES_DB: hyperindex_test
         ports:
           - 5432:5432
         options: >-
@@ -48,7 +48,7 @@ jobs:
       - name: Test with PostgreSQL
         run: go test -v -race -coverprofile=coverage-postgres.out ./...
         env:
-          DATABASE_URL: postgres://hypergoat:hypergoat@localhost:5432/hypergoat_test?sslmode=disable
+          DATABASE_URL: postgres://hyperindex:hyperindex@localhost:5432/hyperindex_test?sslmode=disable
       
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -106,6 +106,6 @@ jobs:
         with:
           context: .
           push: false
-          tags: hypergoat:test
+          tags: hyperindex:test
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/database"
+	"github.com/GainForest/hyperindex/internal/database"
 )
 
 // LabelPreference represents a user's preference for a specific label.

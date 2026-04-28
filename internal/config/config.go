@@ -78,7 +78,7 @@ func Load() (*Config, error) {
 		Port: getEnvInt("PORT", 8080),
 
 		// Database
-		DatabaseURL: getEnv("DATABASE_URL", "sqlite:data/hypergoat.db"),
+		DatabaseURL: getEnv("DATABASE_URL", "sqlite:data/hyperindex.db"),
 
 		// Security
 		SecretKeyBase:  getEnv("SECRET_KEY_BASE", ""),

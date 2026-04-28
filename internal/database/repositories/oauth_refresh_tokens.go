@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
 // OAuthRefreshTokensRepository handles OAuth refresh token persistence.

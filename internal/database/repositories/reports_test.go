@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 func setupReportsTest(t *testing.T) *repositories.ReportsRepository {

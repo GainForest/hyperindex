@@ -15,12 +15,12 @@ import (
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
 
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/graphql/query"
-	"github.com/GainForest/hypergoat/internal/graphql/resolver"
-	"github.com/GainForest/hypergoat/internal/graphql/subscription"
-	"github.com/GainForest/hypergoat/internal/graphql/types"
-	"github.com/GainForest/hypergoat/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/query"
+	"github.com/GainForest/hyperindex/internal/graphql/resolver"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/graphql/types"
+	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
 // Builder builds a GraphQL schema from lexicon definitions.

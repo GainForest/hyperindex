@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="hypergoat.png" alt="Hyperindex" width="600">
+  <img src="hyperindex.png" alt="Hyperindex" width="600">
 </p>
 
 # Hyperindex (hi)
@@ -10,6 +10,8 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for local setup, verification, and pu
 
 Hyperindex (hi) connects to the AT Protocol network, indexes records matching your configured Lexicons, and provides a GraphQL API for querying them. It's a Go port of [Quickslice](https://github.com/quickslice/quickslice).
 
+> **Rename note:** this project was renamed from Hypergoat to Hyperindex.
+
 ## Quick Start
 
 ```bash
@@ -19,7 +21,7 @@ cd hyperindex
 cp .env.example .env
 # Replace the placeholder secrets in .env (especially SECRET_KEY_BASE and ADMIN_API_KEY)
 # before using the server in production or against real data.
-go run ./cmd/hypergoat
+go run ./cmd/hyperindex
 ```
 
 Open http://localhost:8080/graphiql/admin to access the admin interface.
@@ -233,8 +235,8 @@ The `.env.example` file includes placeholder values for required secrets. After 
 
 ```bash
 # Database (SQLite or PostgreSQL)
-DATABASE_URL=sqlite:data/hypergoat.db
-# DATABASE_URL=postgres://user:pass@localhost/hypergoat
+DATABASE_URL=sqlite:data/hyperindex.db
+# DATABASE_URL=postgres://user:pass@localhost/hyperindex
 
 # Server
 HOST=127.0.0.1

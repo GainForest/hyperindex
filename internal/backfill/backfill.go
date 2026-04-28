@@ -9,10 +9,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/atproto"
-	"github.com/GainForest/hypergoat/internal/config"
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/atproto"
+	"github.com/GainForest/hyperindex/internal/config"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
 // Config configures the backfill operation.
