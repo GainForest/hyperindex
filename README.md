@@ -355,8 +355,9 @@ make changie-new
 
 - Add a changelog fragment for user-facing changes, operator-facing changes, bug fixes, and other work that should appear in the next release notes.
 - You do not need a fragment for docs-only edits, tests-only changes, or internal refactors that do not affect behavior.
-- Maintainers prepare release notes by running the manual **Release** GitHub Actions workflow on `main`, which batches pending fragments and opens or updates a release PR.
-- After the release PR is merged, rerun the manual **Release** workflow on `main` to create the `vX.Y.Z` tag and publish the matching GitHub Release from the generated `.changes` version file.
+- Maintainers run **Prepare release notes PR** on `main` to batch pending fragments and open or update a release PR.
+- After the release PR is merged, maintainers run **Publish release tag and GitHub Release** on `main` to create the `vX.Y.Z` tag and publish the matching GitHub Release from the generated `.changes` version file.
+- See `docs/changelog-workflow.md` for the full maintainer runbook, token requirements, and validation workflow details.
 
 Recommended fragment kinds:
 
@@ -383,11 +384,11 @@ Write the release-note body as a short description of the impact, not the implem
 ### Release PR automation
 
 - Merge feature PRs with their Changie fragments into `main`.
-- Run the **Release** workflow from GitHub Actions on `main` and choose `auto`, `patch`, `minor`, or `major` batching.
+- Run **Prepare release notes PR** from GitHub Actions on `main` and choose `auto`, `patch`, `minor`, or `major` batching.
 - If unreleased fragments exist, the workflow runs `go build ./...`, `go test ./...`, `changie batch <release_type>`, and `changie merge`, then creates or updates a PR from `release/changelog` back into `main` for review.
 - Merge the generated release PR after reviewing the versioned `.changes` file and `CHANGELOG.md` diff.
-- Rerun the **Release** workflow on `main` after the PR is merged.
-- If no unreleased fragments remain but the latest generated `.changes/vX.Y.Z.md` release file is not tagged yet, the workflow creates and pushes `vX.Y.Z` and publishes the GitHub Release using that file as the release notes body.
+- Run **Publish release tag and GitHub Release** on `main` after the PR is merged.
+- Publish fails if unreleased fragments still exist and otherwise publishes the latest generated `.changes/vX.Y.Z.md` release file as the GitHub Release notes body.
 
 ### Local pre-commit linting
 

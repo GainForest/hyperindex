@@ -113,6 +113,7 @@ Run verification based on what changed.
   - `user`
   - `operator`
   - `developer`
+- Maintainers should follow `docs/changelog-workflow.md` for the release execution runbook.
 
 ## Git hooks
 

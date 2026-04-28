@@ -1,0 +1,146 @@
+name: Publish release tag and GitHub Release
+
+on:
+  workflow_dispatch:
+
+concurrency: publish-release-${{ github.ref }}
+
+jobs:
+  verify-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      latest_version: ${{ steps.release.outputs.latest_version }}
+      tag: ${{ steps.release.outputs.tag }}
+      notes_file: ${{ steps.release.outputs.notes_file }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate branch
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Publish release tag and GitHub Release can only be run from the 'main' branch."
+            exit 1
+          fi
+
+      - name: Check for unreleased fragments
+        shell: bash
+        run: |
+          shopt -s nullglob
+          fragments=(.changes/unreleased/*.yaml)
+          if [ ${#fragments[@]} -ne 0 ]; then
+            printf '::error::Found %s unreleased Changie fragment(s). Run Prepare release notes PR first.\n' "${#fragments[@]}"
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Changie v1.24.0
+        run: go install github.com/miniscruff/changie@v1.24.0
+
+      - name: Resolve latest release notes
+        id: release
+        shell: bash
+        run: |
+          latest_version=""
+          if latest_version=$(changie latest --remove-prefix 2>/dev/null); then
+            latest_version="${latest_version#v}"
+          fi
+
+          if [ -z "$latest_version" ]; then
+            echo "::error::Could not determine the latest generated changelog version."
+            exit 1
+          fi
+
+          if [[ ! "$latest_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Latest generated changelog version '$latest_version' is not a plain semantic version."
+            exit 1
+          fi
+
+          notes_file=""
+          for candidate in ".changes/v${latest_version}.md" ".changes/${latest_version}.md"; do
+            if [ -f "$candidate" ]; then
+              notes_file="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$notes_file" ]; then
+            echo "::error::No generated release notes file was found for version v${latest_version}."
+            exit 1
+          fi
+
+          tag="v${latest_version}"
+
+          echo "latest_version=$latest_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs: verify-release
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Validate branch
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Publish release tag and GitHub Release can only be run from the 'main' branch."
+            exit 1
+          fi
+
+      - name: Check release notes file
+        env:
+          RELEASE_NOTES_FILE: ${{ needs.verify-release.outputs.notes_file }}
+        run: |
+          if [ ! -f "$RELEASE_NOTES_FILE" ]; then
+            echo "::error::Resolved release notes file '$RELEASE_NOTES_FILE' was not found."
+            exit 1
+          fi
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.verify-release.outputs.tag }}
+          RELEASE_NOTES_FILE: ${{ needs.verify-release.outputs.notes_file }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "Tag $RELEASE_TAG already exists."
+          else
+            git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+            git push origin "$RELEASE_TAG"
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "GitHub Release $RELEASE_TAG already exists."
+          else
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$RELEASE_NOTES_FILE"
+          fi
