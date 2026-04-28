@@ -257,7 +257,7 @@ SECRET_KEY_BASE=your-secret-key-at-least-64-characters-long-generate-with-openss
 ADMIN_API_KEY=replace-with-a-random-secret
 
 # WebSocket origins — comma-separated allowed origins for subscriptions.
-# Empty = same-origin only. Set to "*" for development.
+# Unset or empty allows all origins. Set a comma-separated list to restrict origins; "*" also allows all origins.
 # ALLOWED_ORIGINS=https://your-frontend.vercel.app
 
 # Jetstream (real-time indexing)
@@ -388,7 +388,7 @@ Write the release-note body as a short description of the impact, not the implem
 - If unreleased fragments exist, the workflow runs `go build ./...`, `go test ./...`, `changie batch <release_type>`, and `changie merge`, then creates or updates a PR from `release/changelog` back into `main` for review.
 - Merge the generated release PR after reviewing the versioned `.changes` file and `CHANGELOG.md` diff.
 - Run **Publish release tag and GitHub Release** on `main` after the PR is merged.
-- Publish fails if unreleased fragments still exist and otherwise publishes the latest generated `.changes/vX.Y.Z.md` release file as the GitHub Release notes body.
+- Publish uses the latest generated `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` release file as the GitHub Release notes body; newer unreleased fragments for the next cycle do not block publishing that prepared version.
 
 ### Local pre-commit linting
 

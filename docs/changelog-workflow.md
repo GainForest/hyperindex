@@ -56,8 +56,8 @@ Use two separate manual workflows:
 
 ### Decision rule
 
-- If `.changes/unreleased/*.yaml` fragments exist, run **Prepare release notes PR**.
-- If no unreleased fragments remain and a versioned `.changes/vX.Y.Z.md` file already exists, run **Publish release tag and GitHub Release**.
+- If no versioned release file exists yet and `.changes/unreleased/*.yaml` fragments exist, run **Prepare release notes PR**.
+- If a versioned `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` file already exists, run **Publish release tag and GitHub Release**. New unreleased fragments for the next cycle do not block publishing the prepared version.
 
 ### 1. Prepare release notes PR
 
@@ -90,20 +90,20 @@ Use two separate manual workflows:
 ### 2. Publish release tag and GitHub Release
 
 1. After the release PR is merged, run **Publish release tag and GitHub Release** from `main`.
-2. The workflow requires a clean release state:
+2. The workflow requires a prepared release file:
 
-   - no unreleased `.changes/unreleased/*.yaml` fragments may remain
    - a generated `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` release file must exist
 
 3. The workflow auto-detects the latest generated changelog version.
-4. The workflow runs `go build ./...` and `go test ./...` in a read-only verification job before publishing.
-5. It then:
+4. If newer `.changes/unreleased/*.yaml` fragments exist for the next cycle, the workflow logs them and continues publishing the already-generated version.
+5. The workflow runs `go build ./...` and `go test ./...` in a read-only verification job before publishing.
+6. It then:
 
    - creates and pushes the corresponding `vX.Y.Z` git tag if it does not already exist
    - publishes a GitHub Release using the generated `.changes` version file as the release notes body if it does not already exist
 
-6. If the tag already exists but the GitHub Release does not, the workflow creates just the release.
-7. If both the tag and GitHub Release already exist, the workflow exits safely as a no-op.
+7. If the tag already exists but the GitHub Release does not, the workflow creates just the release.
+8. If both the tag and GitHub Release already exist, the workflow exits safely as a no-op.
 
 ## GitHub token and permissions
 
@@ -150,12 +150,12 @@ If GitHub Actions is unavailable, a maintainer can still generate the release PR
    ```
 
 4. If the changelog looks right, commit the change and open a PR back to `main`.
-5. After the PR is merged, verify there are no unreleased fragments left.
-6. Create and push the matching `vX.Y.Z` tag and create a GitHub Release whose body matches the generated `.changes/vX.Y.Z.md` file.
+5. After the PR is merged, identify the generated release notes file: `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md`.
+6. Create and push the matching `vX.Y.Z` tag and create a GitHub Release whose body matches that generated version file. New unreleased fragments for the next cycle do not block publishing the already-prepared release.
 
 ## Notes
 
 - Keep release notes curated from fragments, not commit messages.
 - Do not add Node-based tooling for this workflow.
 - Do not treat backend version bumps as part of this phase.
-- The generated `.changes/vX.Y.Z.md` file is the release-notes source for the published GitHub Release.
+- The generated `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` file is the release-notes source for the published GitHub Release.

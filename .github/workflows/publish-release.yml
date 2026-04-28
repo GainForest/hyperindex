@@ -29,16 +29,6 @@ jobs:
             exit 1
           fi
 
-      - name: Check for unreleased fragments
-        shell: bash
-        run: |
-          shopt -s nullglob
-          fragments=(.changes/unreleased/*.yaml)
-          if [ ${#fragments[@]} -ne 0 ]; then
-            printf '::error::Found %s unreleased Changie fragment(s). Run Prepare release notes PR first.\n' "${#fragments[@]}"
-            exit 1
-          fi
-
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -85,6 +75,19 @@ jobs:
           echo "latest_version=$latest_version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
+
+      - name: Note unreleased fragments
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          shopt -s nullglob
+          fragments=(.changes/unreleased/*.yaml)
+          if [ ${#fragments[@]} -eq 0 ]; then
+            echo "No unreleased Changie fragments found."
+          else
+            printf 'Found %s unreleased Changie fragment(s); continuing because release notes for %s already exist and will be published.\n' "${#fragments[@]}" "$RELEASE_TAG"
+          fi
 
       - name: Build
         run: go build ./...

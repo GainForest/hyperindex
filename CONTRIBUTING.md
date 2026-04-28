@@ -70,7 +70,7 @@ A few settings commonly trip people up:
 - `SECRET_KEY_BASE` must be at least 64 characters
 - `TAP_ENABLED=true` switches ingestion to Tap mode
 - migrations run automatically on startup
-- when unset, `ALLOWED_ORIGINS` currently allows all origins
+- unset or empty `ALLOWED_ORIGINS` allows all origins; set a comma-separated list to restrict origins, and `*` also allows all origins
 
 Use `.env.example` and any frontend env examples as your starting point.
 
