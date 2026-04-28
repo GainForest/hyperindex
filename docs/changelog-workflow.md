@@ -56,8 +56,7 @@ Use these fragment kinds:
    - `auto` — let Changie infer the next version bump from fragment kinds
    - `patch`, `minor`, or `major` — force the batch level
 
-4. The workflow checks for unreleased fragments first and exits cleanly if none are present.
-5. When fragments exist, it runs `go build ./...` and `go test ./...`, then generates the next version note with:
+4. If unreleased fragments exist, the workflow runs `go build ./...` and `go test ./...`, then generates the next version note with:
 
    ```bash
    changie batch <release_type>
@@ -65,14 +64,21 @@ Use these fragment kinds:
 
    The workflow passes `auto`, `patch`, `minor`, or `major` directly to `changie batch`.
 
-6. The workflow then merges the version files into the root changelog with:
+5. The workflow then merges the version files into the root changelog with:
 
    ```bash
    changie merge
    ```
 
-7. If Changie produced release changes, the workflow creates or updates a PR from `release/changelog` back into `main`.
-8. Inspect the generated changelog diff in that PR before merging.
+6. If Changie produced release changes, the workflow creates or updates a PR from `release/changelog` back into `main`.
+7. Inspect the generated changelog diff in that PR before merging.
+8. After the release PR is merged, rerun the **Release** workflow from `main`.
+9. On the rerun, if there are no unreleased fragments and the latest generated `.changes/vX.Y.Z.md` file is not tagged yet, the workflow:
+
+   - creates and pushes the corresponding `vX.Y.Z` git tag
+   - publishes a GitHub Release using that generated `.changes` version file as the release notes body
+
+10. If there are no unreleased fragments and the latest release is already tagged, the workflow exits as a no-op.
 
 ## Manual fallback
 
@@ -93,10 +99,11 @@ If GitHub Actions is unavailable, a maintainer can still generate the release PR
    ```
 
 4. If the changelog looks right, commit the change and open a PR back to `main`.
+5. After the PR is merged, create and push the matching `vX.Y.Z` tag and create a GitHub Release whose body matches the generated `.changes/vX.Y.Z.md` file.
 
 ## Notes
 
 - Keep release notes curated from fragments, not commit messages.
 - Do not add Node-based tooling for this workflow.
 - Do not treat backend version bumps as part of this phase.
-- Release-note batching is automated through the Release workflow, but tagging and release publishing are still intentionally deferred.
+- The generated `.changes/vX.Y.Z.md` file is the release-notes source for the published GitHub Release.
