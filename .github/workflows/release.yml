@@ -170,6 +170,12 @@ jobs:
             CHANGELOG.md
             .changes
 
+      - name: Configure git identity
+        if: steps.mode.outputs.mode == 'publish-release'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Create tag and GitHub Release
         if: steps.mode.outputs.mode == 'publish-release'
         env:
