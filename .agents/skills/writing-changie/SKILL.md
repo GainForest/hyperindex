@@ -78,9 +78,10 @@ The filename should describe the release-note topic, not the implementation deta
 
 ## Kinds
 
-Use Changie’s default kinds:
+Use these Changie kinds:
 
 - `added`
+- `breaking`
 - `changed`
 - `deprecated`
 - `removed`
@@ -92,6 +93,7 @@ Choose the kind that best matches the final changelog meaning, not the implement
 General guidance:
 
 - `added` — new functionality
+- `breaking` — behavior or interface changes that require users, operators, or developers to adapt
 - `changed` — changed behavior, enhancements, or workflow changes
 - `deprecated` — still works now, but should be migrated away from
 - `removed` — functionality removed

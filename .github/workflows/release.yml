@@ -17,7 +17,7 @@ on:
 concurrency: release-${{ github.ref }}
 
 jobs:
-  prepare-release-pr:
+  release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -52,36 +52,90 @@ jobs:
           printf 'Found %s unreleased fragment(s).\n' "${#fragments[@]}"
 
       - name: Set up Go
-        if: steps.fragments.outputs.found == 'true'
         uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Install Changie v1.24.0
-        if: steps.fragments.outputs.found == 'true'
         run: go install github.com/miniscruff/changie@v1.24.0
 
+      - name: Determine release mode
+        id: mode
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          latest_version=""
+          if latest_version=$(changie latest --remove-prefix 2>/dev/null); then
+            latest_version="${latest_version#v}"
+          fi
+
+          notes_file=""
+          if [ -n "$latest_version" ]; then
+            for candidate in ".changes/v${latest_version}.md" ".changes/${latest_version}.md"; do
+              if [ -f "$candidate" ]; then
+                notes_file="$candidate"
+                break
+              fi
+            done
+          fi
+
+          tag=""
+          tag_exists=false
+          release_exists=false
+          if [ -n "$latest_version" ]; then
+            tag="v${latest_version}"
+            if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+              tag_exists=true
+            fi
+            if gh release view "$tag" >/dev/null 2>&1; then
+              release_exists=true
+            fi
+          fi
+
+          mode="noop"
+          if [ "${{ steps.fragments.outputs.found }}" = 'true' ]; then
+            mode="prepare-pr"
+          elif [ -n "$latest_version" ] && [ -n "$notes_file" ] && [ "$release_exists" != 'true' ]; then
+            mode="publish-release"
+          fi
+
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "latest_version=$latest_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "notes_file=$notes_file" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=$tag_exists" >> "$GITHUB_OUTPUT"
+          echo "release_exists=$release_exists" >> "$GITHUB_OUTPUT"
+
+          echo "Resolved release mode: $mode"
+          if [ -n "$latest_version" ]; then
+            echo "Latest changelog version: $latest_version"
+          fi
+          if [ -n "$notes_file" ]; then
+            echo "Release notes file: $notes_file"
+          fi
+
       - name: Build
-        if: steps.fragments.outputs.found == 'true'
+        if: steps.mode.outputs.mode != 'noop'
         run: go build ./...
 
       - name: Test
-        if: steps.fragments.outputs.found == 'true'
+        if: steps.mode.outputs.mode != 'noop'
         run: go test ./...
 
       - name: Batch release notes
-        if: steps.fragments.outputs.found == 'true'
+        if: steps.mode.outputs.mode == 'prepare-pr'
         shell: bash
         run: |
           changie batch "${{ inputs.release_type }}"
 
       - name: Merge changelog
-        if: steps.fragments.outputs.found == 'true'
+        if: steps.mode.outputs.mode == 'prepare-pr'
         run: changie merge
 
       - name: Detect release changes
-        if: steps.fragments.outputs.found == 'true'
+        if: steps.mode.outputs.mode == 'prepare-pr'
         id: changes
         shell: bash
         run: |
@@ -93,8 +147,8 @@ jobs:
           fi
 
       - name: Create or update release PR
-        if: steps.fragments.outputs.found == 'true' && steps.changes.outputs.created == 'true'
-        uses: peter-evans/create-pull-request@v7
+        if: steps.mode.outputs.mode == 'prepare-pr' && steps.changes.outputs.created == 'true'
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           branch-token: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
@@ -111,11 +165,37 @@ jobs:
 
             ## Notes
             - Review the generated changelog content before merging
-            - Tagging and GitHub Release publishing still happen separately
+            - After merging this PR, rerun the Release workflow from `main` to tag and publish the GitHub Release
           add-paths: |
             CHANGELOG.md
             .changes
 
+      - name: Create tag and GitHub Release
+        if: steps.mode.outputs.mode == 'publish-release'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.mode.outputs.tag }}
+          RELEASE_NOTES_FILE: ${{ steps.mode.outputs.notes_file }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "Tag $RELEASE_TAG already exists."
+          else
+            git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+            git push origin "$RELEASE_TAG"
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "GitHub Release $RELEASE_TAG already exists."
+          else
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$RELEASE_NOTES_FILE"
+          fi
+
       - name: Log no-op result
-        if: steps.fragments.outputs.found != 'true' || steps.changes.outputs.created != 'true'
-        run: echo "No release PR changes were generated."
+        if: steps.mode.outputs.mode == 'noop'
+        shell: bash
+        run: |
+          if [ "${{ steps.mode.outputs.release_exists }}" = 'true' ] && [ -n "${{ steps.mode.outputs.latest_version }}" ]; then
+            echo "Latest release v${{ steps.mode.outputs.latest_version }} is already tagged and published."
+          else
+            echo "No unreleased fragments or pending release publication were found."
+          fi

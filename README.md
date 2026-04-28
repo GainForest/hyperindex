@@ -354,7 +354,17 @@ make changie-new
 - Add a changelog fragment for user-facing changes, operator-facing changes, bug fixes, and other work that should appear in the next release notes.
 - You do not need a fragment for docs-only edits, tests-only changes, or internal refactors that do not affect behavior.
 - Maintainers prepare release notes by running the manual **Release** GitHub Actions workflow on `main`, which batches pending fragments and opens or updates a release PR.
-- Tagging and GitHub Release publishing still happen separately.
+- After the release PR is merged, rerun the manual **Release** workflow on `main` to create the `vX.Y.Z` tag and publish the matching GitHub Release from the generated `.changes` version file.
+
+Recommended fragment kinds:
+
+- `added` — new functionality
+- `breaking` — behavior or interface changes that require users, operators, or developers to adapt
+- `changed` — changed behavior, enhancements, or workflow changes
+- `deprecated` — functionality that still works now but should be migrated away from
+- `removed` — functionality removed
+- `fixed` — bug fixes
+- `security` — security-relevant fixes or hardening worth calling out
 
 ### Affects and body guidance
 
@@ -372,9 +382,10 @@ Write the release-note body as a short description of the impact, not the implem
 
 - Merge feature PRs with their Changie fragments into `main`.
 - Run the **Release** workflow from GitHub Actions on `main` and choose `auto`, `patch`, `minor`, or `major` batching.
-- The workflow first checks for unreleased fragments and exits cleanly if none are present.
-- When fragments exist, it runs `go build ./...`, `go test ./...`, `changie batch <release_type>`, and `changie merge`.
-- If release notes were generated, it creates or updates a PR from `release/changelog` back into `main` for review.
+- If unreleased fragments exist, the workflow runs `go build ./...`, `go test ./...`, `changie batch <release_type>`, and `changie merge`, then creates or updates a PR from `release/changelog` back into `main` for review.
+- Merge the generated release PR after reviewing the versioned `.changes` file and `CHANGELOG.md` diff.
+- Rerun the **Release** workflow on `main` after the PR is merged.
+- If no unreleased fragments remain but the latest generated `.changes/vX.Y.Z.md` release file is not tagged yet, the workflow creates and pushes `vX.Y.Z` and publishes the GitHub Release using that file as the release notes body.
 
 ### Local pre-commit linting
 
