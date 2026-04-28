@@ -74,7 +74,7 @@ type Config struct {
     Port int    `env:"PORT" envDefault:"8080"`
     
     // Database
-    DatabaseURL string `env:"DATABASE_URL" envDefault:"sqlite:data/hypergoat.db"`
+    DatabaseURL string `env:"DATABASE_URL" envDefault:"sqlite:data/hyperindex.db"`
     
     // Security
     SecretKeyBase string `env:"SECRET_KEY_BASE,required"`
