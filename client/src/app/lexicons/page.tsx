@@ -4,9 +4,8 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
 import { GET_LEXICONS } from "@/lib/graphql/queries";
-import { REGISTER_LEXICON, DELETE_LEXICON } from "@/lib/graphql/mutations";
+import { REGISTER_LEXICON, DELETE_LEXICON, UPLOAD_LEXICONS } from "@/lib/graphql/mutations";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
 import { Alert } from "@/components/ui/Alert";
 import type { LexiconsResponse, Lexicon } from "@/types";
 
@@ -24,6 +23,12 @@ interface TreeNode {
   lexicon?: Lexicon;
   children: Map<string, TreeNode>;
 }
+
+interface UploadLexiconsResponse {
+  uploadLexicons: number;
+}
+
+const EMPTY_LEXICONS: Lexicon[] = [];
 
 // Build hierarchical tree from flat lexicon list
 function buildTree(lexicons: Lexicon[]): Map<string, TreeNode> {
@@ -239,6 +244,7 @@ export default function LexiconsPage() {
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [nsidInput, setNsidInput] = useState("");
+  const [zipFile, setZipFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [deletingNsid, setDeletingNsid] = useState<string | null>(null);
@@ -254,6 +260,23 @@ export default function LexiconsPage() {
   const registerMutation = useMutation({
     mutationFn: (nsid: string) =>
       graphqlClient.request(REGISTER_LEXICON, { nsid }),
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: (zipBase64: string) =>
+      graphqlClient.request<UploadLexiconsResponse>(UPLOAD_LEXICONS, { zipBase64 }),
+    onSuccess: (response) => {
+      const count = response.uploadLexicons;
+      setSuccess(`Uploaded ${count} lexicon${count !== 1 ? "s" : ""}`);
+      setError(null);
+      setZipFile(null);
+      queryClient.invalidateQueries({ queryKey: ["lexicons"] });
+      setTimeout(() => setSuccess(null), 5000);
+    },
+    onError: (err: Error) => {
+      setError(`Failed to upload lexicons: ${err.message}`);
+      setSuccess(null);
+    },
   });
 
   const deleteMutation = useMutation({
@@ -324,17 +347,54 @@ export default function LexiconsPage() {
     }
   };
 
+  const handleZipFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setSuccess(null);
+
+    if (!file) {
+      setZipFile(null);
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith(".zip")) {
+      setZipFile(null);
+      setError("Please choose a .zip file containing lexicon JSON files.");
+      e.target.value = "";
+      return;
+    }
+
+    setError(null);
+    setZipFile(file);
+  };
+
+  const handleUpload = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!zipFile) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(",")[1];
+      uploadMutation.mutate(base64);
+    };
+    reader.onerror = () => {
+      setError("Failed to read the ZIP file. Please choose the file again and retry.");
+      setSuccess(null);
+    };
+    reader.readAsDataURL(zipFile);
+  };
+
+  const lexicons = data?.lexicons ?? EMPTY_LEXICONS;
+
   const filteredLexicons = useMemo(() => {
-    if (!data?.lexicons) return [];
-    if (!searchQuery) return data.lexicons;
+    if (!searchQuery) return lexicons;
 
     const query = searchQuery.toLowerCase();
-    return data.lexicons.filter(
+    return lexicons.filter(
       (lex) =>
         lex.id.toLowerCase().includes(query) ||
         lex.json.toLowerCase().includes(query)
     );
-  }, [data?.lexicons, searchQuery]);
+  }, [lexicons, searchQuery]);
 
   const tree = useMemo(() => buildTree(filteredLexicons), [filteredLexicons]);
   const roots = Array.from(tree.entries()).sort(([a], [b]) => a.localeCompare(b));
@@ -368,34 +428,78 @@ export default function LexiconsPage() {
       )}
       {success && <Alert variant="success">{success}</Alert>}
 
-      {/* Register */}
-      <form onSubmit={handleRegister} className="flex gap-2 items-start">
-        <textarea
-          value={nsidInput}
-          onChange={(e) => {
-            setNsidInput(e.target.value);
-            setError(null);
-          }}
-          placeholder="Enter NSIDs (comma or newline separated)..."
-          rows={1}
-          className="flex-1 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-1 transition-all resize-y"
-          style={{
-            backgroundColor: "var(--card)",
-            borderColor: "var(--border)",
-            color: "var(--foreground)",
-            border: "1px solid var(--border)",
-            minHeight: "2.25rem",
-          }}
-        />
-        <Button
-          type="submit"
-          variant="primary"
-          disabled={batchPending || !nsidInput.trim()}
-          loading={batchPending}
-        >
-          Register
-        </Button>
-      </form>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* Register */}
+        <section className="rounded-xl border p-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
+          <h3 className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
+            Register published lexicons by NSID
+          </h3>
+          <p className="mt-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
+            Resolve published AT Protocol lexicons by NSID and add them to this AppView.
+          </p>
+          <form onSubmit={handleRegister} className="mt-4 flex gap-2 items-start">
+            <textarea
+              value={nsidInput}
+              onChange={(e) => {
+                setNsidInput(e.target.value);
+                setError(null);
+              }}
+              placeholder="Enter NSIDs (comma or newline separated)..."
+              rows={1}
+              className="flex-1 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-1 transition-all resize-y"
+              style={{
+                backgroundColor: "var(--card)",
+                borderColor: "var(--border)",
+                color: "var(--foreground)",
+                border: "1px solid var(--border)",
+                minHeight: "2.25rem",
+              }}
+            />
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={batchPending || !nsidInput.trim()}
+              loading={batchPending}
+            >
+              Register
+            </Button>
+          </form>
+        </section>
+
+        {/* Upload */}
+        <section className="rounded-xl border p-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
+          <h3 className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
+            Upload unpublished lexicons
+          </h3>
+          <div className="mt-1 space-y-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
+            <p>Upload a .zip containing one or more lexicon .json files. Lexicons do not need to be published yet.</p>
+            <p>Each JSON file must contain a top-level id field. A backend restart may be required before new lexicons appear in the public GraphQL schema.</p>
+          </div>
+          <form onSubmit={handleUpload} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <input
+              type="file"
+              accept=".zip"
+              onChange={handleZipFileChange}
+              disabled={uploadMutation.isPending}
+              className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:px-3 file:py-1.5 file:text-sm file:font-medium"
+              style={{ color: "var(--muted-foreground)" }}
+            />
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!zipFile || uploadMutation.isPending}
+              loading={uploadMutation.isPending}
+            >
+              Upload ZIP
+            </Button>
+          </form>
+          {zipFile && (
+            <p className="mt-2 text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
+              Selected: {zipFile.name}
+            </p>
+          )}
+        </section>
+      </div>
 
       {/* Search */}
       <div className="relative">
