@@ -31,6 +31,8 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 ## Deploy on Vercel
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Vercel preview deployments run the frontend only. The app proxies GraphQL requests to the backend configured by `HYPERINDEX_URL` or `NEXT_PUBLIC_HYPERINDEX_URL`.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+If a preview branch targets a shared backend such as `dev.api.hi.gainforest.app`, redeploying the Vercel preview does not rebuild the backend GraphQL schema. After registering or uploading lexicons, restart/redeploy the backend indexer that the preview points to before expecting new typed GraphQL query fields to appear.
+
+See the [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for general Vercel deployment details.
