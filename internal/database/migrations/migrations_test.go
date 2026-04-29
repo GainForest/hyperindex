@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/database/migrations"
-	"github.com/GainForest/hypergoat/internal/database/sqlite"
+	"github.com/GainForest/hyperindex/internal/database/migrations"
+	"github.com/GainForest/hyperindex/internal/database/sqlite"
 )
 
 // newTestExecutor creates an in-memory SQLite executor for testing.

@@ -1,14 +1,14 @@
-// Package testutil provides shared test helpers for the hypergoat test suite.
+// Package testutil provides shared test helpers for the hyperindex test suite.
 package testutil
 
 import (
 	"context"
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/database/migrations"
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/database/sqlite"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/database/migrations"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/database/sqlite"
 )
 
 // TestDB holds an in-memory SQLite database with all migrations applied

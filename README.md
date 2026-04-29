@@ -1,27 +1,27 @@
 <p align="center">
-  <img src="hypergoat.png" alt="Hyperindex" width="600">
+  <img src="hyperindex.png" alt="Hyperindex" width="600">
 </p>
 
 # Hyperindex (hi)
 
 **A Go AT Protocol AppView server that indexes records and exposes them via GraphQL**
 
-*Formerly known as Hypergoat.*
-
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for local setup, verification, and pull request guidance.
 
 Hyperindex (hi) connects to the AT Protocol network, indexes records matching your configured Lexicons, and provides a GraphQL API for querying them. It's a Go port of [Quickslice](https://github.com/quickslice/quickslice).
+
+> **Rename note:** this project was renamed from Hypergoat to Hyperindex.
 
 ## Quick Start
 
 ```bash
 # Clone and run
-git clone https://github.com/GainForest/hypergoat.git
-cd hypergoat
+git clone git@github.com:GainForest/hyperindex.git
+cd hyperindex
 cp .env.example .env
 # Replace the placeholder secrets in .env (especially SECRET_KEY_BASE and ADMIN_API_KEY)
 # before using the server in production or against real data.
-go run ./cmd/hypergoat
+go run ./cmd/hyperindex
 ```
 
 Open http://localhost:8080/graphiql/admin to access the admin interface.
@@ -250,8 +250,8 @@ The `.env.example` file includes placeholder values for required secrets. After 
 
 ```bash
 # Database (SQLite or PostgreSQL)
-DATABASE_URL=sqlite:data/hypergoat.db
-# DATABASE_URL=postgres://user:pass@localhost/hypergoat
+DATABASE_URL=sqlite:data/hyperindex.db
+# DATABASE_URL=postgres://user:pass@localhost/hyperindex
 
 # Server
 HOST=127.0.0.1
@@ -429,7 +429,7 @@ Migrations run automatically on startup.
 
 ## History
 
-Hyperindex was incubated and created by [GainForest](https://gainforest.earth) and [Claude Opus 4.5](https://www.anthropic.com/claude) (Anthropic), originally under the name *Hypergoat*. It has since been moved to [hypercerts-org](https://github.com/hypercerts-org) for community maintenance.
+Hyperindex was incubated and created by [GainForest](https://gainforest.earth) and [Claude Opus 4.5](https://www.anthropic.com/claude) (Anthropic). It has since been moved to [hypercerts-org](https://github.com/hypercerts-org) for community maintenance.
 
 ## License
 

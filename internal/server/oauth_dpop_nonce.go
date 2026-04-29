@@ -1,4 +1,4 @@
-// Package server contains HTTP handlers for the hypergoat server.
+// Package server contains HTTP handlers for the hyperindex server.
 // OAuth DPoP nonce endpoint.
 package server
 

@@ -1,4 +1,4 @@
-module github.com/GainForest/hypergoat
+module github.com/GainForest/hyperindex
 
 go 1.26
 

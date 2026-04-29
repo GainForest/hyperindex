@@ -4,8 +4,8 @@ package resolver
 import (
 	"context"
 
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
 )
 
 // contextKey is a custom type for context keys to avoid collisions.

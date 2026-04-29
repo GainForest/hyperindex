@@ -1,6 +1,6 @@
 //go:build integration
 
-// Package integration provides end-to-end integration tests for hypergoat.
+// Package integration provides end-to-end integration tests for hyperindex.
 package integration
 
 import (
@@ -11,10 +11,10 @@ import (
 
 	"github.com/graphql-go/graphql"
 
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/graphql/resolver"
-	"github.com/GainForest/hypergoat/internal/graphql/schema"
-	"github.com/GainForest/hypergoat/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/resolver"
+	"github.com/GainForest/hyperindex/internal/graphql/schema"
+	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
 // testLexiconJSON is a minimal lexicon with string, integer, datetime, and boolean fields.

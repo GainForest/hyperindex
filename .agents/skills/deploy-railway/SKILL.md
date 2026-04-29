@@ -86,7 +86,7 @@ railway up --path-as-root client/ -s frontend -d
 |----------|-------|
 | `HOST` | `0.0.0.0` |
 | `PORT` | `8080` |
-| `DATABASE_URL` | `sqlite:/app/data/hypergoat.db` |
+| `DATABASE_URL` | `sqlite:/app/data/hyperindex.db` |
 | `EXTERNAL_BASE_URL` | `https://api.hi.gainforest.app` |
 | `ADMIN_API_KEY` | *(must match frontend `HYPERINDEX_ADMIN_API_KEY` for proxied admin requests)* |
 | `ADMIN_DIDS` | `did:plc:qc42fmqqlsmdq7jiypiiigww` (daviddao.org) |

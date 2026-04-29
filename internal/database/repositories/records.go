@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/atproto"
-	"github.com/GainForest/hypergoat/internal/database"
+	"github.com/GainForest/hyperindex/internal/atproto"
+	"github.com/GainForest/hyperindex/internal/database"
 )
 
 // Batch size constants for SQL operations.

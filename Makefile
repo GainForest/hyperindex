@@ -4,7 +4,7 @@ GO_TOOLCHAIN := GOTOOLCHAIN=go1.26.0
 
 # Default target
 help:
-	@echo "Hypergoat - Makefile Commands"
+	@echo "Hyperindex - Makefile Commands"
 	@echo ""
 	@echo "Development:"
 	@echo "  make run          - Run the server"
@@ -29,13 +29,13 @@ help:
 
 # Build the binary
 build:
-	@echo "Building hypergoat..."
-	@go build -o bin/hypergoat ./cmd/hypergoat
+	@echo "Building hyperindex..."
+	@go build -o bin/hyperindex ./cmd/hyperindex
 
 # Run the server
 run: build
-	@echo "Starting hypergoat server..."
-	@./bin/hypergoat
+	@echo "Starting hyperindex server..."
+	@./bin/hyperindex
 
 # Run with hot reload (requires air: go install github.com/air-verse/air@latest)
 dev:
@@ -92,7 +92,7 @@ db-create-migration:
 # Docker
 docker:
 	@echo "Building Docker image..."
-	@docker build -t hypergoat:latest .
+	@docker build -t hyperindex:latest .
 
 docker-run:
 	@echo "Starting with Docker Compose..."

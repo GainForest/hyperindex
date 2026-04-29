@@ -14,7 +14,7 @@ import (
 
     "github.com/go-chi/chi/v5"  // 2. External packages
 
-    "github.com/GainForest/hypergoat/internal/database"  // 3. Internal packages
+    "github.com/GainForest/hyperindex/internal/database"  // 3. Internal packages
 )
 ```
 

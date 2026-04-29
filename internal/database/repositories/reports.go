@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/database"
+	"github.com/GainForest/hyperindex/internal/database"
 )
 
 // ReportReasonType represents the type of reason for a report.

@@ -79,4 +79,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/GainForest/hypergoat
+        - github.com/GainForest/hyperindex

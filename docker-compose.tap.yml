@@ -27,7 +27,7 @@ services:
       TAP_ENABLED: "true"
       TAP_URL: "ws://tap:2480"
       TAP_ADMIN_PASSWORD: "${TAP_ADMIN_PASSWORD:?TAP_ADMIN_PASSWORD must be set}"
-      DATABASE_URL: "${DATABASE_URL:-sqlite:data/hypergoat.db}"
+      DATABASE_URL: "${DATABASE_URL:-sqlite:data/hyperindex.db}"
       SECRET_KEY_BASE: "${SECRET_KEY_BASE:?SECRET_KEY_BASE must be set - generate with: openssl rand -hex 32}"
       EXTERNAL_BASE_URL: "${EXTERNAL_BASE_URL:-http://localhost:8080}"
       OAUTH_LOOPBACK_MODE: "${OAUTH_LOOPBACK_MODE:-true}"
