@@ -471,47 +471,48 @@ export default function LexiconsPage() {
       )}
       {success && <Alert variant="success">{success}</Alert>}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Register */}
-        <section className="rounded-xl border p-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
-          <h3 className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
-            Register published lexicons by NSID
-          </h3>
-          <p className="mt-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
-            Resolve published AT Protocol lexicons by NSID and add them to this AppView.
-          </p>
-          <form onSubmit={handleRegister} className="mt-4 flex gap-2 items-start">
-            <label htmlFor="lexicon-nsids" className="sr-only">
-              Lexicon NSIDs
-            </label>
-            <textarea
-              id="lexicon-nsids"
-              value={nsidInput}
-              onChange={(e) => {
-                setNsidInput(e.target.value);
-                setError(null);
-              }}
-              placeholder="Enter NSIDs (comma or newline separated)..."
-              rows={1}
-              className="flex-1 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-1 transition-all resize-y"
-              style={{
-                backgroundColor: "var(--card)",
-                borderColor: "var(--border)",
-                color: "var(--foreground)",
-                border: "1px solid var(--border)",
-                minHeight: "2.25rem",
-              }}
-            />
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={batchPending || !nsidInput.trim()}
-              loading={batchPending}
-            >
-              Register
-            </Button>
-          </form>
-        </section>
+      <div className="space-y-4">
+        {isAdmin && (
+          <section className="rounded-xl border p-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
+            <h3 className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
+              Register published lexicons by NSID
+            </h3>
+            <p className="mt-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
+              Resolve published AT Protocol lexicons by NSID and add them to this AppView.
+            </p>
+            <form onSubmit={handleRegister} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start">
+              <label htmlFor="lexicon-nsids" className="sr-only">
+                Lexicon NSIDs
+              </label>
+              <textarea
+                id="lexicon-nsids"
+                value={nsidInput}
+                onChange={(e) => {
+                  setNsidInput(e.target.value);
+                  setError(null);
+                }}
+                placeholder="Enter NSIDs (comma or newline separated)..."
+                rows={1}
+                className="w-full px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-1 transition-all resize-y sm:flex-1"
+                style={{
+                  backgroundColor: "var(--card)",
+                  borderColor: "var(--border)",
+                  color: "var(--foreground)",
+                  border: "1px solid var(--border)",
+                  minHeight: "2.25rem",
+                }}
+              />
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={batchPending || !nsidInput.trim()}
+                loading={batchPending}
+              >
+                Register
+              </Button>
+            </form>
+          </section>
+        )}
 
         {isAdmin && (
           <section className="rounded-xl border p-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
@@ -533,7 +534,7 @@ export default function LexiconsPage() {
                 accept=".zip"
                 onChange={handleZipFileChange}
                 disabled={isZipUploadPending}
-                className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:px-3 file:py-1.5 file:text-sm file:font-medium"
+                className="block w-full min-w-0 text-sm file:mr-3 file:rounded-lg file:border-0 file:px-3 file:py-1.5 file:text-sm file:font-medium sm:flex-1"
                 style={{ color: "var(--muted-foreground)" }}
               />
               <Button
