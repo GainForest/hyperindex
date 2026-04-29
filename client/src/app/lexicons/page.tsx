@@ -251,6 +251,7 @@ export default function LexiconsPage() {
   const [confirmNsid, setConfirmNsid] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [batchPending, setBatchPending] = useState(false);
+  const [zipUploading, setZipUploading] = useState(false);
   const zipFileInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading, error: fetchError } = useQuery({
@@ -281,6 +282,7 @@ export default function LexiconsPage() {
       setError(`Failed to upload lexicons: ${err.message}`);
       setSuccess(null);
     },
+    onSettled: () => setZipUploading(false),
   });
 
   const deleteMutation = useMutation({
@@ -373,18 +375,41 @@ export default function LexiconsPage() {
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!zipFile) return;
+    if (!zipFile || uploadMutation.isPending || zipUploading) return;
+
+    setZipUploading(true);
 
     const reader = new FileReader();
     reader.onload = () => {
-      const base64 = (reader.result as string).split(",")[1];
+      if (typeof reader.result !== "string") {
+        setError("Failed to read the ZIP file data. Please choose the file again and retry.");
+        setSuccess(null);
+        setZipUploading(false);
+        return;
+      }
+
+      const [, base64] = reader.result.split(",", 2);
+      if (!base64) {
+        setError("Failed to read the ZIP file data. Please choose the file again and retry.");
+        setSuccess(null);
+        setZipUploading(false);
+        return;
+      }
+
       uploadMutation.mutate(base64);
     };
     reader.onerror = () => {
       setError("Failed to read the ZIP file. Please choose the file again and retry.");
       setSuccess(null);
+      setZipUploading(false);
     };
-    reader.readAsDataURL(zipFile);
+    try {
+      reader.readAsDataURL(zipFile);
+    } catch {
+      setError("Failed to read the ZIP file. Please choose the file again and retry.");
+      setSuccess(null);
+      setZipUploading(false);
+    }
   };
 
   const lexicons = data?.lexicons ?? EMPTY_LEXICONS;
@@ -403,6 +428,7 @@ export default function LexiconsPage() {
   const tree = useMemo(() => buildTree(filteredLexicons), [filteredLexicons]);
   const roots = Array.from(tree.entries()).sort(([a], [b]) => a.localeCompare(b));
   const isConfirmDeleting = confirmNsid !== null && confirmNsid === deletingNsid;
+  const isZipUploadPending = zipUploading || uploadMutation.isPending;
 
   if (fetchError) {
     return (
@@ -442,7 +468,11 @@ export default function LexiconsPage() {
             Resolve published AT Protocol lexicons by NSID and add them to this AppView.
           </p>
           <form onSubmit={handleRegister} className="mt-4 flex gap-2 items-start">
+            <label htmlFor="lexicon-nsids" className="sr-only">
+              Lexicon NSIDs
+            </label>
             <textarea
+              id="lexicon-nsids"
               value={nsidInput}
               onChange={(e) => {
                 setNsidInput(e.target.value);
@@ -480,20 +510,24 @@ export default function LexiconsPage() {
             <p>Each JSON file must contain a top-level id field. A backend restart may be required before new lexicons appear in the public GraphQL schema.</p>
           </div>
           <form onSubmit={handleUpload} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <label htmlFor="lexicon-zip-file" className="sr-only">
+              Lexicon ZIP file
+            </label>
             <input
+              id="lexicon-zip-file"
               ref={zipFileInputRef}
               type="file"
               accept=".zip"
               onChange={handleZipFileChange}
-              disabled={uploadMutation.isPending}
+              disabled={isZipUploadPending}
               className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:px-3 file:py-1.5 file:text-sm file:font-medium"
               style={{ color: "var(--muted-foreground)" }}
             />
             <Button
               type="submit"
               variant="primary"
-              disabled={!zipFile || uploadMutation.isPending}
-              loading={uploadMutation.isPending}
+              disabled={!zipFile || isZipUploadPending}
+              loading={isZipUploadPending}
             >
               Upload ZIP
             </Button>
