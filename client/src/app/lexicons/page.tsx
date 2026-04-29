@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
 import { GET_LEXICONS } from "@/lib/graphql/queries";
@@ -251,6 +251,7 @@ export default function LexiconsPage() {
   const [confirmNsid, setConfirmNsid] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [batchPending, setBatchPending] = useState(false);
+  const zipFileInputRef = useRef<HTMLInputElement>(null);
 
   const { data, isLoading, error: fetchError } = useQuery({
     queryKey: ["lexicons"],
@@ -270,6 +271,9 @@ export default function LexiconsPage() {
       setSuccess(`Uploaded ${count} lexicon${count !== 1 ? "s" : ""}`);
       setError(null);
       setZipFile(null);
+      if (zipFileInputRef.current) {
+        zipFileInputRef.current.value = "";
+      }
       queryClient.invalidateQueries({ queryKey: ["lexicons"] });
       setTimeout(() => setSuccess(null), 5000);
     },
@@ -477,6 +481,7 @@ export default function LexiconsPage() {
           </div>
           <form onSubmit={handleUpload} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
             <input
+              ref={zipFileInputRef}
               type="file"
               accept=".zip"
               onChange={handleZipFileChange}
