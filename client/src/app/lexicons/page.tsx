@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
 import { GET_LEXICONS } from "@/lib/graphql/queries";
 import { REGISTER_LEXICON, DELETE_LEXICON, UPLOAD_LEXICONS } from "@/lib/graphql/mutations";
+import { useAdminSession } from "@/lib/auth";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
 import type { LexiconsResponse, Lexicon } from "@/types";
@@ -242,6 +243,7 @@ function TreeBranch({
 
 export default function LexiconsPage() {
   const queryClient = useQueryClient();
+  const { isAdmin } = useAdminSession();
   const [searchQuery, setSearchQuery] = useState("");
   const [nsidInput, setNsidInput] = useState("");
   const [zipFile, setZipFile] = useState<File | null>(null);
@@ -265,8 +267,13 @@ export default function LexiconsPage() {
   });
 
   const uploadMutation = useMutation({
-    mutationFn: (zipBase64: string) =>
-      graphqlClient.request<UploadLexiconsResponse>(UPLOAD_LEXICONS, { zipBase64 }),
+    mutationFn: (zipBase64: string) => {
+      if (!isAdmin) {
+        throw new Error("Admin access is required to upload lexicons.");
+      }
+
+      return graphqlClient.request<UploadLexiconsResponse>(UPLOAD_LEXICONS, { zipBase64 });
+    },
     onSuccess: (response) => {
       const count = response.uploadLexicons;
       setSuccess(`Uploaded ${count} lexicon${count !== 1 ? "s" : ""}`);
@@ -375,6 +382,12 @@ export default function LexiconsPage() {
 
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isAdmin) {
+      setError("Admin access is required to upload lexicons.");
+      setSuccess(null);
+      return;
+    }
+
     if (!zipFile || uploadMutation.isPending || zipUploading) return;
 
     setZipUploading(true);
@@ -500,44 +513,45 @@ export default function LexiconsPage() {
           </form>
         </section>
 
-        {/* Upload */}
-        <section className="rounded-xl border p-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
-          <h3 className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
-            Upload unpublished lexicons
-          </h3>
-          <div className="mt-1 space-y-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
-            <p>Upload a .zip containing one or more lexicon .json files. Lexicons do not need to be published yet.</p>
-            <p>Each JSON file must contain a top-level id field. A backend restart may be required before new lexicons appear in the public GraphQL schema.</p>
-          </div>
-          <form onSubmit={handleUpload} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <label htmlFor="lexicon-zip-file" className="sr-only">
-              Lexicon ZIP file
-            </label>
-            <input
-              id="lexicon-zip-file"
-              ref={zipFileInputRef}
-              type="file"
-              accept=".zip"
-              onChange={handleZipFileChange}
-              disabled={isZipUploadPending}
-              className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:px-3 file:py-1.5 file:text-sm file:font-medium"
-              style={{ color: "var(--muted-foreground)" }}
-            />
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={!zipFile || isZipUploadPending}
-              loading={isZipUploadPending}
-            >
-              Upload ZIP
-            </Button>
-          </form>
-          {zipFile && (
-            <p className="mt-2 text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
-              Selected: {zipFile.name}
-            </p>
-          )}
-        </section>
+        {isAdmin && (
+          <section className="rounded-xl border p-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
+            <h3 className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
+              Upload unpublished lexicons
+            </h3>
+            <div className="mt-1 space-y-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
+              <p>Upload a .zip containing one or more lexicon .json files. Lexicons do not need to be published yet.</p>
+              <p>Each JSON file must contain a top-level id field. A backend restart may be required before new lexicons appear in the public GraphQL schema.</p>
+            </div>
+            <form onSubmit={handleUpload} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+              <label htmlFor="lexicon-zip-file" className="sr-only">
+                Lexicon ZIP file
+              </label>
+              <input
+                id="lexicon-zip-file"
+                ref={zipFileInputRef}
+                type="file"
+                accept=".zip"
+                onChange={handleZipFileChange}
+                disabled={isZipUploadPending}
+                className="block w-full text-sm file:mr-3 file:rounded-lg file:border-0 file:px-3 file:py-1.5 file:text-sm file:font-medium"
+                style={{ color: "var(--muted-foreground)" }}
+              />
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={!zipFile || isZipUploadPending}
+                loading={isZipUploadPending}
+              >
+                Upload ZIP
+              </Button>
+            </form>
+            {zipFile && (
+              <p className="mt-2 text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
+                Selected: {zipFile.name}
+              </p>
+            )}
+          </section>
+        )}
       </div>
 
       {/* Search */}
