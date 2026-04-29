@@ -1,0 +1,5 @@
+kind: added
+body: Add a Lexicons page ZIP upload flow so admins can install unpublished lexicon JSON archives without returning to onboarding.
+time: 2026-04-29T13:51:31.727838588+06:00
+custom:
+    Affects: user
