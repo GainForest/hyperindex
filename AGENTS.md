@@ -89,13 +89,13 @@ Run verification based on what changed.
 
 ## Changie fragments
 
-- Release notes come from `.changes/unreleased/*.yaml`, not commit messages.
-- If your change affects:
-  - end users,
-  - operators/deployers,
-  - contributors,
-  - or people forking/reusing this codebase,
-  add a Changie fragment unless the change is docs-only or purely internal.
+**Critical:** Do not skip Changie for externally meaningful changes. Release notes are produced from `.changes/unreleased/*.yaml`, not commit messages, so missing fragments mean the change will be absent from the curated changelog.
+
+- If your change affects any of the following, add a Changie fragment unless the change is docs-only or purely internal:
+  - end users
+  - operators/deployers
+  - contributors
+  - people forking or reusing this codebase
 - This applies whether the change is in Go or frontend code.
 - Good candidates include:
   - user-visible behavior changes
@@ -114,6 +114,11 @@ Run verification based on what changed.
   - `operator`
   - `developer`
 - Maintainers should follow `docs/changelog-workflow.md` for the release execution runbook.
+
+## Keeping this file current
+
+- Update `AGENTS.md` whenever changes affect repository structure, entrypoints, required commands, verification steps, config requirements, migration behavior, release-note workflow, or agent/developer operating instructions.
+- Do not leave stale guidance in this file; update or remove obsolete instructions in the same change that makes them obsolete.
 
 ## Git hooks
 

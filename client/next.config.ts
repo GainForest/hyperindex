@@ -10,6 +10,8 @@ function normalizeUrl(url: string): string {
 const nextConfig: NextConfig = {
   // Enable standalone output for Docker deployment
   output: "standalone",
+  // Required so Proxy can emit absolute localhost -> 127.0.0.1 redirect URLs without Next normalizing the Location header to `/`.
+  skipProxyUrlNormalize: true,
   // Allow external images from Bluesky CDN
   images: {
     remotePatterns: [

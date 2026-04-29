@@ -8,11 +8,11 @@
  * Copy the output and add it to your .env file as ATPROTO_JWK_PRIVATE
  */
 
-const crypto = require('crypto')
-
 async function generateJWK() {
+  const { webcrypto } = await import('node:crypto')
+
   // Generate an EC key pair using P-256 curve (required for ES256)
-  const { privateKey } = await crypto.subtle.generateKey(
+  const { privateKey } = await webcrypto.subtle.generateKey(
     {
       name: 'ECDSA',
       namedCurve: 'P-256',
@@ -22,7 +22,7 @@ async function generateJWK() {
   )
 
   // Export as JWK
-  const jwk = await crypto.subtle.exportKey('jwk', privateKey)
+  const jwk = await webcrypto.subtle.exportKey('jwk', privateKey)
 
   // Add key ID and algorithm
   jwk.kid = `key-${Date.now()}`

@@ -1,19 +1,30 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useSyncExternalStore } from "react"
 import { useTheme } from "next-themes"
 
-export function ThemeToggle() {
-  const { theme, setTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
+const subscribeToClientRender = (onStoreChange: () => void) => {
+  queueMicrotask(onStoreChange)
 
-  useEffect(() => setMounted(true), [])
+  return () => {}
+}
+
+const getClientSnapshot = () => true
+const getServerSnapshot = () => false
+
+export function ThemeToggle() {
+  const { resolvedTheme, setTheme } = useTheme()
+  const mounted = useSyncExternalStore(
+    subscribeToClientRender,
+    getClientSnapshot,
+    getServerSnapshot
+  )
 
   if (!mounted) {
     return <div className="w-9 h-9" />
   }
 
-  const isDark = theme === "dark"
+  const isDark = resolvedTheme === "dark"
 
   return (
     <button

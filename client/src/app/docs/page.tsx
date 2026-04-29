@@ -42,20 +42,10 @@ function highlightJS(line: string): React.ReactNode {
   
   // Process the line with regex replacements
   const parts: React.ReactNode[] = [];
-  let remaining = line;
   let key = 0;
-  
+   
   // Keywords
   const keywords = /\b(const|let|var|function|async|await|import|from|export|return|if|else|new|class|extends)\b/g;
-  // Strings
-  const strings = /("[^"]*"|'[^']*'|`[^`]*`)/g;
-  // Functions/methods
-  const funcs = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g;
-  // Properties after dot
-  const props = /\.([a-zA-Z_][a-zA-Z0-9_]*)/g;
-  
-  // Simple approach: apply styles to the whole line
-  let result = line;
   
   // Build JSX with highlighting
   const tokens: { start: number; end: number; type: string; text: string }[] = [];
@@ -78,7 +68,7 @@ function highlightJS(line: string): React.ReactNode {
   }
   
   let lastEnd = 0;
-  tokens.forEach((token, i) => {
+  tokens.forEach((token) => {
     if (token.start > lastEnd) {
       parts.push(<span key={key++}>{line.slice(lastEnd, token.start)}</span>);
     }
