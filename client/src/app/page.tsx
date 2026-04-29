@@ -14,8 +14,7 @@ import { StatsCards } from "@/components/dashboard/StatsCards";
 import { ActivityChart } from "@/components/dashboard/ActivityChart";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
 import { Alert } from "@/components/ui";
-import { useAuth } from "@/lib/auth";
-import { env, isAdminDID } from "@/lib/env";
+import { useAdminSession } from "@/lib/auth";
 import Link from "next/link";
 import type {
   StatisticsResponse,
@@ -28,8 +27,7 @@ import type {
 export default function Dashboard() {
   const [timeRange, setTimeRange] = useState<TimeRange>("ONE_DAY");
   const queryClient = useQueryClient();
-  const { isAuthenticated, session } = useAuth();
-  const hasAdminAccess = isAuthenticated && isAdminDID(session?.did, env.ADMIN_DIDS);
+  const { isAdmin: hasAdminAccess, isLoading: isAdminLoading } = useAdminSession();
 
   // Fetch statistics
   const { data: statsData, isLoading: statsLoading } = useQuery({
@@ -116,6 +114,9 @@ export default function Dashboard() {
 
       {/* Quick Actions */}
       <div className="flex flex-wrap items-center gap-2">
+        {isAdminLoading && (
+          <div className="h-10 w-36 animate-pulse rounded-lg" style={{ backgroundColor: "var(--muted)" }} />
+        )}
         {hasAdminAccess && (
           <Link
             href="/settings"

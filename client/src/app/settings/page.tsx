@@ -6,15 +6,13 @@ import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
 import { GET_SETTINGS, GET_OAUTH_CLIENTS, GET_PURGE_ACTOR_PREVIEW } from "@/lib/graphql/queries";
-import { UPDATE_SETTINGS, RESET_ALL, ADD_ADMIN, PURGE_ACTOR } from "@/lib/graphql/mutations";
-import { useAuth } from "@/lib/auth";
-import { env, isAdminDID } from "@/lib/env";
+import { UPDATE_SETTINGS, RESET_ALL, PURGE_ACTOR } from "@/lib/graphql/mutations";
+import { useAuth, useAdminSession } from "@/lib/auth";
 import {
   Button,
   Input,
   Alert,
 } from "@/components/ui";
-import { AdminDidBatchPicker } from "@/components/admin/AdminDidBatchPicker";
 import type { SettingsResponse, OAuthClientsResponse, PurgeActorPreviewResponse } from "@/types";
 
 type BlueskyProfile = {
@@ -33,19 +31,19 @@ const PROFILES_CHUNK_SIZE = 25;
 
 export default function SettingsPage() {
   const router = useRouter();
-  const { isAuthenticated, isLoading: isAuthLoading, session } = useAuth();
+  const { isLoading: isAuthLoading } = useAuth();
+  const { isAdmin: hasAdminAccess, isLoading: isAdminLoading } = useAdminSession();
   const queryClient = useQueryClient();
-  const hasAdminAccess = isAuthenticated && isAdminDID(session?.did, env.ADMIN_DIDS);
 
   useEffect(() => {
-    if (isAuthLoading) {
+    if (isAuthLoading || isAdminLoading) {
       return;
     }
 
     if (!hasAdminAccess) {
       router.replace("/");
     }
-  }, [hasAdminAccess, isAuthLoading, router]);
+  }, [hasAdminAccess, isAdminLoading, isAuthLoading, router]);
 
   // Fetch settings
   const { data: settingsData, isLoading } = useQuery({
@@ -114,8 +112,6 @@ export default function SettingsPage() {
   const [plcDirectoryUrl, setPlcDirectoryUrl] = useState<string | null>(null);
   const [jetstreamUrl, setJetstreamUrl] = useState<string | null>(null);
   const [oauthScopes, setOauthScopes] = useState<string | null>(null);
-  const [pendingAdminDids, setPendingAdminDids] = useState<string[]>([]);
-  const [isSubmittingAdmins, setIsSubmittingAdmins] = useState(false);
   const [purgeDid, setPurgeDid] = useState("");
   const [purgeConfirm, setPurgeConfirm] = useState("");
   const [resetConfirmation, setResetConfirmation] = useState("");
@@ -206,67 +202,7 @@ export default function SettingsPage() {
     });
   };
 
-  const handleAddPendingDid = (did: string) => {
-    const normalized = did.trim();
-    if (!normalized) {
-      return;
-    }
-
-    const existingAdminDids = settings?.adminDids ?? [];
-    if (existingAdminDids.includes(normalized) || pendingAdminDids.includes(normalized)) {
-      return;
-    }
-
-    setPendingAdminDids((prev) => [...prev, normalized]);
-  };
-
-  const handleRemovePendingDid = (did: string) => {
-    setPendingAdminDids((prev) => prev.filter((item) => item !== did));
-  };
-
-  const handleSubmitPendingAdmins = async () => {
-    if (pendingAdminDids.length === 0) {
-      return;
-    }
-
-    setIsSubmittingAdmins(true);
-    setAlert(null);
-
-    const results = await Promise.allSettled(
-      pendingAdminDids.map((did) =>
-        graphqlClient.request<{ addAdmin: boolean }>(ADD_ADMIN, { did }),
-      ),
-    );
-
-    const failedDids = results
-      .map((result, index) => ({ result, did: pendingAdminDids[index] }))
-      .filter(({ result }) => result.status === "rejected")
-      .map(({ did }) => did);
-
-    const addedCount = pendingAdminDids.length - failedDids.length;
-
-    if (addedCount > 0) {
-      queryClient.invalidateQueries({ queryKey: ["settings"] });
-    }
-
-    setPendingAdminDids(failedDids);
-    setIsSubmittingAdmins(false);
-
-    if (failedDids.length === 0) {
-      setAlert({
-        type: "success",
-        message: `Added ${addedCount} admin DID${addedCount === 1 ? "" : "s"}.`,
-      });
-      return;
-    }
-
-    setAlert({
-      type: "error",
-      message: `Added ${addedCount} DID${addedCount === 1 ? "" : "s"}, ${failedDids.length} failed. Failed DIDs remain in the batch for retry.`,
-    });
-  };
-
-  if (isAuthLoading || !hasAdminAccess || isLoading) {
+  if (isAuthLoading || isAdminLoading || !hasAdminAccess || isLoading) {
     return (
       <div className="pt-8 sm:pt-12 space-y-6">
         {[...Array(3)].map((_, i) => (
@@ -431,27 +367,18 @@ export default function SettingsPage() {
 
           <div className="space-y-4">
             <p className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
-              Add administrators (batch)
+              Managed via environment variables
             </p>
-            <AdminDidBatchPicker
-              existingAdminDids={settings?.adminDids ?? []}
-              pendingDids={pendingAdminDids}
-              onAddDid={handleAddPendingDid}
-              onRemoveDid={handleRemovePendingDid}
-              disabled={isSubmittingAdmins}
-            />
-            <div className="flex items-center justify-end">
-              <Button
-                variant="primary"
-                onClick={handleSubmitPendingAdmins}
-                disabled={pendingAdminDids.length === 0}
-                loading={isSubmittingAdmins}
-              >
-                Add selected admins
-              </Button>
+            <div className="rounded-lg border p-4 text-sm" style={{ borderColor: "var(--border)", backgroundColor: "var(--muted)" }}>
+              <p style={{ color: "var(--foreground)" }}>
+                Administrator access is read-only in the app.
+              </p>
+              <p className="mt-2" style={{ color: "var(--muted-foreground)" }}>
+                Update <code className="font-mono">ADMIN_DIDS</code> on the Hyperindex backend to change this list.
+              </p>
             </div>
             <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-              Search Bluesky actors or paste a DID manually, queue multiple entries, then submit once.
+              The backend <code className="font-mono">ADMIN_DIDS</code> value is the source of truth for authorization.
             </p>
           </div>
         </div>

@@ -1,4 +1,6 @@
-.PHONY: help build run test lint clean dev db-migrate db-rollback docker hooks-install
+.PHONY: help build run test test-coverage lint fmt clean dev db-migrate db-rollback db-status db-create-migration docker docker-run tools generate hooks-install changie-new
+
+GO_TOOLCHAIN := GOTOOLCHAIN=go1.26.0
 
 # Default target
 help:
@@ -10,6 +12,8 @@ help:
 	@echo "  make build        - Build the binary"
 	@echo "  make test         - Run all tests"
 	@echo "  make lint         - Run linter"
+	@echo "  make tools        - Install development tools (including Changie)"
+	@echo "  make changie-new  - Create a new changelog fragment"
 	@echo "  make hooks-install - Install local git hooks path"
 	@echo "  make clean        - Clean build artifacts"
 	@echo ""
@@ -97,15 +101,20 @@ docker-run:
 # Install development tools
 tools:
 	@echo "Installing development tools..."
-	@go install github.com/air-verse/air@latest
-	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-	@go install mvdan.cc/gofumpt@latest
-	@go install -tags 'postgres sqlite' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+	@$(GO_TOOLCHAIN) go install github.com/air-verse/air@latest
+	@$(GO_TOOLCHAIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	@$(GO_TOOLCHAIN) go install mvdan.cc/gofumpt@latest
+	@$(GO_TOOLCHAIN) go install -tags 'postgres sqlite' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+	@$(GO_TOOLCHAIN) go install github.com/miniscruff/changie@v1.24.0
 
 # Generate (placeholder for future code generation)
 generate:
 	@echo "Running go generate..."
 	@go generate ./...
+
+# Create a new changelog fragment with Changie
+changie-new:
+	@changie new
 
 # Install local git hooks path for tracked hooks
 hooks-install:

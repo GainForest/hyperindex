@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -8,24 +9,22 @@ import (
 
 	"github.com/graphql-go/graphql"
 
-	"github.com/GainForest/hypergoat/internal/database/repositories"
 	"github.com/GainForest/hypergoat/internal/oauth"
 )
 
 // Handler handles admin GraphQL requests with authentication.
 type Handler struct {
-	schema            *graphql.Schema
-	resolver          *Resolver
-	middleware        *oauth.AuthMiddleware
-	configRepo        *repositories.ConfigRepository
-	trustProxyHeaders bool
+	schema      *graphql.Schema
+	resolver    *Resolver
+	middleware  *oauth.AuthMiddleware
+	adminDIDs   []string
+	adminAPIKey string
 }
 
 // NewHandler creates a new admin GraphQL handler.
-// trustProxyHeaders controls whether the X-User-DID header is trusted for authentication.
-// This should only be true when running behind a trusted reverse proxy.
-func NewHandler(repos *Repositories, middleware *oauth.AuthMiddleware, configRepo *repositories.ConfigRepository, domainDID string, trustProxyHeaders bool) (*Handler, error) {
-	resolver := NewResolver(repos, domainDID)
+// adminAPIKey gates when the X-User-DID header may be trusted for authentication.
+func NewHandler(repos *Repositories, middleware *oauth.AuthMiddleware, domainDID, adminAPIKey string, adminDIDs []string) (*Handler, error) {
+	resolver := NewResolver(repos, domainDID, adminDIDs)
 
 	builder := NewSchemaBuilder(resolver)
 	schema, err := builder.Build()
@@ -34,12 +33,26 @@ func NewHandler(repos *Repositories, middleware *oauth.AuthMiddleware, configRep
 	}
 
 	return &Handler{
-		schema:            schema,
-		resolver:          resolver,
-		middleware:        middleware,
-		configRepo:        configRepo,
-		trustProxyHeaders: trustProxyHeaders,
+		schema:      schema,
+		resolver:    resolver,
+		middleware:  middleware,
+		adminDIDs:   adminDIDs,
+		adminAPIKey: adminAPIKey,
 	}, nil
+}
+
+func isValidAdminAPIKey(providedKey, expectedKey string) bool {
+	providedKey = strings.TrimSpace(providedKey)
+	expectedKey = strings.TrimSpace(expectedKey)
+
+	if expectedKey == "" {
+		return false
+	}
+	if providedKey == "" {
+		return false
+	}
+
+	return subtle.ConstantTimeCompare([]byte(providedKey), []byte(expectedKey)) == 1
 }
 
 // ServeHTTP handles admin GraphQL HTTP requests.
@@ -71,42 +84,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userDID := oauth.UserIDFromContext(ctx)
 
-	// Only trust X-User-DID header when explicitly configured (TRUST_PROXY_HEADERS=true).
-	// This is intended for deployments behind a trusted reverse proxy (e.g., Next.js frontend).
-	// WARNING: Without a trusted proxy, this header can be spoofed by any client.
-	if userDID == "" && h.trustProxyHeaders {
-		userDID = r.Header.Get("X-User-DID")
-		if userDID != "" {
-			slog.Warn("[admin] Auth via X-User-DID proxy header",
+	// Only trust X-User-DID when the request presents a valid admin API key.
+	if userDID == "" {
+		proxiedUserDID := r.Header.Get("X-User-DID")
+		switch {
+		case proxiedUserDID == "":
+		case isValidAdminAPIKey(r.Header.Get("X-Admin-API-Key"), h.adminAPIKey):
+			userDID = proxiedUserDID
+			slog.Warn("[admin] Auth via X-User-DID admin API key",
 				"did", userDID,
+				"remote_addr", r.RemoteAddr)
+		default:
+			slog.Warn("[admin] Ignoring X-User-DID without valid admin API key",
 				"remote_addr", r.RemoteAddr)
 		}
 	}
 	handle := "" // Would need to resolve from DID
 
-	// Get admin DIDs from config
-	adminDidsStr, err := h.configRepo.Get(ctx, "admin_dids")
-	if err != nil {
-		slog.Warn("Failed to get admin DIDs", "error", err)
-		adminDidsStr = ""
-	}
-
-	var adminDIDs []string
-	if adminDidsStr != "" {
-		adminDIDs = strings.Split(adminDidsStr, ",")
-		for i := range adminDIDs {
-			adminDIDs[i] = strings.TrimSpace(adminDIDs[i])
-		}
-	}
-
-	// Check if user is admin
-	isAdmin := false
-	for _, adminDID := range adminDIDs {
-		if adminDID == userDID {
-			isAdmin = true
-			break
-		}
-	}
+	isAdmin := isAdminDID(userDID, h.adminDIDs)
 
 	// Debug logging for auth
 	if userDID != "" {
@@ -114,7 +109,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Inject auth info into context
-	ctx = ContextWithAuth(ctx, userDID, handle, isAdmin, adminDIDs)
+	ctx = ContextWithAuth(ctx, userDID, handle, isAdmin, h.adminDIDs)
 
 	// Execute the query
 	result := graphql.Do(graphql.Params{

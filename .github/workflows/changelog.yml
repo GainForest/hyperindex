@@ -1,0 +1,57 @@
+name: Changelog validation
+
+on:
+  pull_request:
+    paths:
+      - .changie.yaml
+      - .changes/**
+      - CHANGELOG.md
+      - .github/workflows/changelog.yml
+  push:
+    branches: [main]
+    paths:
+      - .changie.yaml
+      - .changes/**
+      - CHANGELOG.md
+      - .github/workflows/changelog.yml
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install Changie v1.24.0
+        run: go install github.com/miniscruff/changie@v1.24.0
+
+      - name: Detect unreleased fragments
+        id: fragments
+        shell: bash
+        run: |
+          shopt -s nullglob
+          fragments=(.changes/unreleased/*.yaml)
+          if [ ${#fragments[@]} -eq 0 ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No unreleased Changie fragments found."
+            exit 0
+          fi
+
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          printf 'Found %s unreleased fragment(s).\n' "${#fragments[@]}"
+
+      - name: Validate Changie config and fragments
+        if: steps.fragments.outputs.found == 'true'
+        run: changie batch auto --dry-run
+
+      - name: Skip batch validation
+        if: steps.fragments.outputs.found != 'true'
+        run: echo "Skipping batch validation because no unreleased Changie fragments were found."

@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  isAdminDID,
   normalizePublicURL,
-  parseAdminDIDs,
   resolvePublicClientURL,
   validateHyperindexURLConfiguration,
 } from "./env";
@@ -35,31 +33,6 @@ describe("resolvePublicClientURL", () => {
 
   it("returns empty string when both are empty", () => {
     expect(resolvePublicClientURL("", "")).toBe("");
-  });
-});
-
-describe("parseAdminDIDs", () => {
-  it("parses comma-separated admin dids", () => {
-    expect(parseAdminDIDs("did:plc:one, did:plc:two , ,did:plc:three")).toEqual([
-      "did:plc:one",
-      "did:plc:two",
-      "did:plc:three",
-    ]);
-  });
-
-  it("returns an empty array for empty input", () => {
-    expect(parseAdminDIDs("")).toEqual([]);
-  });
-});
-
-describe("isAdminDID", () => {
-  it("matches trimmed user dids against admin dids", () => {
-    expect(isAdminDID(" did:plc:admin ", ["did:plc:admin"])).toBe(true);
-  });
-
-  it("returns false for missing or unknown dids", () => {
-    expect(isAdminDID(undefined, ["did:plc:admin"])).toBe(false);
-    expect(isAdminDID("did:plc:user", ["did:plc:admin"])).toBe(false);
   });
 });
 

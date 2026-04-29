@@ -3,6 +3,7 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -708,7 +709,10 @@ func TestBuildDIDFilterClause(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			clause, params, consumed := repo.buildDIDFilterClause(tt.filter, 1)
+			clause, params, consumed, err := repo.buildDIDFilterClause(tt.filter, 1)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			if tt.wantClause == "" {
 				if clause != "" {
@@ -726,6 +730,64 @@ func TestBuildDIDFilterClause(t *testing.T) {
 			}
 			if consumed != tt.wantConsumed {
 				t.Errorf("consumed = %d, want %d", consumed, tt.wantConsumed)
+			}
+		})
+	}
+}
+
+func TestBuildDIDFilterClause_INLimit(t *testing.T) {
+	repo := newTestRepo(t)
+
+	makeDIDs := func(n int) []string {
+		vals := make([]string, n)
+		for i := range vals {
+			vals[i] = "did:plc:" + string(rune('a'+(i%26)))
+		}
+		return vals
+	}
+
+	tests := []struct {
+		name      string
+		filter    DIDFilter
+		wantErr   bool
+		wantCount int
+	}{
+		{
+			name:      "boundary succeeds at max limit",
+			filter:    DIDFilter{IN: makeDIDs(MaxINListSize)},
+			wantErr:   false,
+			wantCount: MaxINListSize,
+		},
+		{
+			name:    "over limit returns error",
+			filter:  DIDFilter{IN: makeDIDs(MaxINListSize + 1)},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clause, params, consumed, err := repo.buildDIDFilterClause(tt.filter, 1)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil (clause=%q)", clause)
+				}
+				if !strings.Contains(err.Error(), "exceeds maximum") {
+					t.Fatalf("error = %q, want to contain %q", err.Error(), "exceeds maximum")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(params) != tt.wantCount {
+				t.Fatalf("params count = %d, want %d", len(params), tt.wantCount)
+			}
+			if consumed != tt.wantCount {
+				t.Fatalf("consumed = %d, want %d", consumed, tt.wantCount)
+			}
+			if !strings.Contains(clause, "did IN (") {
+				t.Fatalf("clause = %q, want DID IN clause", clause)
 			}
 		})
 	}
@@ -838,5 +900,197 @@ func TestBuildFilterClause_INLimit(t *testing.T) {
 				t.Errorf("clause = %q, want to contain %q", clause, tt.wantCond)
 			}
 		})
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_AggregateINOverflow(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	filters := make([]FieldFilter, 10)
+	for i := range filters {
+		values := make([]interface{}, 100)
+		for j := range values {
+			values[j] = "value"
+		}
+		filters[i] = FieldFilter{
+			Field:     "field" + string(rune('a'+i)),
+			Operator:  "in",
+			Value:     values,
+			FieldType: "string",
+		}
+	}
+
+	_, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", filters, DIDFilter{}, nil, 10, nil)
+	if err == nil {
+		t.Fatal("expected error for aggregate parameter overflow, got nil")
+	}
+	if !errors.Is(err, ErrSQLiteAggregateParameterLimit) {
+		t.Fatalf("error = %v, want ErrSQLiteAggregateParameterLimit", err)
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_AggregateINBoundary(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	filters := make([]FieldFilter, 20)
+	for i := range filters {
+		values := make([]interface{}, 49)
+		for j := range values {
+			values[j] = "value"
+		}
+		filters[i] = FieldFilter{
+			Field:     "field" + string(rune('a'+i)),
+			Operator:  "in",
+			Value:     values,
+			FieldType: "string",
+		}
+	}
+
+	dids := make([]string, 18)
+	for i := range dids {
+		dids[i] = "did:" + string(rune('a'+i))
+	}
+
+	_, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "col", filters, DIDFilter{IN: dids}, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("expected query to succeed at SQLite aggregate limit, got %v", err)
+	}
+}
+
+func makeAggregateOverflowFilters() []FieldFilter {
+	filters := make([]FieldFilter, 20)
+	for i := range filters {
+		values := make([]interface{}, 49)
+		for j := range values {
+			values[j] = "value"
+		}
+		filters[i] = FieldFilter{
+			Field:     "field" + string(rune('a'+i)),
+			Operator:  "in",
+			Value:     values,
+			FieldType: "string",
+		}
+	}
+	return filters
+}
+
+func makeAggregateOverflowDIDs(n int) []string {
+	dids := make([]string, n)
+	for i := range dids {
+		dids[i] = "did:" + string(rune('a'+i))
+	}
+	return dids
+}
+
+func TestGetByCollectionFilteredWithKeysetCursor_AggregateOverflow(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	_, err := repo.GetByCollectionFilteredWithKeysetCursor(
+		ctx,
+		"col",
+		makeAggregateOverflowFilters(),
+		DIDFilter{IN: makeAggregateOverflowDIDs(19)},
+		10,
+		"2026-01-15T12:00:00Z",
+		"at://did:plc:test/col/r1",
+	)
+	if err == nil {
+		t.Fatal("expected error for aggregate parameter overflow, got nil")
+	}
+	if !errors.Is(err, ErrSQLiteAggregateParameterLimit) {
+		t.Fatalf("error = %v, want ErrSQLiteAggregateParameterLimit", err)
+	}
+}
+
+func TestGetByCollectionFilteredWithKeysetCursor_AggregateBoundary(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	_, err := repo.GetByCollectionFilteredWithKeysetCursor(
+		ctx,
+		"col",
+		makeAggregateOverflowFilters(),
+		DIDFilter{IN: makeAggregateOverflowDIDs(15)},
+		10,
+		"2026-01-15T12:00:00Z",
+		"at://did:plc:test/col/r1",
+	)
+	if err != nil {
+		t.Fatalf("expected query to succeed at SQLite aggregate limit, got %v", err)
+	}
+}
+
+func TestGetByCollectionReversedWithKeysetCursor_AggregateOverflow(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	_, err := repo.GetByCollectionReversedWithKeysetCursor(
+		ctx,
+		"col",
+		makeAggregateOverflowFilters(),
+		DIDFilter{IN: makeAggregateOverflowDIDs(19)},
+		&SortOption{Field: "indexed_at", Direction: "DESC"},
+		10,
+		[]string{"2026-01-15T12:00:00Z", "at://did:plc:test/col/r1"},
+	)
+	if err == nil {
+		t.Fatal("expected error for aggregate parameter overflow, got nil")
+	}
+	if !errors.Is(err, ErrSQLiteAggregateParameterLimit) {
+		t.Fatalf("error = %v, want ErrSQLiteAggregateParameterLimit", err)
+	}
+}
+
+func TestGetByCollectionReversedWithKeysetCursor_AggregateBoundary(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	_, err := repo.GetByCollectionReversedWithKeysetCursor(
+		ctx,
+		"col",
+		makeAggregateOverflowFilters(),
+		DIDFilter{IN: makeAggregateOverflowDIDs(15)},
+		&SortOption{Field: "indexed_at", Direction: "DESC"},
+		10,
+		[]string{"2026-01-15T12:00:00Z", "at://did:plc:test/col/r1"},
+	)
+	if err != nil {
+		t.Fatalf("expected query to succeed at SQLite aggregate limit, got %v", err)
+	}
+}
+
+func TestGetCollectionCountFiltered_AggregateOverflow(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	_, err := repo.GetCollectionCountFiltered(
+		ctx,
+		"col",
+		makeAggregateOverflowFilters(),
+		DIDFilter{IN: makeAggregateOverflowDIDs(19)},
+	)
+	if err == nil {
+		t.Fatal("expected error for aggregate parameter overflow, got nil")
+	}
+	if !errors.Is(err, ErrSQLiteAggregateParameterLimit) {
+		t.Fatalf("error = %v, want ErrSQLiteAggregateParameterLimit", err)
+	}
+}
+
+func TestGetCollectionCountFiltered_AggregateBoundary(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	_, err := repo.GetCollectionCountFiltered(
+		ctx,
+		"col",
+		makeAggregateOverflowFilters(),
+		DIDFilter{IN: makeAggregateOverflowDIDs(18)},
+	)
+	if err != nil {
+		t.Fatalf("expected query to succeed at SQLite aggregate limit, got %v", err)
 	}
 }

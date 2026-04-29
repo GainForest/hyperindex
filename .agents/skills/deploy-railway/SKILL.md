@@ -88,7 +88,7 @@ railway up --path-as-root client/ -s frontend -d
 | `PORT` | `8080` |
 | `DATABASE_URL` | `sqlite:/app/data/hypergoat.db` |
 | `EXTERNAL_BASE_URL` | `https://api.hi.gainforest.app` |
-| `TRUST_PROXY_HEADERS` | `true` |
+| `ADMIN_API_KEY` | *(must match frontend `HYPERINDEX_ADMIN_API_KEY` for proxied admin requests)* |
 | `ADMIN_DIDS` | `did:plc:qc42fmqqlsmdq7jiypiiigww` (daviddao.org) |
 | `OAUTH_LOOPBACK_MODE` | `true` |
 | `SECRET_KEY_BASE` | *(set on Railway, do not change)* |
@@ -98,12 +98,13 @@ railway up --path-as-root client/ -s frontend -d
 |----------|-------|
 | `PORT` | `3000` |
 | `NEXT_PUBLIC_CLIENT_URL` | `https://hi.gainforest.app` |
-| `NEXT_PUBLIC_API_URL` | `https://api.hi.gainforest.app` |
+| `NEXT_PUBLIC_HYPERINDEX_URL` | `https://api.hi.gainforest.app` |
 | `HYPERINDEX_URL` | `https://api.hi.gainforest.app` |
+| `HYPERINDEX_ADMIN_API_KEY` | *(must match backend `ADMIN_API_KEY`; used by the Next.js admin proxy only)* |
 | `COOKIE_SECRET` | *(set on Railway, do not change)* |
 | `ATPROTO_JWK_PRIVATE` | *(ES256 JWK, set on Railway, do not change)* |
 
-**Note:** `NEXT_PUBLIC_API_URL` is a build-time variable (inlined by Next.js during `npm run build`). The `client/Dockerfile` declares `ARG NEXT_PUBLIC_API_URL` so Railway passes it during Docker build.
+**Note:** `NEXT_PUBLIC_HYPERINDEX_URL` is a build-time variable (inlined by Next.js during `npm run build`). `HYPERINDEX_ADMIN_API_KEY` is server-side only and must be set as a runtime variable on the frontend service.
 
 ## Troubleshooting
 
@@ -126,7 +127,7 @@ node scripts/generate-jwk.js  # (in hyperscan repo, or client/scripts/ if copied
 ```
 
 ### "admin privileges required" after login
-Ensure `TRUST_PROXY_HEADERS=true` is set on the backend. Without it, the backend ignores the `X-User-DID` header from the Next.js proxy.
+Ensure the frontend `HYPERINDEX_ADMIN_API_KEY` matches the backend `ADMIN_API_KEY`. Without matching keys, the backend ignores the `X-User-DID` header from the Next.js proxy.
 
 ## Setting Environment Variables
 
