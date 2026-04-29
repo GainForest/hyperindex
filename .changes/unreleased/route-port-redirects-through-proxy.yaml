@@ -1,0 +1,5 @@
+kind: changed
+body: Route port redirects through the proxy so deployments consistently expose the expected service endpoint.
+time: 2026-04-29T17:43:04.109427+06:00
+custom:
+    Affects: operator

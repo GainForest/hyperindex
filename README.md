@@ -30,17 +30,30 @@ Open http://localhost:8080/graphiql/admin to access the admin interface.
 
 ### 1. Register Lexicons
 
-Lexicons define the AT Protocol record types you want to index. Register them via the Admin GraphQL API at `/graphiql/admin`:
+Lexicons define the AT Protocol record types you want to index. Hyperindex supports two registration modes via the Admin GraphQL API at `/graphiql/admin`:
 
-```graphql
-mutation {
-  uploadLexicons(files: [...])  # Upload lexicon JSON files
-}
-```
+1. **Register by NSID** — use this when the lexicon can be resolved by its NSID.
 
-Or place lexicon JSON files in a directory and set `LEXICON_DIR` environment variable.
+   ```graphql
+   mutation {
+     registerLexicon(nsid: "org.hypercerts.claim.activity")
+   }
+   ```
+
+2. **Upload a ZIP file** — use this for custom lexicons or lexicons that are not publicly resolvable. The ZIP should contain lexicon JSON files, which are stored in the database.
+
+   ```graphql
+   mutation {
+     uploadLexicons(zipBase64: "...")
+   }
+   ```
+
+Or place lexicon JSON files in a directory and set the `LEXICON_DIR` environment variable.
+
+After registering by NSID or uploading a ZIP file, restart/redeploy the backend indexer for the new lexicons to appear in the public GraphQL schema and query list. The admin lexicon list updates immediately, but typed GraphQL queries are generated at backend startup.
 
 **Example lexicons:**
+- `org.hypercerts.claim.activity` - Hypercert claim activity
 - `app.bsky.feed.post` - Bluesky posts
 - `app.bsky.feed.like` - Likes
 - `app.bsky.actor.profile` - User profiles
@@ -120,6 +133,8 @@ mutation {
 ### 3. Query via GraphQL
 
 Access your indexed data at `/graphql`:
+
+Typed GraphQL query field names are generated from lexicon NSIDs. For example, `org.hypercerts.claim.activity` becomes `orgHypercertsClaimActivity`. Newly registered or uploaded lexicons appear in these typed queries after the backend indexer restarts.
 
 ```graphql
 # Generic query — all records by collection
