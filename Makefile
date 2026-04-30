@@ -1,6 +1,8 @@
 .PHONY: help build run test test-coverage lint fmt clean dev db-migrate db-rollback db-status db-create-migration docker docker-run tools generate hooks-install changie-new
 
 GO_TOOLCHAIN := GOTOOLCHAIN=go1.26.0
+VERSION ?= 0.1.0-dev
+LDFLAGS := -X github.com/GainForest/hyperindex/internal/buildinfo.Version=$(VERSION)
 
 # Default target
 help:
@@ -30,7 +32,7 @@ help:
 # Build the binary
 build:
 	@echo "Building hyperindex..."
-	@go build -o bin/hyperindex ./cmd/hyperindex
+	@go build -ldflags "$(LDFLAGS)" -o bin/hyperindex ./cmd/hyperindex
 
 # Run the server
 run: build

@@ -17,7 +17,19 @@ RUN go mod download
 COPY . .
 
 # Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -o /hyperindex ./cmd/hyperindex
+ARG VERSION
+RUN set -eu; \
+    build_version="${VERSION:-}"; \
+    if [ -z "$build_version" ]; then \
+        release_file="$(ls .changes/v*.md 2>/dev/null | sort -V | tail -n 1 || true)"; \
+        if [ -n "$release_file" ]; then \
+            release_name="${release_file##*/}"; \
+            build_version="${release_name%.md}"; \
+        else \
+            build_version="0.1.0-dev"; \
+        fi; \
+    fi; \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags "-X github.com/GainForest/hyperindex/internal/buildinfo.Version=$build_version" -o /hyperindex ./cmd/hyperindex
 
 # Runtime stage
 FROM alpine:3.19
