@@ -200,8 +200,8 @@ func TestConfig(t *testing.T) {
 	if config.httpClient == nil || config.httpClient.Timeout != 10*time.Second {
 		t.Fatalf("httpClient timeout = %v, want 10s", config.httpClient)
 	}
-	if len(config.expectations.RequiredNSIDs) != 21 {
-		t.Fatalf("required NSID count = %d, want 21", len(config.expectations.RequiredNSIDs))
+	if len(config.expectations.RequiredNSIDs) != 20 {
+		t.Fatalf("required NSID count = %d, want 20", len(config.expectations.RequiredNSIDs))
 	}
 }
 
