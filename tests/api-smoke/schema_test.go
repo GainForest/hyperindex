@@ -47,6 +47,15 @@ query SmokeSchema {
   }
 }`
 
+const smokeTypenameQuery = `
+query SmokeTypename {
+  __typename
+}`
+
+type typenameQueryResponse struct {
+	Typename string `json:"__typename"`
+}
+
 type schemaQueryResponse struct {
 	Schema graphQLSchema `json:"__schema"`
 }
@@ -80,6 +89,19 @@ type schemaTypeRef struct {
 	Kind   string         `json:"kind"`
 	Name   string         `json:"name"`
 	OfType *schemaTypeRef `json:"ofType"`
+}
+
+func TestGraphQLTypename(t *testing.T) {
+	config := loadSmokeConfig(t)
+	response := postGraphQL(t, context.Background(), config, "SmokeTypename", smokeTypenameQuery, nil)
+
+	var payload typenameQueryResponse
+	if err := json.Unmarshal(response.Data, &payload); err != nil {
+		t.Fatalf("SmokeTypename: decode response data: %v", err)
+	}
+	if payload.Typename == "" {
+		t.Fatal("SmokeTypename: data.__typename is empty, want a non-empty string")
+	}
 }
 
 func TestSchemaExposesExpectedTypedCollections(t *testing.T) {
