@@ -26,6 +26,7 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/atproto"
 	"github.com/GainForest/hyperindex/internal/backfill"
+	"github.com/GainForest/hyperindex/internal/buildinfo"
 	"github.com/GainForest/hyperindex/internal/config"
 	"github.com/GainForest/hyperindex/internal/database"
 	"github.com/GainForest/hyperindex/internal/database/migrations"
@@ -333,7 +334,7 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"name":        "Hyperindex",
 			"description": "AT Protocol AppView Server",
-			"version":     "0.1.0-dev",
+			"version":     buildinfo.Version,
 			"docs":        cfg.ExternalBaseURL + "/docs",
 		})
 	})
