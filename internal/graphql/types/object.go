@@ -3,6 +3,7 @@ package types //nolint:revive // package name is descriptive within graphql cont
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
 
 	"github.com/graphql-go/graphql"
 
@@ -174,10 +175,73 @@ func (b *ObjectBuilder) buildField(contextLexiconID, name string, prop *lexicon.
 		fieldType = graphql.NewNonNull(fieldType)
 	}
 
-	return &graphql.Field{
+	field := &graphql.Field{
 		Type:        fieldType,
 		Description: prop.Description,
 	}
+
+	if prop.Type == lexicon.TypeCIDLink {
+		field.Resolve = resolveCIDLinkField(name)
+	}
+	if prop.Type == lexicon.TypeArray && prop.Items != nil && prop.Items.Type == lexicon.TypeCIDLink {
+		field.Resolve = resolveCIDLinkArrayField(name)
+	}
+
+	return field
+}
+
+func resolveCIDLinkField(name string) graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		value := sourceMapValue(p.Source, name)
+		if value == nil {
+			return nil, nil
+		}
+
+		cid, ok := extractCIDLinkString(value)
+		if !ok {
+			return nil, nil
+		}
+
+		return cid, nil
+	}
+}
+
+func resolveCIDLinkArrayField(name string) graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		value := sourceMapValue(p.Source, name)
+		if value == nil {
+			return nil, nil
+		}
+
+		items := reflect.ValueOf(value)
+		if items.Kind() != reflect.Slice && items.Kind() != reflect.Array {
+			return nil, nil
+		}
+
+		cids := make([]any, items.Len())
+		for i := 0; i < items.Len(); i++ {
+			item := items.Index(i).Interface()
+			if item == nil {
+				continue
+			}
+
+			cid, ok := extractCIDLinkString(item)
+			if ok {
+				cids[i] = cid
+			}
+		}
+
+		return cids, nil
+	}
+}
+
+func sourceMapValue(source any, name string) any {
+	sourceMap, ok := source.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	return sourceMap[name]
 }
 
 // resolveRefType resolves a ref to a GraphQL type.
