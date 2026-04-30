@@ -1,4 +1,0 @@
-kind: fixed
-body: Prevent active accounts from being purged during Tap identity processing so indexed records are not removed after harmless identity updates.
-custom:
-  Affects: operator

@@ -1,5 +1,0 @@
-kind: breaking
-body: Rename Hypergoat technical identifiers to Hyperindex, including the Go module path, command entrypoint, binary names, Docker/Compose defaults, and session cookie name.
-time: 2026-04-28T16:19:20.381455984+06:00
-custom:
-    Affects: operator
