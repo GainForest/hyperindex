@@ -73,13 +73,14 @@ After registering by NSID or uploading a ZIP file, restart/redeploy the backend 
 **Run with Tap sidecar:**
 
 ```bash
-# Copy and configure environment
-cp .env.example .env
-# Set TAP_ADMIN_PASSWORD, ADMIN_API_KEY, and other vars in .env
+# Generate the minimal environment needed for Tap Docker
+./scripts/generate-env.sh
 
 # Start Tap + Hyperindex together
 docker compose -f docker-compose.tap.yml up --build
 ```
+
+The generator prompts for the Tap Docker values needed by `docker-compose.tap.yml`. Blank secret prompts auto-generate secure values with `openssl`, and rerunning it against an existing `.env` requires confirmation before overwriting. If you prefer to configure all environment variables manually, you can still copy `.env.example` to `.env` and edit it directly.
 
 **Add repos to track via Tap admin API:**
 

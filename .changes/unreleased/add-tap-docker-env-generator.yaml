@@ -1,0 +1,5 @@
+kind: added
+body: Add a Tap Docker environment generator so operators can create the required secrets and optional Tap filters without copying the full example environment.
+time: 2026-04-30T00:00:00.000000000+00:00
+custom:
+    Affects: operator
