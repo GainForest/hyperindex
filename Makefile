@@ -57,7 +57,7 @@ test-coverage:
 # Run public post-deploy API smoke tests
 smoke-api:
 	@test -n "$${HYPERINDEX_SMOKE_URL}" || (printf 'HYPERINDEX_SMOKE_URL is required (for example, HYPERINDEX_SMOKE_URL=https://api.example.com make smoke-api)\n' >&2; exit 1)
-	@bash -c 'go test -v -tags=api_smoke ./tests/api-smoke -count=1 2>&1 | awk '\''!($$0 ~ /^=== (RUN|PAUSE|CONT)[[:space:]]/ || $$0 ~ /^[[:space:]]*--- PASS:/ || $$0 == "PASS" || $$0 ~ /^ok[[:space:]]+github\.com\/GainForest\/hyperindex\/tests\/api-smoke([[:space:]]|$$)/) { print; fflush() }'\''; exit "$${PIPESTATUS[0]}"'
+	@bash -c 'printf "Running Hyperindex API smoke checks against %s...\n" "$${HYPERINDEX_SMOKE_URL}"; go test -v -tags=api_smoke ./tests/api-smoke -count=1 2>&1 | awk '\''!($$0 ~ /^=== (RUN|PAUSE|CONT)[[:space:]]/ || $$0 ~ /^[[:space:]]*--- PASS:/ || $$0 == "PASS" || $$0 ~ /^ok[[:space:]]+github\.com\/GainForest\/hyperindex\/tests\/api-smoke([[:space:]]|$$)/) { print; fflush() }'\''; status="$${PIPESTATUS[0]}"; if [ "$${status}" -eq 0 ]; then printf "✓ API smoke checks passed\n"; fi; exit "$${status}"'
 
 # Run linter (requires golangci-lint)
 lint:
