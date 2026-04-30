@@ -103,7 +103,7 @@ func TestGraphQLTypename(t *testing.T) {
 		t.Fatal("SmokeTypename: data.__typename is empty, want a non-empty string")
 	}
 
-	t.Log("✓ GraphQL endpoint is responding")
+	smokeLog("✓ GraphQL endpoint is responding")
 }
 
 func TestSchemaExposesExpectedTypedCollections(t *testing.T) {
@@ -164,7 +164,7 @@ func TestSchemaExposesPublicSmokeQueryFields(t *testing.T) {
 
 	requireSchemaField(t, queryFields, "collectionStats")
 
-	t.Log("✓ Public schema has expected GraphQL query fields")
+	smokeLog("✓ Public schema has expected GraphQL query fields")
 }
 
 func fetchGraphQLSchema(t testing.TB, config smokeConfig) graphQLSchema {

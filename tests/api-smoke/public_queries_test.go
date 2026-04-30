@@ -53,7 +53,7 @@ func TestCollectionStatsSmoke(t *testing.T) {
 		if count < expected.MinimumRecords {
 			t.Fatalf("SmokeCollectionStats: data-bearing collection %q has %d records, want at least %d", expected.NSID, count, expected.MinimumRecords)
 		}
-		t.Logf("✓ %s has at least %d records", expected.NSID, expected.MinimumRecords)
+		smokeLog("✓ %s has at least %d records", expected.NSID, expected.MinimumRecords)
 	}
 }
 
@@ -103,7 +103,7 @@ func TestSearchSmoke(t *testing.T) {
 		}
 	}
 
-	t.Log("✓ Search responds")
+	smokeLog("✓ Search responds")
 }
 
 func formatAvailableCollections(countsByCollection map[string]int) string {

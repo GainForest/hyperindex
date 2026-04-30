@@ -52,7 +52,7 @@ func TestPaginationSmoke(t *testing.T) {
 				}
 			}
 
-			t.Logf("✓ %s pagination works across two pages", collection.NSID)
+			smokeLog("✓ %s pagination works across two pages", collection.NSID)
 		})
 	}
 }

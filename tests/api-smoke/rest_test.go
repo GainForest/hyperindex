@@ -14,7 +14,7 @@ import (
 
 func TestHealthEndpoint(t *testing.T) {
 	config := loadSmokeConfig(t)
-	t.Logf("Checking deployed Hyperindex API: %s", config.baseURL)
+	smokeLog("Checking deployed Hyperindex API: %s", config.baseURL)
 	response := getRESTObject(t, context.Background(), config, "/health")
 
 	status, ok := response["status"]
@@ -31,7 +31,7 @@ func TestHealthEndpoint(t *testing.T) {
 		}
 	}
 
-	t.Log("✓ Health endpoint is OK")
+	smokeLog("✓ Health endpoint is OK")
 }
 
 func TestStatsEndpoint(t *testing.T) {
@@ -49,7 +49,7 @@ func TestStatsEndpoint(t *testing.T) {
 		t.Fatalf("REST /stats: actors = %v, want at least 1", actors)
 	}
 
-	t.Logf("✓ Stats endpoint returned indexed data: records=%.0f actors=%.0f lexicons=%.0f", records, actors, lexicons)
+	smokeLog("✓ Stats endpoint returned indexed data: records=%.0f actors=%.0f lexicons=%.0f", records, actors, lexicons)
 }
 
 func getRESTObject(t testing.TB, ctx context.Context, config smokeConfig, path string) map[string]any {
@@ -86,7 +86,7 @@ func getRESTObject(t testing.TB, ctx context.Context, config smokeConfig, path s
 		t.Fatalf("REST %s: decode HTTP %d response: expected JSON object; response %q", path, response.StatusCode, responseSnippet(body))
 	}
 	if config.debug {
-		t.Logf("REST %s %s url=%s HTTP %d bodyBytes=%d", http.MethodGet, path, url, response.StatusCode, len(body))
+		smokeLog("REST method=%s path=%s status=%d bodyBytes=%d", http.MethodGet, path, response.StatusCode, len(body))
 	}
 
 	return decoded

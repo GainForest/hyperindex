@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 )
@@ -62,6 +63,10 @@ func postGraphQL(t testing.TB, ctx context.Context, config smokeConfig, operatio
 	return postGraphQLWithOptions(t, ctx, config, operationName, query, variables, graphQLRequestOptions{})
 }
 
+func smokeLog(format string, args ...any) {
+	fmt.Fprintf(os.Stdout, format+"\n", args...)
+}
+
 func postGraphQLWithOptions(t testing.TB, ctx context.Context, config smokeConfig, operationName string, query string, variables map[string]any, options graphQLRequestOptions) GraphQLResponse {
 	t.Helper()
 
@@ -104,7 +109,7 @@ func postGraphQLWithOptions(t testing.TB, ctx context.Context, config smokeConfi
 		t.Fatalf("GraphQL %s: GraphQL errors with variables %s: %s; response %q", operationName, mustMarshalVariables(variables), formatGraphQLErrors(decoded.Errors), responseSnippet(body))
 	}
 	if config.debug {
-		t.Logf("GraphQL %s variables=%s HTTP %d errors=%d dataBytes=%d", operationName, mustMarshalVariables(variables), response.StatusCode, len(decoded.Errors), len(decoded.Data))
+		smokeLog("GraphQL operation=%s variables=%s status=%d errors=%d dataBytes=%d", operationName, mustMarshalVariables(variables), response.StatusCode, len(decoded.Errors), len(decoded.Data))
 	}
 
 	return decoded
