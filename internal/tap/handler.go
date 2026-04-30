@@ -109,6 +109,10 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 
 // HandleIdentity processes an identity event by updating the actor's handle.
 func (h *IndexHandler) HandleIdentity(ctx context.Context, event *IdentityEvent) error {
+	if identityStatus(event) == "active" && event.IsActivePresent && !event.IsActive {
+		slog.Warn("Keeping active identity despite false is_active flag", "did", event.DID)
+	}
+
 	if shouldPurgeIdentity(event) {
 		if err := h.records.DeleteByDID(ctx, event.DID); err != nil {
 			return fmt.Errorf("failed to delete records by did: %w", err)
@@ -129,15 +133,14 @@ func (h *IndexHandler) HandleIdentity(ctx context.Context, event *IdentityEvent)
 }
 
 func shouldPurgeIdentity(event *IdentityEvent) bool {
-	if !event.IsActive {
-		return true
-	}
-
-	status := strings.ToLower(strings.TrimSpace(event.Status))
-	switch status {
+	switch identityStatus(event) {
 	case "deleted", "deactivated", "suspended", "takendown":
 		return true
 	default:
 		return false
 	}
+}
+
+func identityStatus(event *IdentityEvent) string {
+	return strings.ToLower(strings.TrimSpace(event.Status))
 }
