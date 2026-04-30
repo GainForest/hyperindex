@@ -883,34 +883,192 @@ func TestEmptyConnection(t *testing.T) {
 func setupCoercionTestDB(t *testing.T, recordJSON string) context.Context {
 	t.Helper()
 
-	exec, err := sqlite.NewExecutor("sqlite::memory:")
-	if err != nil {
-		t.Fatalf("setupCoercionTestDB: failed to create SQLite executor: %v", err)
-	}
-	t.Cleanup(func() { exec.Close() })
-
-	ctx := context.Background()
-	if err := migrations.Run(ctx, exec); err != nil {
-		t.Fatalf("setupCoercionTestDB: failed to run migrations: %v", err)
-	}
-
-	records := repositories.NewRecordsRepository(exec)
-	rec := &repositories.Record{
+	return setupSchemaRecordTestDB(t, &repositories.Record{
 		URI:        "at://did:plc:test/org.hypercerts.claim.activity/rkey1",
 		CID:        "bafyreiabc123",
 		DID:        "did:plc:test",
 		Collection: "org.hypercerts.claim.activity",
 		JSON:       recordJSON,
 		RKey:       "rkey1",
+	})
+}
+
+// setupSchemaRecordTestDB creates an in-memory SQLite database with migrations applied,
+// inserts a single record, and returns a context that carries the repositories.
+func setupSchemaRecordTestDB(t *testing.T, rec *repositories.Record) context.Context {
+	t.Helper()
+
+	exec, err := sqlite.NewExecutor("sqlite::memory:")
+	if err != nil {
+		t.Fatalf("setupSchemaRecordTestDB: failed to create SQLite executor: %v", err)
 	}
+	t.Cleanup(func() { exec.Close() })
+
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("setupSchemaRecordTestDB: failed to run migrations: %v", err)
+	}
+
+	records := repositories.NewRecordsRepository(exec)
 	if err := records.BatchInsert(ctx, []*repositories.Record{rec}); err != nil {
-		t.Fatalf("setupCoercionTestDB: failed to insert record: %v", err)
+		t.Fatalf("setupSchemaRecordTestDB: failed to insert record: %v", err)
 	}
 
 	repos := &resolver.Repositories{
 		Records: records,
 	}
 	return resolver.WithRepositories(ctx, repos)
+}
+
+func buildCIDLinkRegressionSchema(t *testing.T) *graphql.Schema {
+	t.Helper()
+
+	registry := lexicon.NewRegistry()
+	registry.Register(&lexicon.Lexicon{
+		ID: "com.example.cidlink.record",
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "image", Property: lexicon.Property{Type: lexicon.TypeBlob}},
+					{Name: "root", Property: lexicon.Property{Type: lexicon.TypeCIDLink}},
+				},
+			},
+		},
+	})
+
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("buildCIDLinkRegressionSchema: failed to build schema: %v", err)
+	}
+	return schema
+}
+
+func TestCIDLinkSerializationInBuiltSchema(t *testing.T) {
+	const cid = "bafkreidlp6sdj6jkroakvmbntpy2clsj77foijheae5byt3iwz7d2k542a"
+	const recordURI = "at://did:plc:test/com.example.cidlink.record/rkey1"
+
+	ctx := setupSchemaRecordTestDB(t, &repositories.Record{
+		URI:        recordURI,
+		CID:        "bafyreirecordcid",
+		DID:        "did:plc:test",
+		Collection: "com.example.cidlink.record",
+		JSON:       `{"image":{"ref":{"$link":"` + cid + `"},"mimeType":"image/png"},"root":{"$link":"` + cid + `"}}`,
+		RKey:       "rkey1",
+	})
+	schema := buildCIDLinkRegressionSchema(t)
+
+	query := `{
+		comExampleCidlinkRecord(first: 10) {
+			edges {
+				node {
+					image { ref mimeType }
+					root
+				}
+			}
+		}
+		comExampleCidlinkRecordByUri(uri: "at://did:plc:test/com.example.cidlink.record/rkey1") {
+			image { ref }
+			root
+		}
+		records(collection: "com.example.cidlink.record", first: 10) {
+			edges {
+				node { value }
+			}
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("TestCIDLinkSerializationInBuiltSchema: unexpected GraphQL errors: %v", result.Errors)
+	}
+
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+
+	collectionNode := firstConnectionNode(t, data["comExampleCidlinkRecord"], "comExampleCidlinkRecord")
+	assertCIDLinkFields(t, collectionNode, cid, "collection query")
+
+	byURIRecord, ok := data["comExampleCidlinkRecordByUri"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("comExampleCidlinkRecordByUri is %T, want map[string]interface{}", data["comExampleCidlinkRecordByUri"])
+	}
+	assertCIDLinkFields(t, byURIRecord, cid, "ByUri query")
+
+	rawNode := firstConnectionNode(t, data["records"], "records")
+	value, ok := rawNode["value"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("records node value is %T, want map[string]interface{}", rawNode["value"])
+	}
+	assertRawCIDLinkShape(t, value, cid)
+}
+
+func firstConnectionNode(t *testing.T, connectionValue interface{}, fieldName string) map[string]interface{} {
+	t.Helper()
+
+	conn, ok := connectionValue.(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s is %T, want map[string]interface{}", fieldName, connectionValue)
+	}
+	edges, ok := conn["edges"].([]interface{})
+	if !ok || len(edges) == 0 {
+		t.Fatalf("%s edges = %v, want at least one edge", fieldName, conn["edges"])
+	}
+	edge, ok := edges[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s edge[0] is %T, want map[string]interface{}", fieldName, edges[0])
+	}
+	node, ok := edge["node"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s node is %T, want map[string]interface{}", fieldName, edge["node"])
+	}
+	return node
+}
+
+func assertCIDLinkFields(t *testing.T, record map[string]interface{}, cid, path string) {
+	t.Helper()
+
+	image, ok := record["image"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s image is %T, want map[string]interface{}", path, record["image"])
+	}
+	if got := image["ref"]; got != cid {
+		t.Fatalf("%s image.ref = %v, want %q", path, got, cid)
+	}
+	if got := record["root"]; got != cid {
+		t.Fatalf("%s root = %v, want %q", path, got, cid)
+	}
+}
+
+func assertRawCIDLinkShape(t *testing.T, value map[string]interface{}, cid string) {
+	t.Helper()
+
+	root, ok := value["root"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("raw root is %T, want map[string]interface{}", value["root"])
+	}
+	if got := root["$link"]; got != cid {
+		t.Fatalf("raw root $link = %v, want %q", got, cid)
+	}
+
+	image, ok := value["image"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("raw image is %T, want map[string]interface{}", value["image"])
+	}
+	ref, ok := image["ref"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("raw image.ref is %T, want map[string]interface{}", image["ref"])
+	}
+	if got := ref["$link"]; got != cid {
+		t.Fatalf("raw image.ref $link = %v, want %q", got, cid)
+	}
 }
 
 // buildActivitySchema builds a GraphQL schema from the org.hypercerts.claim.activity lexicon.
