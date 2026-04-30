@@ -1,0 +1,4 @@
+kind: fixed
+body: Fix typed GraphQL responses for ATProto CID links so blob refs and cid-link fields return plain CID strings instead of Go map-formatted values.
+custom:
+  Affects: user
