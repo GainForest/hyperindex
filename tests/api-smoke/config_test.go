@@ -16,12 +16,14 @@ import (
 const (
 	smokeURLEnv          = "HYPERINDEX_SMOKE_URL"
 	smokeExpectationsEnv = "HYPERINDEX_SMOKE_EXPECTATIONS"
+	smokeDebugEnv        = "HYPERINDEX_SMOKE_DEBUG"
 )
 
 type smokeConfig struct {
 	baseURL      string
 	expectations expectations
 	httpClient   *http.Client
+	debug        bool
 }
 
 type expectations struct {
@@ -70,6 +72,7 @@ func loadSmokeConfig(t testing.TB) smokeConfig {
 		baseURL:      baseURL,
 		expectations: loadedExpectations,
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
+		debug:        os.Getenv(smokeDebugEnv) == "1",
 	}
 }
 

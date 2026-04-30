@@ -14,6 +14,7 @@ import (
 
 func TestHealthEndpoint(t *testing.T) {
 	config := loadSmokeConfig(t)
+	t.Logf("Checking deployed Hyperindex API: %s", config.baseURL)
 	response := getRESTObject(t, context.Background(), config, "/health")
 
 	status, ok := response["status"]
@@ -29,6 +30,8 @@ func TestHealthEndpoint(t *testing.T) {
 			t.Fatalf("REST /health: time field type = %T, want string", healthTime)
 		}
 	}
+
+	t.Log("✓ Health endpoint is OK")
 }
 
 func TestStatsEndpoint(t *testing.T) {
@@ -37,7 +40,7 @@ func TestStatsEndpoint(t *testing.T) {
 
 	records := requireNonNegativeIntegerField(t, response, "/stats", "records")
 	actors := requireNonNegativeIntegerField(t, response, "/stats", "actors")
-	requireNonNegativeIntegerField(t, response, "/stats", "lexicons")
+	lexicons := requireNonNegativeIntegerField(t, response, "/stats", "lexicons")
 
 	if records < 1 {
 		t.Fatalf("REST /stats: records = %v, want at least 1", records)
@@ -45,13 +48,14 @@ func TestStatsEndpoint(t *testing.T) {
 	if actors < 1 {
 		t.Fatalf("REST /stats: actors = %v, want at least 1", actors)
 	}
+
+	t.Logf("✓ Stats endpoint returned indexed data: records=%.0f actors=%.0f lexicons=%.0f", records, actors, lexicons)
 }
 
 func getRESTObject(t testing.TB, ctx context.Context, config smokeConfig, path string) map[string]any {
 	t.Helper()
 
 	url := config.baseURL + path
-	t.Logf("REST %s %s url=%s", http.MethodGet, path, url)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatalf("REST %s: build request: %v", path, err)
@@ -81,7 +85,9 @@ func getRESTObject(t testing.TB, ctx context.Context, config smokeConfig, path s
 	if decoded == nil {
 		t.Fatalf("REST %s: decode HTTP %d response: expected JSON object; response %q", path, response.StatusCode, responseSnippet(body))
 	}
-	t.Logf("REST %s: response HTTP %d bodyBytes=%d", path, response.StatusCode, len(body))
+	if config.debug {
+		t.Logf("REST %s %s url=%s HTTP %d bodyBytes=%d", http.MethodGet, path, url, response.StatusCode, len(body))
+	}
 
 	return decoded
 }

@@ -51,7 +51,6 @@ func TestRequiredCollectionsAreQueryable(t *testing.T) {
 	for collection := range config.expectations.TypedQueryFields {
 		collection := collection
 		t.Run(collection, func(t *testing.T) {
-			t.Logf("generic records check collection=%q first=%d", collection, 1)
 			response := fetchGenericRecords(t, config, collection, 1)
 
 			for edgeIndex, edge := range response.Records.Edges {
@@ -67,7 +66,6 @@ func TestDataBearingCollectionRecordShape(t *testing.T) {
 	for _, collection := range config.expectations.DataBearingCollections {
 		collection := collection
 		t.Run(collection.NSID, func(t *testing.T) {
-			t.Logf("data-bearing record shape check collection=%q first=%d", collection.NSID, 10)
 			response := fetchGenericRecords(t, config, collection.NSID, 10)
 			if len(response.Records.Edges) != 10 {
 				t.Fatalf("records(%q, first: 10) returned %d edges, want exactly 10", collection.NSID, len(response.Records.Edges))
@@ -87,7 +85,6 @@ func TestTypedByURIRoundTrip(t *testing.T) {
 		collection := collection
 		t.Run(collection.NSID, func(t *testing.T) {
 			typedField := config.expectations.TypedQueryFields[collection.NSID]
-			t.Logf("typed ByUri roundtrip check collection=%q typedField=%q", collection.NSID, typedField)
 			genericResponse := fetchGenericRecords(t, config, collection.NSID, 1)
 			if len(genericResponse.Records.Edges) != 1 {
 				t.Fatalf("records(%q, first: 1) returned %d edges, want exactly 1", collection.NSID, len(genericResponse.Records.Edges))

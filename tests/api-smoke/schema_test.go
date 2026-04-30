@@ -102,6 +102,8 @@ func TestGraphQLTypename(t *testing.T) {
 	if payload.Typename == "" {
 		t.Fatal("SmokeTypename: data.__typename is empty, want a non-empty string")
 	}
+
+	t.Log("✓ GraphQL endpoint is responding")
 }
 
 func TestSchemaExposesExpectedTypedCollections(t *testing.T) {
@@ -114,7 +116,6 @@ func TestSchemaExposesExpectedTypedCollections(t *testing.T) {
 		nsid := nsid
 		queryFieldName := queryFieldName
 		t.Run(nsid, func(t *testing.T) {
-			t.Logf("schema typed field check nsid=%q expectedField=%q", nsid, queryFieldName)
 			collectionField := requireSchemaFieldForNSID(t, queryFields, queryFieldName, nsid)
 			requireSchemaArgument(t, collectionField, "first")
 
@@ -162,6 +163,8 @@ func TestSchemaExposesPublicSmokeQueryFields(t *testing.T) {
 	requireSchemaArgument(t, searchField, "first")
 
 	requireSchemaField(t, queryFields, "collectionStats")
+
+	t.Log("✓ Public schema has expected GraphQL query fields")
 }
 
 func fetchGraphQLSchema(t testing.TB, config smokeConfig) graphQLSchema {
@@ -210,7 +213,7 @@ func requireSchemaFieldForNSID(t testing.TB, fields map[string]schemaField, name
 
 	field, ok := fields[name]
 	if !ok {
-		t.Fatalf("schema is missing field %q for NSID %q", name, nsid)
+		t.Fatalf("schema is missing field %q for NSID %q; this usually means the lexicon was not loaded when the backend started or the deployment expectations are out of date", name, nsid)
 	}
 	return field
 }

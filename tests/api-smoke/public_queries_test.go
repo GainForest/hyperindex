@@ -6,14 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
 
 func TestCollectionStatsSmoke(t *testing.T) {
 	config := loadSmokeConfig(t)
-	t.Logf("collectionStats check expectedMinimums=%s", formatExpectedCollectionMinimums(config.expectations.DataBearingCollections))
 	response := postGraphQL(t, context.Background(), config, "SmokeCollectionStats", `
 		query SmokeCollectionStats {
 			collectionStats {
@@ -53,14 +51,14 @@ func TestCollectionStatsSmoke(t *testing.T) {
 			t.Fatalf("SmokeCollectionStats: collectionStats is missing data-bearing collection %q; available collections: %s", expected.NSID, formatAvailableCollections(countsByCollection))
 		}
 		if count < expected.MinimumRecords {
-			t.Fatalf("SmokeCollectionStats: collectionStats[%q].count = %d, want >= %d", expected.NSID, count, expected.MinimumRecords)
+			t.Fatalf("SmokeCollectionStats: data-bearing collection %q has %d records, want at least %d", expected.NSID, count, expected.MinimumRecords)
 		}
+		t.Logf("✓ %s has at least %d records", expected.NSID, expected.MinimumRecords)
 	}
 }
 
 func TestSearchSmoke(t *testing.T) {
 	config := loadSmokeConfig(t)
-	t.Logf("search check query=%q first=%d", config.expectations.Search.Query, config.expectations.Search.First)
 	response := postGraphQL(t, context.Background(), config, "SmokeSearch", `
 		query SmokeSearch($query: String!, $first: Int!) {
 			search(query: $query, first: $first) {
@@ -90,29 +88,22 @@ func TestSearchSmoke(t *testing.T) {
 		} `json:"search"`
 	}
 	if err := json.Unmarshal(response.Data, &payload); err != nil {
-		t.Fatalf("SmokeSearch: decode response data: %v", err)
+		t.Fatalf("SmokeSearch: decode response data for query %q: %v", config.expectations.Search.Query, err)
 	}
 
 	for index, edge := range payload.Search.Edges {
 		if !strings.HasPrefix(edge.Node.URI, "at://") {
-			t.Fatalf("SmokeSearch: search.edges[%d].node.uri = %q, want at:// prefix", index, edge.Node.URI)
+			t.Fatalf("SmokeSearch: query %q search.edges[%d].node.uri = %q, want at:// prefix", config.expectations.Search.Query, index, edge.Node.URI)
 		}
 		if !strings.HasPrefix(edge.Node.DID, "did:") {
-			t.Fatalf("SmokeSearch: search.edges[%d].node.did = %q, want did: prefix", index, edge.Node.DID)
+			t.Fatalf("SmokeSearch: query %q search.edges[%d].node.did = %q, want did: prefix", config.expectations.Search.Query, index, edge.Node.DID)
 		}
 		if edge.Node.Collection == "" {
-			t.Fatalf("SmokeSearch: search.edges[%d].node.collection is empty", index)
+			t.Fatalf("SmokeSearch: query %q search.edges[%d].node.collection is empty", config.expectations.Search.Query, index)
 		}
 	}
-}
 
-func formatExpectedCollectionMinimums(collections []dataBearingExpectation) string {
-	parts := make([]string, 0, len(collections))
-	for _, collection := range collections {
-		parts = append(parts, collection.NSID+":"+strconv.Itoa(collection.MinimumRecords))
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, ",")
+	t.Log("✓ Search responds")
 }
 
 func formatAvailableCollections(countsByCollection map[string]int) string {

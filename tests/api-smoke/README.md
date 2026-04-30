@@ -11,15 +11,23 @@ HYPERINDEX_SMOKE_URL=https://api.example.com \
   go test -tags=api_smoke ./tests/api-smoke -count=1
 ```
 
-Pass `-v` to direct `go test` runs to see step-by-step smoke check logs.
+Pass `-v` to direct `go test` runs to see human-readable progress and pass logs.
 
-Or use the Make target, with the URL supplied by your environment. The Make target enables verbose output by default.
+Or use the Make target, with the URL supplied by your environment. The Make target enables verbose, human-readable output by default.
 
 ```bash
 HYPERINDEX_SMOKE_URL=https://api.example.com make smoke-api
 ```
 
 Do not bake an environment-specific URL into the command or Makefile target.
+
+Set `HYPERINDEX_SMOKE_DEBUG=1` when you need compact lower-level request and response logs, including GraphQL operation names, variables, HTTP status, error counts, data byte lengths, and REST response byte lengths.
+
+```bash
+HYPERINDEX_SMOKE_URL=https://api.example.com \
+  HYPERINDEX_SMOKE_DEBUG=1 \
+  make smoke-api
+```
 
 ## Optional expectations file
 
