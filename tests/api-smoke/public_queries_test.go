@@ -90,6 +90,9 @@ func TestSearchSmoke(t *testing.T) {
 	if err := json.Unmarshal(response.Data, &payload); err != nil {
 		t.Fatalf("SmokeSearch: decode response data for query %q: %v", config.expectations.Search.Query, err)
 	}
+	if len(payload.Search.Edges) == 0 {
+		t.Fatalf("SmokeSearch: query %q returned no search.edges, want at least one edge for first=%d", config.expectations.Search.Query, config.expectations.Search.First)
+	}
 
 	for index, edge := range payload.Search.Edges {
 		if !strings.HasPrefix(edge.Node.URI, "at://") {
