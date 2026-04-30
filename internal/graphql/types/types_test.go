@@ -1,10 +1,12 @@
 package types //nolint:revive // package name is descriptive within graphql context
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/gqlerrors"
 
 	"github.com/GainForest/hyperindex/internal/lexicon"
 )
@@ -81,6 +83,97 @@ func TestMapper_ObjectTypeCache(t *testing.T) {
 	if _, exists := all["test.ref"]; !exists {
 		t.Error("AllObjectTypes missing 'test.ref'")
 	}
+}
+
+func TestMapper_BlobRefResolver(t *testing.T) {
+	tests := []struct {
+		name    string
+		ref     any
+		wantRef string
+	}{
+		{
+			name:    "link object",
+			ref:     map[string]any{"$link": "bafkreihyperindexcid"},
+			wantRef: "bafkreihyperindexcid",
+		},
+		{
+			name:    "string",
+			ref:     "bafkreialreadystring",
+			wantRef: "bafkreialreadystring",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotData, gotErrors := executeBlobRefQuery(t, tt.ref)
+			if len(gotErrors) > 0 {
+				t.Fatalf("Blob.ref query returned errors: %v", gotErrors)
+			}
+
+			blob, ok := gotData["blob"].(map[string]any)
+			if !ok {
+				t.Fatalf("blob result = %T, want map[string]any", gotData["blob"])
+			}
+
+			if gotRef := blob["ref"]; gotRef != tt.wantRef {
+				t.Fatalf("Blob.ref = %v, want %q", gotRef, tt.wantRef)
+			}
+		})
+	}
+}
+
+func TestMapper_BlobRefResolverMalformedRefDoesNotStringifyMap(t *testing.T) {
+	gotData, gotErrors := executeBlobRefQuery(t, map[string]any{"$link": 123})
+	if len(gotErrors) == 0 {
+		blob, ok := gotData["blob"].(map[string]any)
+		if ok {
+			if gotRef, ok := blob["ref"].(string); ok && strings.Contains(gotRef, "map[$link:") {
+				t.Fatalf("malformed Blob.ref returned stringified map: %q", gotRef)
+			}
+		}
+
+		return
+	}
+
+	for _, err := range gotErrors {
+		if strings.Contains(err.Message, "map[$link:") {
+			t.Fatalf("malformed Blob.ref error stringified map: %q", err.Message)
+		}
+	}
+}
+
+func executeBlobRefQuery(t *testing.T, ref any) (map[string]any, []gqlerrors.FormattedError) {
+	t.Helper()
+
+	mapper := NewMapper()
+	schema, err := graphql.NewSchema(graphql.SchemaConfig{
+		Query: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Query",
+			Fields: graphql.Fields{
+				"blob": &graphql.Field{
+					Type: mapper.BlobType,
+					Resolve: func(_ graphql.ResolveParams) (interface{}, error) {
+						return map[string]any{
+							"ref":      ref,
+							"mimeType": "image/png",
+							"size":     123,
+						}, nil
+					},
+				},
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("failed to build test schema: %v", err)
+	}
+
+	result := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: "{ blob { ref } }",
+	})
+
+	data, _ := result.Data.(map[string]any)
+	return data, result.Errors
 }
 
 func TestMapper_UnionTypeCache(t *testing.T) {
