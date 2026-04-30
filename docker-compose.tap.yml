@@ -9,7 +9,7 @@ services:
       - tap-data:/data
     environment:
       TAP_DATABASE_URL: "sqlite:///data/tap.db"
-      TAP_COLLECTION_FILTERS: "${JETSTREAM_COLLECTIONS}"
+      TAP_COLLECTION_FILTERS: "${TAP_COLLECTION_FILTERS:-}"
       TAP_SIGNAL_COLLECTION: "${TAP_SIGNAL_COLLECTION:-}"
       TAP_DISABLE_ACKS: "false"
       TAP_ADMIN_PASSWORD: "${TAP_ADMIN_PASSWORD:?TAP_ADMIN_PASSWORD must be set}"
@@ -27,6 +27,7 @@ services:
       TAP_ENABLED: "true"
       TAP_URL: "ws://tap:2480"
       TAP_ADMIN_PASSWORD: "${TAP_ADMIN_PASSWORD:?TAP_ADMIN_PASSWORD must be set}"
+      ADMIN_API_KEY: "${ADMIN_API_KEY:?ADMIN_API_KEY must be set}"
       DATABASE_URL: "${DATABASE_URL:-sqlite:data/hyperindex.db}"
       SECRET_KEY_BASE: "${SECRET_KEY_BASE:?SECRET_KEY_BASE must be set - generate with: openssl rand -hex 32}"
       EXTERNAL_BASE_URL: "${EXTERNAL_BASE_URL:-http://localhost:8080}"
