@@ -6,6 +6,8 @@ The suite does not test the Next.js client, admin authentication, lexicon upload
 
 ## Run manually
 
+`HYPERINDEX_SMOKE_URL` is required for both direct `go test` runs and the Make target. It must point to the public Hyperindex API endpoint you want to check.
+
 ```bash
 HYPERINDEX_SMOKE_URL=https://api.example.com \
   go test -tags=api_smoke ./tests/api-smoke -count=1
@@ -18,6 +20,8 @@ Use the Make target for operator-friendly smoke output, with the URL supplied by
 ```bash
 HYPERINDEX_SMOKE_URL=https://api.example.com make smoke-api
 ```
+
+`make smoke-api` fails before running tests when `HYPERINDEX_SMOKE_URL` is unset. If a smoke check fails, the target preserves the failure output, exits non-zero, and does not print the final `✓ API smoke checks passed` line. That success message is printed only after all checks pass.
 
 Do not bake an environment-specific URL into the command or Makefile target.
 
@@ -38,7 +42,9 @@ HYPERINDEX_SMOKE_URL=https://api.example.com \
 
 ## Optional expectations file
 
-Set `HYPERINDEX_SMOKE_EXPECTATIONS=/path/to/expectations.json` to provide environment-specific expectations for the smoke run.
+By default, the suite loads `tests/api-smoke/expectations.json`. Set `HYPERINDEX_SMOKE_EXPECTATIONS=/path/to/expectations.json` to provide environment-specific expectations for the smoke run.
+
+The expectations file is read, decoded, and validated before requests are sent. Expectation load failures include the file path so operators can see which file failed; for example, a missing override reports `read expectations file "/path/to/expectations.json": no such file or directory`.
 
 ## What the suite checks
 
@@ -55,7 +61,15 @@ Set `HYPERINDEX_SMOKE_EXPECTATIONS=/path/to/expectations.json` to provide enviro
 
 ## Public-only limitation
 
-Because this suite uses only the public GraphQL API, it cannot strictly prove that helper lexicons such as `app.certified.defs` are loaded. Strict lexicon identity would require a future admin-authenticated smoke mode.
+Because this suite uses only the public GraphQL API, it cannot strictly prove that helper and non-record lexicons are loaded. Strict lexicon identity would require a future admin-authenticated smoke mode.
+
+These helper and non-record lexicons are excluded from typed field assertions because the public GraphQL schema should not expose typed collection or `ByUri` query fields for them:
+
+- `app.certified.defs`
+- `org.hypercerts.defs`
+- `org.hypercerts.workscope.cel`
+
+The default typed expectations also intentionally omit `app.certified.link.evm`. The development schema does not expose `appCertifiedLinkEvm` or `appCertifiedLinkEvmByUri`, so the default `tests/api-smoke/expectations.json` does not require that NSID as a typed public GraphQL collection.
 
 ## Production data assumptions
 
