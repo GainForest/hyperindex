@@ -13,7 +13,7 @@ HYPERINDEX_SMOKE_URL=https://api.example.com \
 
 Direct `go test` runs use standard Go test output. Successful test stdout is only shown when you pass `-v`.
 
-Use the Make target for operator-friendly smoke output, with the URL supplied by your environment. The target runs verbose tests internally so friendly progress lines are available, then filters Go harness noise such as `=== RUN`, `--- PASS`, package `PASS`, and final `ok` lines.
+Use the Make target for operator-friendly smoke output, with the URL supplied by your environment. The target runs verbose tests internally so friendly progress lines are streamed incrementally, then filters Go harness noise such as `=== RUN`, `--- PASS`, package `PASS`, and final `ok` lines.
 
 ```bash
 HYPERINDEX_SMOKE_URL=https://api.example.com make smoke-api
@@ -21,7 +21,7 @@ HYPERINDEX_SMOKE_URL=https://api.example.com make smoke-api
 
 Do not bake an environment-specific URL into the command or Makefile target.
 
-Set `HYPERINDEX_SMOKE_DEBUG=1` when you need compact lower-level request and response logs without enabling Go verbose subtest output. Debug logs include GraphQL operation names, variables, HTTP status, error counts, data byte lengths, and REST method, path, HTTP status, and response byte lengths.
+Set `HYPERINDEX_SMOKE_DEBUG=1` when you need compact lower-level request and response logs without enabling Go verbose subtest output. Debug logs stream incrementally alongside the friendly progress lines and include GraphQL operation names, variables, HTTP status, error counts, data byte lengths, and REST method, path, HTTP status, and response byte lengths.
 
 ```bash
 HYPERINDEX_SMOKE_URL=https://api.example.com \
