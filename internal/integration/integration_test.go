@@ -1,6 +1,6 @@
 //go:build integration
 
-// Package integration provides end-to-end integration tests for hypergoat.
+// Package integration provides end-to-end integration tests for hyperindex.
 //
 // Run with: go test -tags=integration -v ./internal/integration/...
 package integration
@@ -11,11 +11,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/database/migrations"
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/database/sqlite"
-	"github.com/GainForest/hypergoat/internal/graphql/admin"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/database/migrations"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/database/sqlite"
+	"github.com/GainForest/hyperindex/internal/graphql/admin"
 
 	"github.com/graphql-go/graphql"
 )

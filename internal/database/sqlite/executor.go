@@ -10,7 +10,7 @@ import (
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 
-	"github.com/GainForest/hypergoat/internal/database"
+	"github.com/GainForest/hyperindex/internal/database"
 )
 
 // validJSONFieldName matches safe JSON field names to prevent SQL injection.

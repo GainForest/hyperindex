@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 )
 
 // ConsumerConfig configures the Jetstream consumer.

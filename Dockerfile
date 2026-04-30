@@ -17,7 +17,7 @@ RUN go mod download
 COPY . .
 
 # Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -o /hypergoat ./cmd/hypergoat
+RUN CGO_ENABLED=0 GOOS=linux go build -o /hyperindex ./cmd/hyperindex
 
 # Runtime stage
 FROM alpine:3.19
@@ -28,7 +28,7 @@ WORKDIR /app
 RUN apk add --no-cache ca-certificates tzdata
 
 # Copy binary from builder
-COPY --from=builder /hypergoat /app/hypergoat
+COPY --from=builder /hyperindex /app/hyperindex
 
 # Copy static files (Quickslice client UI) if they exist
 # Note: static directory may not exist yet during development
@@ -46,11 +46,11 @@ EXPOSE 8080
 # Set environment defaults
 ENV HOST=0.0.0.0
 ENV PORT=8080
-ENV DATABASE_URL=sqlite:/app/data/hypergoat.db
+ENV DATABASE_URL=sqlite:/app/data/hyperindex.db
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
 
 # Run the server
-ENTRYPOINT ["/app/hypergoat"]
+ENTRYPOINT ["/app/hyperindex"]

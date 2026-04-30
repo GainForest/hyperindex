@@ -224,8 +224,8 @@ func TestRedactPassword(t *testing.T) {
 		},
 		{
 			name:  "URL without password",
-			input: "sqlite:data/hypergoat.db",
-			want:  "sqlite:data/hypergoat.db",
+			input: "sqlite:data/hyperindex.db",
+			want:  "sqlite:data/hyperindex.db",
 		},
 		{
 			name:  "URL with @ but no password",

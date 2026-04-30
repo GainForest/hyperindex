@@ -7,9 +7,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/graphql/subscription"
-	"github.com/GainForest/hypergoat/internal/tap"
-	"github.com/GainForest/hypergoat/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/tap"
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 // setupHandler creates an IndexHandler backed by a real in-memory SQLite database.
@@ -474,6 +474,40 @@ func TestIndexHandler_HandleIdentity_UpdatesHandle(t *testing.T) {
 	}
 }
 
+func TestIndexHandler_HandleIdentity_TapShapedActivePayloadKeepsRecords(t *testing.T) {
+	handler, db, _ := setupHandler(t)
+	ctx := context.Background()
+	did := "did:plc:tapactive"
+	uri := "at://did:plc:tapactive/app.bsky.feed.post/post1"
+
+	if err := db.Actors.Upsert(ctx, did, "old-handle.bsky.social"); err != nil {
+		t.Fatalf("failed to seed actor: %v", err)
+	}
+	if _, err := db.Records.Insert(ctx, uri, "bafyreitapactive", did, "app.bsky.feed.post", `{"text":"keep me"}`); err != nil {
+		t.Fatalf("failed to seed record: %v", err)
+	}
+
+	event, err := tap.ParseEvent([]byte(`{"id":1,"type":"identity","identity":{"did":"did:plc:tapactive","handle":"new-handle.bsky.social","is_active":true,"status":"active"}}`))
+	if err != nil {
+		t.Fatalf("ParseEvent returned error: %v", err)
+	}
+
+	if err := handler.HandleIdentity(ctx, event.Identity); err != nil {
+		t.Fatalf("HandleIdentity returned error: %v", err)
+	}
+
+	actor, err := db.Actors.GetByDID(ctx, did)
+	if err != nil {
+		t.Fatalf("expected actor to remain: %v", err)
+	}
+	if actor.Handle != "new-handle.bsky.social" {
+		t.Fatalf("expected updated handle %q, got %q", "new-handle.bsky.social", actor.Handle)
+	}
+	if _, err := db.Records.GetByURI(ctx, uri); err != nil {
+		t.Fatalf("expected record to remain: %v", err)
+	}
+}
+
 func TestIndexHandler_HandleIdentity_PurgePolicy(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -482,12 +516,14 @@ func TestIndexHandler_HandleIdentity_PurgePolicy(t *testing.T) {
 		wantPurged bool
 	}{
 		{name: "active status keeps data", isActive: true, status: "active", wantPurged: false},
+		{name: "active status keeps data when is_active false", isActive: false, status: "active", wantPurged: false},
+		{name: "empty status keeps data when is_active false", isActive: false, status: "", wantPurged: false},
 		{name: "deleted status purges", isActive: false, status: "deleted", wantPurged: true},
 		{name: "deactivated status purges", isActive: false, status: "deactivated", wantPurged: true},
 		{name: "suspended status purges", isActive: true, status: "suspended", wantPurged: true},
 		{name: "takendown status purges", isActive: true, status: "takendown", wantPurged: true},
 		{name: "mixed-case status purges", isActive: true, status: "Suspended", wantPurged: true},
-		{name: "inactive unknown status purges", isActive: false, status: "mystery", wantPurged: true},
+		{name: "unknown status keeps data when is_active false", isActive: false, status: "mystery", wantPurged: false},
 	}
 
 	for _, tt := range tests {
@@ -523,10 +559,11 @@ func TestIndexHandler_HandleIdentity_PurgePolicy(t *testing.T) {
 			}
 
 			event := &tap.IdentityEvent{
-				DID:      did,
-				Handle:   "new-handle.bsky.social",
-				IsActive: tt.isActive,
-				Status:   tt.status,
+				DID:             did,
+				Handle:          "new-handle.bsky.social",
+				IsActive:        tt.isActive,
+				IsActivePresent: true,
+				Status:          tt.status,
 			}
 
 			if err := handler.HandleIdentity(ctx, event); err != nil {

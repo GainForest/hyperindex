@@ -102,7 +102,7 @@ func TestParseEvent_Identity(t *testing.T) {
 		"identity": {
 			"did": "did:plc:abc",
 			"handle": "alice.bsky.social",
-			"isActive": true,
+			"is_active": true,
 			"status": "active"
 		}
 	}`)
@@ -127,10 +127,43 @@ func TestParseEvent_Identity(t *testing.T) {
 		t.Errorf("expected handle %q, got %q", "alice.bsky.social", event.Identity.Handle)
 	}
 	if !event.Identity.IsActive {
-		t.Error("expected isActive to be true")
+		t.Error("expected is_active to be true")
+	}
+	if !event.Identity.IsActivePresent {
+		t.Error("expected is_active presence to be tracked")
 	}
 	if event.Identity.Status != "active" {
 		t.Errorf("expected status %q, got %q", "active", event.Identity.Status)
+	}
+}
+
+func TestParseEvent_IdentityIgnoresCamelCaseIsActive(t *testing.T) {
+	data := []byte(`{
+		"id": 12348,
+		"type": "identity",
+		"identity": {
+			"did": "did:plc:abc",
+			"handle": "alice.bsky.social",
+			"isActive": true,
+			"status": "active"
+		}
+	}`)
+
+	event, err := ParseEvent(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event.Identity == nil {
+		t.Fatal("expected identity to be non-nil")
+	}
+	if event.Identity.IsActive {
+		t.Error("expected camelCase isActive to be ignored")
+	}
+	if event.Identity.IsActivePresent {
+		t.Error("expected camelCase isActive not to mark is_active present")
+	}
+	if shouldPurgeIdentity(event.Identity) {
+		t.Error("expected active status with camelCase isActive to keep identity")
 	}
 }
 
@@ -308,7 +341,7 @@ func TestParseEvent_AcceptanceCriteria_RecordCreate(t *testing.T) {
 
 func TestParseEvent_AcceptanceCriteria_Identity(t *testing.T) {
 	// Exact format from acceptance criteria
-	data := []byte(`{"id": 12346, "type": "identity", "identity": {"did": "did:plc:abc", "handle": "alice.bsky.social", "isActive": true, "status": "active"}}`)
+	data := []byte(`{"id": 12346, "type": "identity", "identity": {"did": "did:plc:abc", "handle": "alice.bsky.social", "is_active": true, "status": "active"}}`)
 
 	event, err := ParseEvent(data)
 	if err != nil {
@@ -330,7 +363,10 @@ func TestParseEvent_AcceptanceCriteria_Identity(t *testing.T) {
 		t.Errorf("expected handle %q, got %q", "alice.bsky.social", event.Identity.Handle)
 	}
 	if !event.Identity.IsActive {
-		t.Error("expected isActive to be true")
+		t.Error("expected is_active to be true")
+	}
+	if !event.Identity.IsActivePresent {
+		t.Error("expected is_active presence to be tracked")
 	}
 	if event.Identity.Status != "active" {
 		t.Errorf("expected status %q, got %q", "active", event.Identity.Status)
@@ -423,17 +459,17 @@ func TestParseEvent_IdentityValidation(t *testing.T) {
 	}{
 		{
 			name:    "valid identity event",
-			data:    `{"id":1,"type":"identity","identity":{"did":"did:plc:abc","handle":"alice.bsky.social","isActive":true,"status":"active"}}`,
+			data:    `{"id":1,"type":"identity","identity":{"did":"did:plc:abc","handle":"alice.bsky.social","is_active":true,"status":"active"}}`,
 			wantErr: false,
 		},
 		{
 			name:    "identity with empty DID",
-			data:    `{"id":1,"type":"identity","identity":{"did":"","handle":"alice.bsky.social","isActive":true,"status":"active"}}`,
+			data:    `{"id":1,"type":"identity","identity":{"did":"","handle":"alice.bsky.social","is_active":true,"status":"active"}}`,
 			wantErr: true,
 		},
 		{
 			name:    "identity with missing DID",
-			data:    `{"id":1,"type":"identity","identity":{"handle":"alice.bsky.social","isActive":true,"status":"active"}}`,
+			data:    `{"id":1,"type":"identity","identity":{"handle":"alice.bsky.social","is_active":true,"status":"active"}}`,
 			wantErr: true,
 		},
 	}

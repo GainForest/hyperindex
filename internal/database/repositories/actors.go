@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/database"
+	"github.com/GainForest/hyperindex/internal/database"
 )
 
 // Actor represents an AT Protocol user/actor.

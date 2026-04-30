@@ -1,14 +1,14 @@
 version: '3.8'
 
 services:
-  hypergoat:
+  hyperindex:
     build: .
     ports:
       - "8080:8080"
     environment:
       - HOST=0.0.0.0
       - PORT=8080
-      - DATABASE_URL=postgres://hypergoat:hypergoat@postgres:5432/hypergoat?sslmode=disable
+      - DATABASE_URL=postgres://hyperindex:hyperindex@postgres:5432/hyperindex?sslmode=disable
       - SECRET_KEY_BASE=${SECRET_KEY_BASE:?SECRET_KEY_BASE must be set - generate with: openssl rand -hex 32}
       - EXTERNAL_BASE_URL=${EXTERNAL_BASE_URL:-http://localhost:8080}
       - OAUTH_LOOPBACK_MODE=${OAUTH_LOOPBACK_MODE:-true}
@@ -20,13 +20,13 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      - POSTGRES_USER=hypergoat
-      - POSTGRES_PASSWORD=hypergoat
-      - POSTGRES_DB=hypergoat
+      - POSTGRES_USER=hyperindex
+      - POSTGRES_PASSWORD=hyperindex
+      - POSTGRES_DB=hyperindex
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hypergoat"]
+      test: ["CMD-SHELL", "pg_isready -U hyperindex"]
       interval: 5s
       timeout: 5s
       retries: 5

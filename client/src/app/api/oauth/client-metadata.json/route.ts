@@ -10,7 +10,7 @@ export async function GET() {
   const isConfidential = !!publicUrl && !!serverEnv.ATPROTO_JWK_PRIVATE;
 
   const metadata: Record<string, unknown> = {
-    client_name: "Hypergoat Admin",
+    client_name: "Hyperindex Admin",
     client_uri: url,
     dpop_bound_access_tokens: true,
     grant_types: ["authorization_code", "refresh_token"],

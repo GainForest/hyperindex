@@ -50,10 +50,37 @@ func (r *RecordEvent) URI() string {
 
 // IdentityEvent is an identity change event from Tap.
 type IdentityEvent struct {
-	DID      string `json:"did"`
-	Handle   string `json:"handle"`
-	IsActive bool   `json:"isActive"`
-	Status   string `json:"status"` // active, takendown, suspended, deactivated, deleted
+	DID             string `json:"did"`
+	Handle          string `json:"handle"`
+	IsActive        bool   `json:"is_active"`
+	IsActivePresent bool   `json:"-"`
+	Status          string `json:"status"` // active, takendown, suspended, deactivated, deleted
+}
+
+// UnmarshalJSON parses the canonical Tap identity payload and records whether
+// is_active was present so a missing boolean is never confused with false.
+func (i *IdentityEvent) UnmarshalJSON(data []byte) error {
+	var payload struct {
+		DID      string `json:"did"`
+		Handle   string `json:"handle"`
+		IsActive *bool  `json:"is_active"`
+		Status   string `json:"status"`
+	}
+
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+
+	*i = IdentityEvent{
+		DID:             payload.DID,
+		Handle:          payload.Handle,
+		IsActivePresent: payload.IsActive != nil,
+		Status:          payload.Status,
+	}
+	if payload.IsActive != nil {
+		i.IsActive = *payload.IsActive
+	}
+	return nil
 }
 
 // ParseEvent parses a Tap event from JSON bytes.

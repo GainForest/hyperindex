@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 func TestResolver_PurgeActor_TrimsDID(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/database"
+	"github.com/GainForest/hyperindex/internal/database"
 )
 
 // LabelSeverity represents the severity level of a label.

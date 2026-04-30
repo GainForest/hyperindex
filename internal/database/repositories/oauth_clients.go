@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
 // OAuthClientsRepository handles OAuth client persistence.

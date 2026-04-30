@@ -7,13 +7,13 @@ This repository contains two codebases:
 - a **Go backend** at the repository root
 - a **Next.js frontend** in `client/`
 
-You may still see the older **`hypergoat`** name in Go module paths, binaries, and entrypoint directories. The product name is **Hyperindex**.
+Go module paths, binaries, and entrypoint directories use the **`hyperindex`** name.
 
 For product usage and deployment basics, start with [`README.md`](./README.md). This document focuses on contributor workflow.
 
 ## Repository map
 
-- Backend entrypoint: `cmd/hypergoat/`
+- Backend entrypoint: `cmd/hyperindex/`
 - Backend schema and migrations: `internal/database/migrations/`
 - Frontend app: `client/`
 - Changelog workflow: `docs/changelog-workflow.md`
@@ -135,7 +135,7 @@ DATABASE_URL=sqlite::memory: go test -v -race ./...
 Also run:
 
 ```bash
-DATABASE_URL=postgres://hypergoat:hypergoat@localhost:5432/hypergoat_test?sslmode=disable go test -v -race ./...
+DATABASE_URL=postgres://hyperindex:hyperindex@localhost:5432/hyperindex_test?sslmode=disable go test -v -race ./...
 ```
 
 ### If you changed integration behavior
@@ -222,7 +222,7 @@ Small, focused PRs are much easier to review than large mixed changes.
 
 A few frequent sources of confusion:
 
-- Hyperindex is the product name, but `hypergoat` still appears in code paths and binaries
+- Use the current `hyperindex` paths and binary names when following local workflows
 - Docker and PostgreSQL are useful, but not required for every contribution
 - the tracked git hooks require **Bash 4+**
 - DB-related changes should usually be tested against both SQLite and PostgreSQL

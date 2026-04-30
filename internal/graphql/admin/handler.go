@@ -9,7 +9,7 @@ import (
 
 	"github.com/graphql-go/graphql"
 
-	"github.com/GainForest/hypergoat/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
 // Handler handles admin GraphQL requests with authentication.

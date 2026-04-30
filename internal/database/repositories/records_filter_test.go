@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/database/sqlite"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/database/sqlite"
 )
 
 // newTestRepo creates a RecordsRepository backed by an in-memory SQLite executor for unit tests.

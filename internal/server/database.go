@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/GainForest/hypergoat/internal/config"
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/database/postgres"
-	"github.com/GainForest/hypergoat/internal/database/sqlite"
+	"github.com/GainForest/hyperindex/internal/config"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/database/postgres"
+	"github.com/GainForest/hyperindex/internal/database/sqlite"
 )
 
 // ConnectDatabase creates a database executor based on the database URL.

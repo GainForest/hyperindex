@@ -5,7 +5,7 @@ import (
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
 
-	"github.com/GainForest/hypergoat/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
 // JSONScalar is a package-level JSON scalar for use across the schema.
