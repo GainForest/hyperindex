@@ -63,6 +63,8 @@ The expectations file is read, decoded, and validated before requests are sent. 
 
 Because this suite uses only the public GraphQL API, it cannot strictly prove that helper and non-record lexicons are loaded. Strict lexicon identity would require a future admin-authenticated smoke mode.
 
+Public typed GraphQL collection and `ByUri` fields are generated from the lexicons available when the backend starts. After changing which lexicons the backend loads, or after updating smoke expectations for newly loaded lexicons, restart or redeploy the API before expecting schema checks for those typed fields to pass.
+
 These helper and non-record lexicons are excluded from typed field assertions because the public GraphQL schema should not expose typed collection or `ByUri` query fields for them:
 
 - `app.certified.defs`
