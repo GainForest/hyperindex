@@ -11,9 +11,9 @@ HYPERINDEX_SMOKE_URL=https://api.example.com \
   go test -tags=api_smoke ./tests/api-smoke -count=1
 ```
 
-Default smoke output prints friendly operator progress lines and intentionally suppresses Go verbose test and subtest names such as `=== RUN` and `TestName/subtest`.
+Direct `go test` runs use standard Go test output. Successful test stdout is only shown when you pass `-v`.
 
-Or use the Make target, with the URL supplied by your environment. The Make target uses the same friendly output by default and does not pass `-v` to `go test`.
+Use the Make target for operator-friendly smoke output, with the URL supplied by your environment. The target runs verbose tests internally so friendly progress lines are available, then filters Go harness noise such as `=== RUN`, `--- PASS`, package `PASS`, and final `ok` lines.
 
 ```bash
 HYPERINDEX_SMOKE_URL=https://api.example.com make smoke-api
