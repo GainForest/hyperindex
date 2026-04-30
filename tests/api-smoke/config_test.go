@@ -1,5 +1,3 @@
-//go:build api_smoke || !api_smoke
-
 package apismoke
 
 import (
