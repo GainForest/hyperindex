@@ -1,5 +1,0 @@
-kind: added
-body: Add frontend Railway deployment configuration so the client service uses its root page as the health check with a longer startup timeout.
-time: 2026-04-30T00:00:00Z
-custom:
-    Affects: operator
