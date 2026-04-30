@@ -1,4 +1,4 @@
 kind: fixed
-body: Fix Tap identity ingestion so active identities are not purged when the upstream is_active field is missing or previously misparsed.
+body: Prevent active accounts from being purged during Tap identity processing so indexed records are not removed after harmless identity updates.
 custom:
   Affects: operator
