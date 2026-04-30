@@ -19,9 +19,9 @@ COPY . .
 # Build the binary
 ARG VERSION
 RUN set -eu; \
-    build_version="$VERSION"; \
+    build_version="${VERSION:-}"; \
     if [ -z "$build_version" ]; then \
-        release_file="$(git ls-files '.changes/v*.md' 2>/dev/null | sort -V | tail -n 1 || true)"; \
+        release_file="$(ls .changes/v*.md 2>/dev/null | sort -V | tail -n 1 || true)"; \
         if [ -n "$release_file" ]; then \
             release_name="${release_file##*/}"; \
             build_version="${release_name%.md}"; \
