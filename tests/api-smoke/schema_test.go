@@ -114,7 +114,8 @@ func TestSchemaExposesExpectedTypedCollections(t *testing.T) {
 		nsid := nsid
 		queryFieldName := queryFieldName
 		t.Run(nsid, func(t *testing.T) {
-			collectionField := requireSchemaField(t, queryFields, queryFieldName)
+			t.Logf("schema typed field check nsid=%q expectedField=%q", nsid, queryFieldName)
+			collectionField := requireSchemaFieldForNSID(t, queryFields, queryFieldName, nsid)
 			requireSchemaArgument(t, collectionField, "first")
 
 			connectionTypeName := namedTypeName(collectionField.Type)
@@ -122,7 +123,7 @@ func TestSchemaExposesExpectedTypedCollections(t *testing.T) {
 			requireSchemaField(t, fieldsByName(connectionType.Fields), "edges")
 			requireSchemaField(t, fieldsByName(connectionType.Fields), "pageInfo")
 
-			byURIField := requireSchemaField(t, queryFields, queryFieldName+"ByUri")
+			byURIField := requireSchemaFieldForNSID(t, queryFields, queryFieldName+"ByUri", nsid)
 			requireSchemaArgument(t, byURIField, "uri")
 		})
 	}
@@ -200,6 +201,16 @@ func requireSchemaField(t testing.TB, fields map[string]schemaField, name string
 	field, ok := fields[name]
 	if !ok {
 		t.Fatalf("schema is missing field %q", name)
+	}
+	return field
+}
+
+func requireSchemaFieldForNSID(t testing.TB, fields map[string]schemaField, name string, nsid string) schemaField {
+	t.Helper()
+
+	field, ok := fields[name]
+	if !ok {
+		t.Fatalf("schema is missing field %q for NSID %q", name, nsid)
 	}
 	return field
 }

@@ -11,7 +11,9 @@ HYPERINDEX_SMOKE_URL=https://api.example.com \
   go test -tags=api_smoke ./tests/api-smoke -count=1
 ```
 
-Or use the Make target, with the URL supplied by your environment:
+Pass `-v` to direct `go test` runs to see step-by-step smoke check logs.
+
+Or use the Make target, with the URL supplied by your environment. The Make target enables verbose output by default.
 
 ```bash
 HYPERINDEX_SMOKE_URL=https://api.example.com make smoke-api

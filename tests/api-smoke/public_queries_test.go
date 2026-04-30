@@ -5,12 +5,15 @@ package apismoke
 import (
 	"context"
 	"encoding/json"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 func TestCollectionStatsSmoke(t *testing.T) {
 	config := loadSmokeConfig(t)
+	t.Logf("collectionStats check expectedMinimums=%s", formatExpectedCollectionMinimums(config.expectations.DataBearingCollections))
 	response := postGraphQL(t, context.Background(), config, "SmokeCollectionStats", `
 		query SmokeCollectionStats {
 			collectionStats {
@@ -47,7 +50,7 @@ func TestCollectionStatsSmoke(t *testing.T) {
 	for _, expected := range config.expectations.DataBearingCollections {
 		count, ok := countsByCollection[expected.NSID]
 		if !ok {
-			t.Fatalf("SmokeCollectionStats: collectionStats is missing data-bearing collection %q", expected.NSID)
+			t.Fatalf("SmokeCollectionStats: collectionStats is missing data-bearing collection %q; available collections: %s", expected.NSID, formatAvailableCollections(countsByCollection))
 		}
 		if count < expected.MinimumRecords {
 			t.Fatalf("SmokeCollectionStats: collectionStats[%q].count = %d, want >= %d", expected.NSID, count, expected.MinimumRecords)
@@ -57,6 +60,7 @@ func TestCollectionStatsSmoke(t *testing.T) {
 
 func TestSearchSmoke(t *testing.T) {
 	config := loadSmokeConfig(t)
+	t.Logf("search check query=%q first=%d", config.expectations.Search.Query, config.expectations.Search.First)
 	response := postGraphQL(t, context.Background(), config, "SmokeSearch", `
 		query SmokeSearch($query: String!, $first: Int!) {
 			search(query: $query, first: $first) {
@@ -100,4 +104,22 @@ func TestSearchSmoke(t *testing.T) {
 			t.Fatalf("SmokeSearch: search.edges[%d].node.collection is empty", index)
 		}
 	}
+}
+
+func formatExpectedCollectionMinimums(collections []dataBearingExpectation) string {
+	parts := make([]string, 0, len(collections))
+	for _, collection := range collections {
+		parts = append(parts, collection.NSID+":"+strconv.Itoa(collection.MinimumRecords))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+func formatAvailableCollections(countsByCollection map[string]int) string {
+	collections := make([]string, 0, len(countsByCollection))
+	for collection := range countsByCollection {
+		collections = append(collections, collection)
+	}
+	sort.Strings(collections)
+	return strings.Join(collections, ",")
 }

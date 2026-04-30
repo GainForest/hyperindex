@@ -31,24 +31,25 @@ func TestPaginationSmoke(t *testing.T) {
 	for _, collection := range config.expectations.PaginationCollections {
 		collection := collection
 		t.Run(collection.NSID, func(t *testing.T) {
+			t.Logf("pagination check collection=%q pageSize=%d", collection.NSID, collection.PageSize)
 			if collection.PageSize != expectedPaginationPageSize {
 				t.Fatalf("pagination collection %q pageSize = %d, want %d", collection.NSID, collection.PageSize, expectedPaginationPageSize)
 			}
 
 			firstPage := queryPaginationPage(t, ctx, config, collection.NSID, collection.PageSize, "")
-			pageOneURIs := assertPaginationPage(t, collection.NSID, "first page", firstPage, collection.PageSize)
+			pageOneURIs := assertPaginationPage(t, collection.NSID, "first page", firstPage, collection.PageSize, "")
 			if !firstPage.PageInfo.HasNextPage {
-				t.Fatalf("pagination collection %q first page hasNextPage = false, want true", collection.NSID)
+				t.Fatalf("pagination collection %q first page hasNextPage = false, want true (endCursor=%q after=%q)", collection.NSID, firstPage.PageInfo.EndCursor, "")
 			}
 			if firstPage.PageInfo.EndCursor == "" {
-				t.Fatalf("pagination collection %q first page endCursor is empty", collection.NSID)
+				t.Fatalf("pagination collection %q first page endCursor is empty (after=%q)", collection.NSID, "")
 			}
 
 			secondPage := queryPaginationPage(t, ctx, config, collection.NSID, collection.PageSize, firstPage.PageInfo.EndCursor)
-			pageTwoURIs := assertPaginationPage(t, collection.NSID, "second page", secondPage, collection.PageSize)
+			pageTwoURIs := assertPaginationPage(t, collection.NSID, "second page", secondPage, collection.PageSize, firstPage.PageInfo.EndCursor)
 			for uri := range pageTwoURIs {
 				if pageOneURIs[uri] {
-					t.Fatalf("pagination collection %q returned duplicate URI %q across adjacent pages", collection.NSID, uri)
+					t.Fatalf("pagination collection %q returned duplicate URI %q across adjacent pages (firstPageEndCursor=%q secondPageAfter=%q secondPageEndCursor=%q)", collection.NSID, uri, firstPage.PageInfo.EndCursor, firstPage.PageInfo.EndCursor, secondPage.PageInfo.EndCursor)
 				}
 			}
 		})
@@ -96,26 +97,33 @@ func queryPaginationPage(t testing.TB, ctx context.Context, config smokeConfig, 
 	return data.Records
 }
 
-func assertPaginationPage(t testing.TB, collection string, pageName string, page paginationConnection, expectedEdges int) map[string]bool {
+func assertPaginationPage(t testing.TB, collection string, pageName string, page paginationConnection, expectedEdges int, after string) map[string]bool {
 	t.Helper()
 
 	if len(page.Edges) != expectedEdges {
-		t.Fatalf("pagination collection %q %s returned %d edges, want %d", collection, pageName, len(page.Edges), expectedEdges)
+		t.Fatalf("pagination collection %q %s returned %d edges, want %d (after=%q endCursor=%q sampleURI=%q)", collection, pageName, len(page.Edges), expectedEdges, after, page.PageInfo.EndCursor, samplePaginationURI(page))
 	}
 
 	seenURIs := make(map[string]bool, len(page.Edges))
 	for edgeIndex, edge := range page.Edges {
 		if edge.Cursor == "" {
-			t.Fatalf("pagination collection %q %s edge %d cursor is empty", collection, pageName, edgeIndex)
+			t.Fatalf("pagination collection %q %s edge %d cursor is empty (after=%q endCursor=%q uri=%q)", collection, pageName, edgeIndex, after, page.PageInfo.EndCursor, edge.Node.URI)
 		}
 		assertPaginationNode(t, collection, pageName, edgeIndex, edge.Node)
 		if seenURIs[edge.Node.URI] {
-			t.Fatalf("pagination collection %q %s returned duplicate URI %q", collection, pageName, edge.Node.URI)
+			t.Fatalf("pagination collection %q %s returned duplicate URI %q (after=%q endCursor=%q)", collection, pageName, edge.Node.URI, after, page.PageInfo.EndCursor)
 		}
 		seenURIs[edge.Node.URI] = true
 	}
 
 	return seenURIs
+}
+
+func samplePaginationURI(page paginationConnection) string {
+	if len(page.Edges) == 0 {
+		return ""
+	}
+	return page.Edges[0].Node.URI
 }
 
 func assertPaginationNode(t testing.TB, collection string, pageName string, edgeIndex int, node Record) {

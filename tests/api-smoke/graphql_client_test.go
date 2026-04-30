@@ -74,6 +74,7 @@ func postGraphQLWithOptions(t testing.TB, ctx context.Context, config smokeConfi
 	if err != nil {
 		t.Fatalf("GraphQL %s: encode variables %s: %v", operationName, mustMarshalVariables(variables), err)
 	}
+	t.Logf("GraphQL %s: request variables=%s", operationName, mustMarshalVariables(variables))
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, config.baseURL+"/graphql", bytes.NewReader(payload))
 	if err != nil {
@@ -104,6 +105,7 @@ func postGraphQLWithOptions(t testing.TB, ctx context.Context, config smokeConfi
 	if len(decoded.Errors) > 0 && !options.AllowGraphQLErrors {
 		t.Fatalf("GraphQL %s: GraphQL errors with variables %s: %s; response %q", operationName, mustMarshalVariables(variables), formatGraphQLErrors(decoded.Errors), responseSnippet(body))
 	}
+	t.Logf("GraphQL %s: response HTTP %d errors=%d dataBytes=%d", operationName, response.StatusCode, len(decoded.Errors), len(decoded.Data))
 
 	return decoded
 }

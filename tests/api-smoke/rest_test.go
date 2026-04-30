@@ -50,7 +50,9 @@ func TestStatsEndpoint(t *testing.T) {
 func getRESTObject(t testing.TB, ctx context.Context, config smokeConfig, path string) map[string]any {
 	t.Helper()
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, config.baseURL+path, nil)
+	url := config.baseURL + path
+	t.Logf("REST %s %s url=%s", http.MethodGet, path, url)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatalf("REST %s: build request: %v", path, err)
 	}
@@ -79,6 +81,7 @@ func getRESTObject(t testing.TB, ctx context.Context, config smokeConfig, path s
 	if decoded == nil {
 		t.Fatalf("REST %s: decode HTTP %d response: expected JSON object; response %q", path, response.StatusCode, responseSnippet(body))
 	}
+	t.Logf("REST %s: response HTTP %d bodyBytes=%d", path, response.StatusCode, len(body))
 
 	return decoded
 }

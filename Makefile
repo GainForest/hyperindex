@@ -57,7 +57,7 @@ test-coverage:
 # Run public post-deploy API smoke tests
 smoke-api:
 	@test -n "$${HYPERINDEX_SMOKE_URL}" || (printf 'HYPERINDEX_SMOKE_URL is required (for example, HYPERINDEX_SMOKE_URL=https://api.example.com make smoke-api)\n' >&2; exit 1)
-	@go test -tags=api_smoke ./tests/api-smoke -count=1
+	@go test -v -tags=api_smoke ./tests/api-smoke -count=1
 
 # Run linter (requires golangci-lint)
 lint:

@@ -51,10 +51,11 @@ func TestRequiredCollectionsAreQueryable(t *testing.T) {
 	for collection := range config.expectations.TypedQueryFields {
 		collection := collection
 		t.Run(collection, func(t *testing.T) {
+			t.Logf("generic records check collection=%q first=%d", collection, 1)
 			response := fetchGenericRecords(t, config, collection, 1)
 
-			for _, edge := range response.Records.Edges {
-				assertGenericRecordShape(t, collection, edge.Node)
+			for edgeIndex, edge := range response.Records.Edges {
+				assertGenericRecordShape(t, collection, edgeIndex, edge.Node)
 			}
 		})
 	}
@@ -66,13 +67,14 @@ func TestDataBearingCollectionRecordShape(t *testing.T) {
 	for _, collection := range config.expectations.DataBearingCollections {
 		collection := collection
 		t.Run(collection.NSID, func(t *testing.T) {
+			t.Logf("data-bearing record shape check collection=%q first=%d", collection.NSID, 10)
 			response := fetchGenericRecords(t, config, collection.NSID, 10)
 			if len(response.Records.Edges) != 10 {
 				t.Fatalf("records(%q, first: 10) returned %d edges, want exactly 10", collection.NSID, len(response.Records.Edges))
 			}
 
-			for _, edge := range response.Records.Edges {
-				assertGenericRecordShape(t, collection.NSID, edge.Node)
+			for edgeIndex, edge := range response.Records.Edges {
+				assertGenericRecordShape(t, collection.NSID, edgeIndex, edge.Node)
 			}
 		})
 	}
@@ -84,15 +86,16 @@ func TestTypedByURIRoundTrip(t *testing.T) {
 	for _, collection := range config.expectations.DataBearingCollections {
 		collection := collection
 		t.Run(collection.NSID, func(t *testing.T) {
+			typedField := config.expectations.TypedQueryFields[collection.NSID]
+			t.Logf("typed ByUri roundtrip check collection=%q typedField=%q", collection.NSID, typedField)
 			genericResponse := fetchGenericRecords(t, config, collection.NSID, 1)
 			if len(genericResponse.Records.Edges) != 1 {
 				t.Fatalf("records(%q, first: 1) returned %d edges, want exactly 1", collection.NSID, len(genericResponse.Records.Edges))
 			}
 
 			genericRecord := genericResponse.Records.Edges[0].Node
-			assertGenericRecordShape(t, collection.NSID, genericRecord)
+			assertGenericRecordShape(t, collection.NSID, 0, genericRecord)
 
-			typedField := config.expectations.TypedQueryFields[collection.NSID]
 			typedRecord := fetchTypedRecordByURI(t, config, typedField, genericRecord.URI)
 			if typedRecord == nil {
 				t.Fatalf("%sByUri(%q) returned null", typedField, genericRecord.URI)
@@ -145,37 +148,38 @@ query SmokeByUri($uri: String!) {
 	return decoded[typedByURIField]
 }
 
-func assertGenericRecordShape(t testing.TB, collection string, record Record) {
+func assertGenericRecordShape(t testing.TB, collection string, edgeIndex int, record Record) {
 	t.Helper()
+	location := fmt.Sprintf("collection %q edge %d uri=%q did=%q", collection, edgeIndex, record.URI, record.DID)
 
 	if !strings.HasPrefix(record.URI, "at://") {
-		t.Fatalf("record uri = %q, want at:// prefix", record.URI)
+		t.Fatalf("record shape %s: uri want at:// prefix", location)
 	}
 	if !strings.HasPrefix(record.DID, "did:") {
-		t.Fatalf("record did = %q, want did: prefix", record.DID)
+		t.Fatalf("record shape %s: did want did: prefix", location)
 	}
 	if record.Collection != collection {
-		t.Fatalf("record collection = %q, want %q", record.Collection, collection)
+		t.Fatalf("record shape %s: collection = %q, want %q", location, record.Collection, collection)
 	}
 	if !strings.Contains(record.URI, "/"+collection+"/") {
-		t.Fatalf("record uri = %q, want to contain collection segment %q", record.URI, "/"+collection+"/")
+		t.Fatalf("record shape %s: uri want to contain collection segment %q", location, "/"+collection+"/")
 	}
 	if record.CID == "" {
-		t.Fatal("record cid is empty")
+		t.Fatalf("record shape %s: cid is empty", location)
 	}
 	if record.RKey == "" {
-		t.Fatal("record rkey is empty")
+		t.Fatalf("record shape %s: rkey is empty", location)
 	}
 	if record.Value == nil {
-		t.Fatal("record value is null, want JSON object")
+		t.Fatalf("record shape %s: value is null, want JSON object", location)
 	}
 	if rawType, ok := record.Value["$type"]; ok {
 		typeName, ok := rawType.(string)
 		if !ok {
-			t.Fatalf("record value $type = %T(%v), want string %q", rawType, rawType, collection)
+			t.Fatalf("record shape %s: value $type = %T(%v), want string %q", location, rawType, rawType, collection)
 		}
 		if typeName != collection {
-			t.Fatalf("record value $type = %q, want %q", typeName, collection)
+			t.Fatalf("record shape %s: value $type = %q, want %q", location, typeName, collection)
 		}
 	}
 }
