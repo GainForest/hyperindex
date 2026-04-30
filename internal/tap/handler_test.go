@@ -559,10 +559,11 @@ func TestIndexHandler_HandleIdentity_PurgePolicy(t *testing.T) {
 			}
 
 			event := &tap.IdentityEvent{
-				DID:      did,
-				Handle:   "new-handle.bsky.social",
-				IsActive: tt.isActive,
-				Status:   tt.status,
+				DID:             did,
+				Handle:          "new-handle.bsky.social",
+				IsActive:        tt.isActive,
+				IsActivePresent: true,
+				Status:          tt.status,
 			}
 
 			if err := handler.HandleIdentity(ctx, event); err != nil {
