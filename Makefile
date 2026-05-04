@@ -1,4 +1,4 @@
-.PHONY: help build run test test-coverage lint fmt clean dev db-migrate db-rollback db-status db-create-migration docker docker-run tools generate hooks-install changie-new
+.PHONY: help build run test test-coverage smoke-api lint fmt clean dev db-migrate db-rollback db-status db-create-migration docker docker-run tools generate hooks-install changie-new
 
 GO_TOOLCHAIN := GOTOOLCHAIN=go1.26.0
 VERSION ?= 0.1.0-dev
@@ -13,6 +13,7 @@ help:
 	@echo "  make dev          - Run with hot reload (requires air)"
 	@echo "  make build        - Build the binary"
 	@echo "  make test         - Run all tests"
+	@echo "  make smoke-api    - Run public API smoke tests"
 	@echo "  make lint         - Run linter"
 	@echo "  make tools        - Install development tools (including Changie)"
 	@echo "  make changie-new  - Create a new changelog fragment"
@@ -54,6 +55,11 @@ test-coverage:
 	@go test -v -race -coverprofile=coverage.out ./...
 	@go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
+
+# Run public post-deploy API smoke tests
+smoke-api:
+	@test -n "$${HYPERINDEX_SMOKE_URL}" || (printf 'HYPERINDEX_SMOKE_URL is required (for example, HYPERINDEX_SMOKE_URL=https://api.example.com make smoke-api)\n' >&2; exit 1)
+	@bash -c 'printf "Running Hyperindex API smoke checks against %s...\n" "$${HYPERINDEX_SMOKE_URL}"; go test -v -tags=api_smoke ./tests/api-smoke -count=1 2>&1 | awk '\''!($$0 ~ /^=== (RUN|PAUSE|CONT)[[:space:]]/ || $$0 ~ /^[[:space:]]*--- PASS:/ || $$0 == "PASS" || $$0 ~ /^ok[[:space:]]+github\.com\/GainForest\/hyperindex\/tests\/api-smoke([[:space:]]|$$)/) { print; fflush() }'\''; status="$${PIPESTATUS[0]}"; if [ "$${status}" -eq 0 ]; then printf "✓ API smoke checks passed\n"; fi; exit "$${status}"'
 
 # Run linter (requires golangci-lint)
 lint:
