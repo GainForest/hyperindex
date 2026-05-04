@@ -142,7 +142,7 @@ func (e expectations) validate() error {
 		}
 	}
 
-	dataBearingNSIDs := make(map[string]bool, len(e.DataBearingCollections))
+	dataBearingMinimumRecords := make(map[string]int, len(e.DataBearingCollections))
 	for _, collection := range e.DataBearingCollections {
 		if collection.NSID == "" {
 			return fmt.Errorf("dataBearingCollections must not contain an empty NSID")
@@ -159,7 +159,7 @@ func (e expectations) validate() error {
 		if nonRecordNSIDs[collection.NSID] {
 			return fmt.Errorf("data-bearing collection %q cannot be listed in nonRecordNSIDs", collection.NSID)
 		}
-		dataBearingNSIDs[collection.NSID] = true
+		dataBearingMinimumRecords[collection.NSID] = collection.MinimumRecords
 	}
 
 	for _, collection := range e.PaginationCollections {
@@ -169,8 +169,13 @@ func (e expectations) validate() error {
 		if collection.PageSize < 1 {
 			return fmt.Errorf("pagination collection %q must use a positive pageSize", collection.NSID)
 		}
-		if !dataBearingNSIDs[collection.NSID] {
+		minimumRecords, ok := dataBearingMinimumRecords[collection.NSID]
+		if !ok {
 			return fmt.Errorf("pagination collection %q must also be listed in dataBearingCollections", collection.NSID)
+		}
+		requiredMinimumRecords := 2 * collection.PageSize
+		if minimumRecords < requiredMinimumRecords {
+			return fmt.Errorf("pagination collection %q requires data-bearing minimumRecords >= %d for two full pages, got %d", collection.NSID, requiredMinimumRecords, minimumRecords)
 		}
 	}
 
@@ -231,6 +236,39 @@ func TestExpectationsValidationRejectsDataBearingCollectionMissingRequiredNSID(t
 	err = loaded.validate()
 	if err == nil || !strings.Contains(err.Error(), "missing from requiredNSIDs") {
 		t.Fatalf("validate() error = %v, want missing requiredNSIDs error", err)
+	}
+}
+
+func TestExpectationsValidationRejectsPaginationCollectionWithoutTwoFullPages(t *testing.T) {
+	loaded, err := loadExpectations(defaultExpectationsPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const nsid = "org.hypercerts.claim.activity"
+	var pageSize int
+	for _, collection := range loaded.PaginationCollections {
+		if collection.NSID == nsid {
+			pageSize = collection.PageSize
+			break
+		}
+	}
+	if pageSize == 0 {
+		t.Fatalf("test fixture pagination collection %q not found", nsid)
+	}
+
+	actualMinimum := 2*pageSize - 1
+	for i := range loaded.DataBearingCollections {
+		if loaded.DataBearingCollections[i].NSID == nsid {
+			loaded.DataBearingCollections[i].MinimumRecords = actualMinimum
+			break
+		}
+	}
+
+	err = loaded.validate()
+	requiredMinimum := 2 * pageSize
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("pagination collection %q requires data-bearing minimumRecords >= %d", nsid, requiredMinimum)) || !strings.Contains(err.Error(), fmt.Sprintf("got %d", actualMinimum)) {
+		t.Fatalf("validate() error = %v, want pagination minimumRecords error naming collection %q, required %d, actual %d", err, nsid, requiredMinimum, actualMinimum)
 	}
 }
 

@@ -8,8 +8,6 @@ import (
 	"testing"
 )
 
-const expectedPaginationPageSize = 10
-
 type paginationRecordsData struct {
 	Records paginationConnection `json:"records"`
 }
@@ -31,10 +29,6 @@ func TestPaginationSmoke(t *testing.T) {
 	for _, collection := range config.expectations.PaginationCollections {
 		collection := collection
 		t.Run(collection.NSID, func(t *testing.T) {
-			if collection.PageSize != expectedPaginationPageSize {
-				t.Fatalf("pagination collection %q page size check failed: pageSize = %d, want %d", collection.NSID, collection.PageSize, expectedPaginationPageSize)
-			}
-
 			firstPage := queryPaginationPage(t, ctx, config, collection.NSID, collection.PageSize, "")
 			pageOneURIs := assertPaginationPage(t, collection.NSID, "first page", firstPage, collection.PageSize, "")
 			if !firstPage.PageInfo.HasNextPage {
