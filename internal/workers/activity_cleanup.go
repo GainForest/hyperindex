@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
 )
 
 // ActivityCleanupWorker periodically cleans up old activity entries.

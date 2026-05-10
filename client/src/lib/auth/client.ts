@@ -2,6 +2,7 @@ import { NodeOAuthClient } from "@atproto/oauth-client-node";
 import { JoseKey } from "@atproto/jwk-jose";
 import { env } from "../env";
 import { getRawSession } from "../session";
+import { serverEnv } from "../server-env";
 
 const oauthClientKey = "globalOAuthClient";
 
@@ -95,7 +96,7 @@ async function getKeyset() {
     return cachedKeyset;
   }
 
-  const jwkPrivate = env.ATPROTO_JWK_PRIVATE;
+  const jwkPrivate = serverEnv.ATPROTO_JWK_PRIVATE;
   if (!jwkPrivate) {
     return null; // Public client mode
   }
@@ -141,7 +142,7 @@ export const createClient = async () => {
 
   // Build client metadata based on client type
   const clientMetadata: Record<string, unknown> = {
-    client_name: "Hypergoat Admin",
+    client_name: "Hyperindex Admin",
     client_uri: url,
     dpop_bound_access_tokens: true,
     grant_types: ["authorization_code", "refresh_token"],

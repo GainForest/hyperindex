@@ -1,6 +1,6 @@
-// Package main is the entry point for the Hypergoat server.
+// Package main is the entry point for the Hyperindex server.
 //
-// Hypergoat is a Go implementation of Quickslice - an AT Protocol AppView server
+// Hyperindex is a Go implementation of Quickslice - an AT Protocol AppView server
 // that indexes Lexicon-defined records and exposes them via a dynamically-generated
 // GraphQL API.
 //
@@ -24,22 +24,22 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/GainForest/hypergoat/internal/atproto"
-	"github.com/GainForest/hypergoat/internal/backfill"
-	"github.com/GainForest/hypergoat/internal/config"
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/database/migrations"
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	hgraphql "github.com/GainForest/hypergoat/internal/graphql"
-	"github.com/GainForest/hypergoat/internal/graphql/admin"
-	"github.com/GainForest/hypergoat/internal/graphql/resolver"
-	"github.com/GainForest/hypergoat/internal/graphql/subscription"
-	"github.com/GainForest/hypergoat/internal/jetstream"
-	"github.com/GainForest/hypergoat/internal/lexicon"
-	"github.com/GainForest/hypergoat/internal/oauth"
-	"github.com/GainForest/hypergoat/internal/server"
-	"github.com/GainForest/hypergoat/internal/tap"
-	"github.com/GainForest/hypergoat/internal/workers"
+	"github.com/GainForest/hyperindex/internal/atproto"
+	"github.com/GainForest/hyperindex/internal/backfill"
+	"github.com/GainForest/hyperindex/internal/config"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/database/migrations"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	hgraphql "github.com/GainForest/hyperindex/internal/graphql"
+	"github.com/GainForest/hyperindex/internal/graphql/admin"
+	"github.com/GainForest/hyperindex/internal/graphql/resolver"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/jetstream"
+	"github.com/GainForest/hyperindex/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/server"
+	"github.com/GainForest/hyperindex/internal/tap"
+	"github.com/GainForest/hyperindex/internal/workers"
 )
 
 func main() {
@@ -200,17 +200,6 @@ func initServices(cfg *config.Config) (*services, error) {
 		slog.Warn("Failed to initialize config defaults", "error", err)
 	}
 
-	if adminDIDs := cfg.AdminDIDs; adminDIDs != "" {
-		existingAdmins := svc.config.GetAdminDIDs(ctx)
-		if len(existingAdmins) == 0 {
-			if err := svc.config.Set(ctx, "admin_dids", adminDIDs); err != nil {
-				slog.Warn("Failed to set admin_dids from environment", "error", err)
-			} else {
-				slog.Info("Initialized admin DIDs from environment", "dids", adminDIDs)
-			}
-		}
-	}
-
 	// Auto-populate activity from existing records if activity table is empty
 	go populateActivityIfEmpty(ctx, svc)
 
@@ -268,9 +257,10 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 			allowedOrigins = append(allowedOrigins, strings.TrimSpace(o))
 		}
 	}
+	allowAdminAPIKeyAuth := cfg.AdminAPIKey != ""
 	r.Use(server.CORSMiddleware(server.CORSConfig{
-		AllowedOrigins:    allowedOrigins,
-		TrustProxyHeaders: cfg.TrustProxyHeaders,
+		AllowedOrigins:       allowedOrigins,
+		AllowAdminAPIKeyAuth: allowAdminAPIKeyAuth,
 	}))
 
 	// Health check — reflects hyperindex's own health only.
@@ -474,7 +464,7 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 		domainDID = "did:web:" + cfg.Host
 	}
 
-	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, svc.config, domainDID, cfg.TrustProxyHeaders)
+	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, domainDID, cfg.AdminAPIKey, admin.ParseAdminDIDs(cfg.AdminDIDs))
 	if err != nil {
 		slog.Error("Failed to create admin GraphQL handler", "error", err)
 		return nil

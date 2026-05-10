@@ -1,12 +1,14 @@
 package types //nolint:revive // package name is descriptive within graphql context
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/gqlerrors"
 
-	"github.com/GainForest/hypergoat/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
 // ---------- Mapper tests ----------
@@ -81,6 +83,97 @@ func TestMapper_ObjectTypeCache(t *testing.T) {
 	if _, exists := all["test.ref"]; !exists {
 		t.Error("AllObjectTypes missing 'test.ref'")
 	}
+}
+
+func TestMapper_BlobRefResolver(t *testing.T) {
+	tests := []struct {
+		name    string
+		ref     any
+		wantRef string
+	}{
+		{
+			name:    "link object",
+			ref:     map[string]any{"$link": "bafkreihyperindexcid"},
+			wantRef: "bafkreihyperindexcid",
+		},
+		{
+			name:    "string",
+			ref:     "bafkreialreadystring",
+			wantRef: "bafkreialreadystring",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotData, gotErrors := executeBlobRefQuery(t, tt.ref)
+			if len(gotErrors) > 0 {
+				t.Fatalf("Blob.ref query returned errors: %v", gotErrors)
+			}
+
+			blob, ok := gotData["blob"].(map[string]any)
+			if !ok {
+				t.Fatalf("blob result = %T, want map[string]any", gotData["blob"])
+			}
+
+			if gotRef := blob["ref"]; gotRef != tt.wantRef {
+				t.Fatalf("Blob.ref = %v, want %q", gotRef, tt.wantRef)
+			}
+		})
+	}
+}
+
+func TestMapper_BlobRefResolverMalformedRefDoesNotStringifyMap(t *testing.T) {
+	gotData, gotErrors := executeBlobRefQuery(t, map[string]any{"$link": 123})
+	if len(gotErrors) == 0 {
+		blob, ok := gotData["blob"].(map[string]any)
+		if ok {
+			if gotRef, ok := blob["ref"].(string); ok && strings.Contains(gotRef, "map[$link:") {
+				t.Fatalf("malformed Blob.ref returned stringified map: %q", gotRef)
+			}
+		}
+
+		return
+	}
+
+	for _, err := range gotErrors {
+		if strings.Contains(err.Message, "map[$link:") {
+			t.Fatalf("malformed Blob.ref error stringified map: %q", err.Message)
+		}
+	}
+}
+
+func executeBlobRefQuery(t *testing.T, ref any) (map[string]any, []gqlerrors.FormattedError) {
+	t.Helper()
+
+	mapper := NewMapper()
+	schema, err := graphql.NewSchema(graphql.SchemaConfig{
+		Query: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Query",
+			Fields: graphql.Fields{
+				"blob": &graphql.Field{
+					Type: mapper.BlobType,
+					Resolve: func(_ graphql.ResolveParams) (interface{}, error) {
+						return map[string]any{
+							"ref":      ref,
+							"mimeType": "image/png",
+							"size":     123,
+						}, nil
+					},
+				},
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("failed to build test schema: %v", err)
+	}
+
+	result := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: "{ blob { ref } }",
+	})
+
+	data, _ := result.Data.(map[string]any)
+	return data, result.Errors
 }
 
 func TestMapper_UnionTypeCache(t *testing.T) {
@@ -310,6 +403,174 @@ func TestObjectBuilder_BuildRecordType_SkipsReservedFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestObjectBuilder_GeneratedCIDLinkFieldResolver(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{
+			name:  "link object",
+			value: map[string]any{"$link": "bafkreigeneratedlink"},
+			want:  "bafkreigeneratedlink",
+		},
+		{
+			name:  "string",
+			value: "bafkreialreadygeneratedstring",
+			want:  "bafkreialreadygeneratedstring",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotData, gotErrors := executeGeneratedCIDLinkQuery(t, tt.value)
+			if len(gotErrors) > 0 {
+				t.Fatalf("generated cid-link query returned errors: %v", gotErrors)
+			}
+
+			record, ok := gotData["record"].(map[string]any)
+			if !ok {
+				t.Fatalf("record result = %T, want map[string]any", gotData["record"])
+			}
+
+			if gotRef := record["root"]; gotRef != tt.want {
+				t.Fatalf("record.root = %v, want %q", gotRef, tt.want)
+			}
+			if gotRef, ok := record["root"].(string); ok && strings.Contains(gotRef, "map[$link:") {
+				t.Fatalf("generated cid-link returned stringified map: %q", gotRef)
+			}
+		})
+	}
+}
+
+func TestObjectBuilder_GeneratedCIDLinkArrayFieldResolver(t *testing.T) {
+	gotData, gotErrors := executeGeneratedCIDLinkArrayQuery(t, []any{
+		"bafkreifirstcid",
+		map[string]any{"$link": "bafkreisecondcid"},
+	})
+	if len(gotErrors) > 0 {
+		t.Fatalf("generated cid-link array query returned errors: %v", gotErrors)
+	}
+
+	record, ok := gotData["record"].(map[string]any)
+	if !ok {
+		t.Fatalf("record result = %T, want map[string]any", gotData["record"])
+	}
+
+	gotRefs, ok := record["refs"].([]any)
+	if !ok {
+		t.Fatalf("record.refs = %T, want []any", record["refs"])
+	}
+
+	wantRefs := []string{"bafkreifirstcid", "bafkreisecondcid"}
+	if len(gotRefs) != len(wantRefs) {
+		t.Fatalf("record.refs length = %d, want %d", len(gotRefs), len(wantRefs))
+	}
+	for i, wantRef := range wantRefs {
+		if gotRefs[i] != wantRef {
+			t.Fatalf("record.refs[%d] = %v, want %q", i, gotRefs[i], wantRef)
+		}
+		if gotRef, ok := gotRefs[i].(string); ok && strings.Contains(gotRef, "map[$link:") {
+			t.Fatalf("generated cid-link array returned stringified map: %q", gotRef)
+		}
+	}
+}
+
+func executeGeneratedCIDLinkQuery(t *testing.T, value any) (map[string]any, []gqlerrors.FormattedError) {
+	t.Helper()
+
+	recordType := generatedCIDLinkRecordType(t, lexicon.Property{
+		Type: lexicon.TypeCIDLink,
+	})
+
+	return executeGeneratedRecordQuery(t, recordType, map[string]any{
+		"uri":  "at://did:example:alice/com.example.test.record/1",
+		"cid":  "bafkreirecordcid",
+		"did":  "did:example:alice",
+		"rkey": "1",
+		"root": value,
+	}, "{ record { root } }")
+}
+
+func executeGeneratedCIDLinkArrayQuery(t *testing.T, value any) (map[string]any, []gqlerrors.FormattedError) {
+	t.Helper()
+
+	recordType := generatedCIDLinkRecordType(t, lexicon.Property{
+		Type: lexicon.TypeArray,
+		Items: &lexicon.ArrayItems{
+			Type: lexicon.TypeCIDLink,
+		},
+	})
+
+	return executeGeneratedRecordQuery(t, recordType, map[string]any{
+		"uri":  "at://did:example:alice/com.example.test.record/1",
+		"cid":  "bafkreirecordcid",
+		"did":  "did:example:alice",
+		"rkey": "1",
+		"refs": value,
+	}, "{ record { refs } }")
+}
+
+func generatedCIDLinkRecordType(t *testing.T, property lexicon.Property) *graphql.Object {
+	t.Helper()
+
+	registry := lexicon.NewRegistry()
+	mapper := NewMapper()
+	builder := NewObjectBuilder(mapper, registry)
+
+	fieldName := "root"
+	if property.Type == lexicon.TypeArray {
+		fieldName = "refs"
+	}
+
+	recordDef := &lexicon.RecordDef{
+		Type: "record",
+		Key:  "tid",
+		Properties: []lexicon.PropertyEntry{
+			{
+				Name:     fieldName,
+				Property: property,
+			},
+		},
+	}
+
+	return builder.BuildRecordType("com.example.test.cidlink", recordDef)
+}
+
+func executeGeneratedRecordQuery(
+	t *testing.T,
+	recordType *graphql.Object,
+	record map[string]any,
+	query string,
+) (map[string]any, []gqlerrors.FormattedError) {
+	t.Helper()
+
+	schema, err := graphql.NewSchema(graphql.SchemaConfig{
+		Query: graphql.NewObject(graphql.ObjectConfig{
+			Name: "Query",
+			Fields: graphql.Fields{
+				"record": &graphql.Field{
+					Type: recordType,
+					Resolve: func(_ graphql.ResolveParams) (interface{}, error) {
+						return record, nil
+					},
+				},
+			},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("failed to build test schema: %v", err)
+	}
+
+	result := graphql.Do(graphql.Params{
+		Schema:        schema,
+		RequestString: query,
+	})
+
+	data, _ := result.Data.(map[string]any)
+	return data, result.Errors
 }
 
 func TestObjectBuilder_BuildObjectType(t *testing.T) {

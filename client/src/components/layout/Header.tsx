@@ -4,8 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
-import { useAuth } from '@/lib/auth'
-import { env, isAdminDID } from '@/lib/env'
+import { useAuth, useAdminSession } from '@/lib/auth'
 import { ThemeToggle } from '@/components/ThemeToggle'
 
 const navLinks = [
@@ -18,7 +17,7 @@ const navLinks = [
 export function Header() {
   const pathname = usePathname()
   const { isAuthenticated, isLoading, session, login, logout } = useAuth()
-  const hasAdminAccess = isAuthenticated && isAdminDID(session?.did, env.ADMIN_DIDS)
+  const { isAdmin: hasAdminAccess, isLoading: isAdminLoading } = useAdminSession()
   const [showDropdown, setShowDropdown] = useState(false)
   const [showLoginModal, setShowLoginModal] = useState(false)
   const [handle, setHandle] = useState('')
@@ -173,6 +172,9 @@ export function Header() {
 
                   {/* Extra links */}
                   <div className="py-1">
+                    {isAdminLoading && isAuthenticated && (
+                      <div className="mx-4 my-2 h-4 animate-pulse rounded" style={{ backgroundColor: 'var(--accent)' }} />
+                    )}
                     {hasAdminAccess && (
                       <Link
                         href="/settings"

@@ -509,7 +509,7 @@ query {
 
 | Argument | Type | Required | Description |
 |----------|------|----------|-------------|
-| \`query\` | String! | Yes | Search text (minimum 2 characters) |
+| \`query\` | String! | Yes | Search text (minimum 3 characters) |
 | \`collection\` | String | No | Restrict search to a collection NSID |
 | \`first\` | Int | No | Page size (default 20, max 100) |
 | \`after\` | String | No | Cursor for pagination |

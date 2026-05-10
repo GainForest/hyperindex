@@ -14,9 +14,19 @@ func TestShouldPurgeIdentity(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "inactive purges regardless of status",
+			name: "active status with false is_active does not purge",
 			ev:   &IdentityEvent{DID: "did:plc:1", IsActive: false, Status: "active"},
-			want: true,
+			want: false,
+		},
+		{
+			name: "active status with missing is_active does not purge",
+			ev:   &IdentityEvent{DID: "did:plc:1", Status: "active"},
+			want: false,
+		},
+		{
+			name: "empty status with false is_active does not purge",
+			ev:   &IdentityEvent{DID: "did:plc:1", IsActive: false},
+			want: false,
 		},
 		{
 			name: "deleted purges",
@@ -49,8 +59,13 @@ func TestShouldPurgeIdentity(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "unknown active status does not purge",
+			name: "unknown status with true is_active does not purge",
 			ev:   &IdentityEvent{DID: "did:plc:1", IsActive: true, Status: "mystery"},
+			want: false,
+		},
+		{
+			name: "unknown status with false is_active does not purge",
+			ev:   &IdentityEvent{DID: "did:plc:1", IsActive: false, Status: "mystery"},
 			want: false,
 		},
 	}

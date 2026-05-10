@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 type recordsTestEnv struct {
@@ -867,6 +867,39 @@ func TestRecordsRepository_GetCountByDID(t *testing.T) {
 	}
 	if missingCount != 0 {
 		t.Fatalf("GetCountByDID(missing) = %d, want 0", missingCount)
+	}
+}
+
+func TestRecordsRepository_GetCollectionCountFiltered_AggregateOverflow(t *testing.T) {
+	repo := setupRecordsTest(t)
+	ctx := context.Background()
+
+	filters := make([]repositories.FieldFilter, 20)
+	for i := range filters {
+		values := make([]interface{}, 49)
+		for j := range values {
+			values[j] = fmt.Sprintf("value-%d-%d", i, j)
+		}
+
+		filters[i] = repositories.FieldFilter{
+			Field:     fmt.Sprintf("field%c", 'a'+i),
+			Operator:  "in",
+			Value:     values,
+			FieldType: "string",
+		}
+	}
+
+	dids := make([]string, 19)
+	for i := range dids {
+		dids[i] = fmt.Sprintf("did:%c", 'a'+i)
+	}
+
+	_, err := repo.GetCollectionCountFiltered(ctx, "col", filters, repositories.DIDFilter{IN: dids})
+	if err == nil {
+		t.Fatal("expected error for aggregate parameter overflow, got nil")
+	}
+	if !errors.Is(err, repositories.ErrSQLiteAggregateParameterLimit) {
+		t.Fatalf("error = %v, want ErrSQLiteAggregateParameterLimit", err)
 	}
 }
 

@@ -18,10 +18,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/GainForest/hypergoat/internal/atproto"
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/lexicon"
-	"github.com/GainForest/hypergoat/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/atproto"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
 // Repositories holds the database repositories needed by the admin API.
@@ -50,6 +50,7 @@ type LexiconChangeCallback func(collections []string) error
 // Resolver provides methods for resolving admin GraphQL queries and mutations.
 type Resolver struct {
 	repos                 *Repositories
+	adminDIDs             []string
 	backfillActive        atomic.Bool
 	domainDID             string // The DID of this labeler instance
 	backfillCallback      BackfillCallback
@@ -58,9 +59,10 @@ type Resolver struct {
 }
 
 // NewResolver creates a new admin resolver.
-func NewResolver(repos *Repositories, domainDID string) *Resolver {
+func NewResolver(repos *Repositories, domainDID string, adminDIDs []string) *Resolver {
 	return &Resolver{
 		repos:     repos,
+		adminDIDs: adminDIDs,
 		domainDID: domainDID,
 	}
 }
@@ -132,13 +134,7 @@ func (r *Resolver) Statistics(ctx context.Context) (map[string]interface{}, erro
 
 // CurrentSession returns the current user's session info.
 func (r *Resolver) CurrentSession(ctx context.Context, userDID, handle string, adminDIDs []string) map[string]interface{} {
-	isAdmin := false
-	for _, adminDID := range adminDIDs {
-		if adminDID == userDID {
-			isAdmin = true
-			break
-		}
-	}
+	isAdmin := isAdminDID(userDID, adminDIDs)
 
 	return map[string]interface{}{
 		"did":     userDID,
@@ -150,25 +146,15 @@ func (r *Resolver) CurrentSession(ctx context.Context, userDID, handle string, a
 // Settings returns system settings.
 func (r *Resolver) Settings(ctx context.Context) (map[string]interface{}, error) {
 	domainAuthority, _ := r.repos.Config.Get(ctx, "domain_authority")
-	adminDidsStr, _ := r.repos.Config.Get(ctx, "admin_dids")
 	relayURL, _ := r.repos.Config.Get(ctx, "relay_url")
 	plcDirectoryURL, _ := r.repos.Config.Get(ctx, "plc_directory_url")
 	jetstreamURL, _ := r.repos.Config.Get(ctx, "jetstream_url")
 	oauthScopes, _ := r.repos.Config.Get(ctx, "oauth_supported_scopes")
 
-	// Parse admin DIDs from comma-separated string
-	var adminDids []string
-	if adminDidsStr != "" {
-		adminDids = strings.Split(adminDidsStr, ",")
-		for i := range adminDids {
-			adminDids[i] = strings.TrimSpace(adminDids[i])
-		}
-	}
-
 	return map[string]interface{}{
 		"id":                   "settings",
 		"domainAuthority":      domainAuthority,
-		"adminDids":            adminDids,
+		"adminDids":            r.adminDIDs,
 		"relayUrl":             relayURL,
 		"plcDirectoryUrl":      plcDirectoryURL,
 		"jetstreamUrl":         jetstreamURL,
@@ -471,82 +457,6 @@ func (r *Resolver) DeleteOAuthClient(ctx context.Context, clientID string) (bool
 
 	if err := r.repos.OAuthClients.Delete(ctx, clientID); err != nil {
 		return false, fmt.Errorf("failed to delete OAuth client: %w", err)
-	}
-
-	return true, nil
-}
-
-// AddAdmin adds a DID to the admin list.
-func (r *Resolver) AddAdmin(ctx context.Context, did string) (bool, error) {
-	// Validate DID format
-	if !strings.HasPrefix(did, "did:") {
-		return false, fmt.Errorf("invalid DID format")
-	}
-
-	// Get current admin DIDs
-	adminDidsStr, _ := r.repos.Config.Get(ctx, "admin_dids")
-	var adminDids []string
-	if adminDidsStr != "" {
-		adminDids = strings.Split(adminDidsStr, ",")
-		for i := range adminDids {
-			adminDids[i] = strings.TrimSpace(adminDids[i])
-		}
-	}
-
-	// Check if already admin
-	for _, existingDID := range adminDids {
-		if existingDID == did {
-			return true, nil // Already an admin
-		}
-	}
-
-	// Add new admin
-	adminDids = append(adminDids, did)
-	newAdminDidsStr := strings.Join(adminDids, ",")
-
-	if err := r.repos.Config.Set(ctx, "admin_dids", newAdminDidsStr); err != nil {
-		return false, fmt.Errorf("failed to update admin_dids: %w", err)
-	}
-
-	return true, nil
-}
-
-// RemoveAdmin removes a DID from the admin list.
-func (r *Resolver) RemoveAdmin(ctx context.Context, did string) (bool, error) {
-	// Get current admin DIDs
-	adminDidsStr, _ := r.repos.Config.Get(ctx, "admin_dids")
-	if adminDidsStr == "" {
-		return false, fmt.Errorf("no admins configured")
-	}
-
-	adminDids := strings.Split(adminDidsStr, ",")
-	for i := range adminDids {
-		adminDids[i] = strings.TrimSpace(adminDids[i])
-	}
-
-	// Prevent removing the last admin
-	if len(adminDids) <= 1 {
-		return false, fmt.Errorf("cannot remove the last admin")
-	}
-
-	// Find and remove the DID
-	found := false
-	newAdminDids := make([]string, 0, len(adminDids)-1)
-	for _, existingDID := range adminDids {
-		if existingDID == did {
-			found = true
-		} else {
-			newAdminDids = append(newAdminDids, existingDID)
-		}
-	}
-
-	if !found {
-		return false, fmt.Errorf("DID is not an admin")
-	}
-
-	newAdminDidsStr := strings.Join(newAdminDids, ",")
-	if err := r.repos.Config.Set(ctx, "admin_dids", newAdminDidsStr); err != nil {
-		return false, fmt.Errorf("failed to update admin_dids: %w", err)
 	}
 
 	return true, nil
@@ -939,17 +849,10 @@ func (r *Resolver) Reports(ctx context.Context, statusFilter *string, first int,
 // =============================================================================
 
 // UpdateSettings updates system settings.
-func (r *Resolver) UpdateSettings(ctx context.Context, domainAuthority, adminDids, relayURL, plcDirectoryURL, jetstreamURL, oauthScopes *string) (map[string]interface{}, error) {
+func (r *Resolver) UpdateSettings(ctx context.Context, domainAuthority, relayURL, plcDirectoryURL, jetstreamURL, oauthScopes *string) (map[string]interface{}, error) {
 	if domainAuthority != nil {
 		if err := r.repos.Config.Set(ctx, "domain_authority", *domainAuthority); err != nil {
 			return nil, fmt.Errorf("failed to update domain_authority: %w", err)
-		}
-	}
-
-	if adminDids != nil {
-		// adminDids is passed as comma-separated string
-		if err := r.repos.Config.Set(ctx, "admin_dids", *adminDids); err != nil {
-			return nil, fmt.Errorf("failed to update admin_dids: %w", err)
 		}
 	}
 

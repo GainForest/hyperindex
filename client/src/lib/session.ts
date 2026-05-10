@@ -1,6 +1,6 @@
-import { env } from "./env";
 import { getIronSession, type SessionOptions } from "iron-session";
 import { cookies } from "next/headers";
+import { getCookieSecret } from "./server-env";
 
 /**
  * Session data stored in the encrypted cookie.
@@ -17,21 +17,23 @@ export interface Session {
 
 const isProduction = process.env.NODE_ENV === "production";
 
-const sessionOptions: SessionOptions = {
-  cookieName: "hypergoat_sid",
-  password: env.COOKIE_SECRET,
-  cookieOptions: {
-    secure: isProduction,
-    maxAge: 60 * 60 * 24 * 30, // 30 days
-  },
-};
+function getSessionOptions(): SessionOptions {
+  return {
+    cookieName: "hyperindex_sid",
+    password: getCookieSecret(),
+    cookieOptions: {
+      secure: isProduction,
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+    },
+  };
+}
 
 /**
  * Get the current user's session from their encrypted cookie.
  */
 export async function getSession(): Promise<Session> {
   const cookieStore = await cookies();
-  const session = await getIronSession<Session>(cookieStore, sessionOptions);
+  const session = await getIronSession<Session>(cookieStore, getSessionOptions());
   return session;
 }
 
@@ -40,7 +42,7 @@ export async function getSession(): Promise<Session> {
  */
 export async function getRawSession() {
   const cookieStore = await cookies();
-  return await getIronSession<Session>(cookieStore, sessionOptions);
+  return await getIronSession<Session>(cookieStore, getSessionOptions());
 }
 
 /**

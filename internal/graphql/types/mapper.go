@@ -2,10 +2,12 @@
 package types //nolint:revive // package name is descriptive within graphql context
 
 import (
+	"fmt"
+
 	"github.com/graphql-go/graphql"
 	"github.com/graphql-go/graphql/language/ast"
 
-	"github.com/GainForest/hypergoat/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
 // JSONScalar is a package-level JSON scalar for use across the schema.
@@ -76,6 +78,19 @@ func (m *Mapper) initBlobType() {
 			"ref": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.String),
 				Description: "CID reference to the blob",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					blob, ok := p.Source.(map[string]any)
+					if !ok {
+						return nil, fmt.Errorf("blob.ref expected source to be a map[string]any, got %T", p.Source)
+					}
+
+					ref, ok := extractCIDLinkString(blob["ref"])
+					if !ok {
+						return nil, fmt.Errorf("blob.ref expected ref to be a CID string or {\"$link\": string} object")
+					}
+
+					return ref, nil
+				},
 			},
 			"mimeType": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.String),
@@ -87,6 +102,31 @@ func (m *Mapper) initBlobType() {
 			},
 		},
 	})
+}
+
+// extractCIDLinkString returns the plain CID string from values encoded as either
+// an already-normalized CID string or an AT Protocol CID link object.
+func extractCIDLinkString(value any) (string, bool) {
+	switch typedValue := value.(type) {
+	case string:
+		return typedValue, true
+	case map[string]any:
+		if len(typedValue) != 1 {
+			return "", false
+		}
+
+		link, ok := typedValue["$link"].(string)
+		return link, ok
+	case map[string]string:
+		if len(typedValue) != 1 {
+			return "", false
+		}
+
+		link, ok := typedValue["$link"]
+		return link, ok
+	default:
+		return "", false
+	}
 }
 
 // MapPrimitiveType maps a lexicon primitive type to a GraphQL type.

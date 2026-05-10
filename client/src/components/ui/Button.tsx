@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { ButtonHTMLAttributes, forwardRef, ElementType, ComponentPropsWithoutRef, CSSProperties } from "react";
+import { forwardRef, ElementType, ComponentPropsWithoutRef, CSSProperties } from "react";
 
 type ButtonBaseProps = {
   variant?: "default" | "outline" | "ghost" | "destructive" | "primary";

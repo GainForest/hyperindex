@@ -1,23 +1,27 @@
 <p align="center">
-  <img src="hypergoat.png" alt="Hyperindex" width="600">
+  <img src="hyperindex.png" alt="Hyperindex" width="600">
 </p>
 
 # Hyperindex (hi)
 
 **A Go AT Protocol AppView server that indexes records and exposes them via GraphQL**
 
-*Formerly known as Hypergoat.*
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for local setup, verification, and pull request guidance.
 
 Hyperindex (hi) connects to the AT Protocol network, indexes records matching your configured Lexicons, and provides a GraphQL API for querying them. It's a Go port of [Quickslice](https://github.com/quickslice/quickslice).
+
+> **Rename note:** this project was renamed from Hypergoat to Hyperindex.
 
 ## Quick Start
 
 ```bash
 # Clone and run
-git clone https://github.com/GainForest/hypergoat.git
-cd hypergoat
+git clone git@github.com:GainForest/hyperindex.git
+cd hyperindex
 cp .env.example .env
-go run ./cmd/hypergoat
+# Replace the placeholder secrets in .env (especially SECRET_KEY_BASE and ADMIN_API_KEY)
+# before using the server in production or against real data.
+go run ./cmd/hyperindex
 ```
 
 Open http://localhost:8080/graphiql/admin to access the admin interface.
@@ -26,17 +30,30 @@ Open http://localhost:8080/graphiql/admin to access the admin interface.
 
 ### 1. Register Lexicons
 
-Lexicons define the AT Protocol record types you want to index. Register them via the Admin GraphQL API at `/graphiql/admin`:
+Lexicons define the AT Protocol record types you want to index. Hyperindex supports two registration modes via the Admin GraphQL API at `/graphiql/admin`:
 
-```graphql
-mutation {
-  uploadLexicons(files: [...])  # Upload lexicon JSON files
-}
-```
+1. **Register by NSID** — use this when the lexicon can be resolved by its NSID.
 
-Or place lexicon JSON files in a directory and set `LEXICON_DIR` environment variable.
+   ```graphql
+   mutation {
+     registerLexicon(nsid: "org.hypercerts.claim.activity")
+   }
+   ```
+
+2. **Upload a ZIP file** — use this for custom lexicons or lexicons that are not publicly resolvable. The ZIP should contain lexicon JSON files, which are stored in the database.
+
+   ```graphql
+   mutation {
+     uploadLexicons(zipBase64: "...")
+   }
+   ```
+
+Or place lexicon JSON files in a directory and set the `LEXICON_DIR` environment variable.
+
+After registering by NSID or uploading a ZIP file, restart/redeploy the backend indexer for the new lexicons to appear in the public GraphQL schema and query list. The admin lexicon list updates immediately, but typed GraphQL queries are generated at backend startup.
 
 **Example lexicons:**
+- `org.hypercerts.claim.activity` - Hypercert claim activity
 - `app.bsky.feed.post` - Bluesky posts
 - `app.bsky.feed.like` - Likes
 - `app.bsky.actor.profile` - User profiles
@@ -116,6 +133,8 @@ mutation {
 ### 3. Query via GraphQL
 
 Access your indexed data at `/graphql`:
+
+Typed GraphQL query field names are generated from lexicon NSIDs. For example, `org.hypercerts.claim.activity` becomes `orgHypercertsClaimActivity`. Newly registered or uploaded lexicons appear in these typed queries after the backend indexer restarts.
 
 ```graphql
 # Generic query — all records by collection
@@ -227,10 +246,12 @@ Default sort is `indexed_at DESC` (newest first). Available sort fields are gene
 
 Create a `.env` file or set environment variables:
 
+The `.env.example` file includes placeholder values for required secrets. After copying it to `.env`, replace those placeholders with real random secrets before running in production or against real data.
+
 ```bash
 # Database (SQLite or PostgreSQL)
-DATABASE_URL=sqlite:data/hypergoat.db
-# DATABASE_URL=postgres://user:pass@localhost/hypergoat
+DATABASE_URL=sqlite:data/hyperindex.db
+# DATABASE_URL=postgres://user:pass@localhost/hyperindex
 
 # Server
 HOST=127.0.0.1
@@ -238,21 +259,20 @@ PORT=8080
 EXTERNAL_BASE_URL=http://localhost:8080
 
 # Admin access (comma-separated DIDs)
+# Managed via deployment environment; shown read-only in the admin UI.
 ADMIN_DIDS=did:plc:your-did-here
-
-# Client-side/public/UI-only admin gating; backend ADMIN_DIDS remains authoritative and is the only server-side authorization source
-NEXT_PUBLIC_ADMIN_DIDS=did:plc:your-did-here
 
 # Security — required for session encryption (min 64 chars)
 SECRET_KEY_BASE=your-secret-key-at-least-64-characters-long-generate-with-openssl-rand
 
-# Proxy auth — set to true when running behind a trusted reverse proxy
-# (e.g. Next.js frontend on Vercel) that sets the X-User-DID header.
-# WARNING: Never enable this when the server is directly exposed to the internet.
-TRUST_PROXY_HEADERS=false
+# Admin API key — required at startup; the server will not start without it.
+# Also enables trusted X-User-DID proxy requests when the request includes:
+# X-Admin-API-Key: <key>
+# Example: openssl rand -base64 32
+ADMIN_API_KEY=replace-with-a-random-secret
 
 # WebSocket origins — comma-separated allowed origins for subscriptions.
-# Empty = same-origin only. Set to "*" for development.
+# Unset or empty allows all origins. Set a comma-separated list to restrict origins; "*" also allows all origins.
 # ALLOWED_ORIGINS=https://your-frontend.vercel.app
 
 # Jetstream (real-time indexing)
@@ -338,6 +358,53 @@ make lint
 make build
 ```
 
+## Changelog workflow
+
+We use [Changie](https://github.com/miniscruff/changie) for release-note fragments.
+
+```bash
+go install github.com/miniscruff/changie@v1.24.0
+make tools
+make changie-new
+```
+
+- Add a changelog fragment for user-facing changes, operator-facing changes, bug fixes, and other work that should appear in the next release notes.
+- You do not need a fragment for docs-only edits, tests-only changes, or internal refactors that do not affect behavior.
+- Maintainers run **Prepare release notes PR** on `main` to batch pending fragments and open or update a release PR.
+- After the release PR is merged, maintainers run **Publish release tag and GitHub Release** on `main` to create the `vX.Y.Z` tag and publish the matching GitHub Release from the generated `.changes` version file.
+- See `docs/changelog-workflow.md` for the full maintainer runbook, token requirements, and validation workflow details.
+
+Recommended fragment kinds:
+
+- `added` — new functionality
+- `breaking` — behavior or interface changes that require users, operators, or developers to adapt
+- `changed` — changed behavior, enhancements, or workflow changes
+- `deprecated` — functionality that still works now but should be migrated away from
+- `removed` — functionality removed
+- `fixed` — bug fixes
+- `security` — security-relevant fixes or hardening worth calling out
+
+### Affects and body guidance
+
+`Affects` describes who or what the change impacts most. Use the smallest audience that still fits the change.
+
+Recommended values:
+
+- `user` — changes that affect product behavior, APIs, queries, or UX
+- `operator` — changes that affect deployment, configuration, monitoring, or runtime behavior
+- `developer` — changes that affect contributor workflows, tooling, tests, or documentation
+
+Write the release-note body as a short description of the impact, not the implementation. Good bodies explain what changed, why it matters, and what readers should expect. Bad bodies focus on internal code paths, file names, or implementation details instead of the visible effect.
+
+### Release PR automation
+
+- Merge feature PRs with their Changie fragments into `main`.
+- Run **Prepare release notes PR** from GitHub Actions on `main` and choose `auto`, `patch`, `minor`, or `major` batching.
+- If unreleased fragments exist, the workflow runs `go build ./...`, `go test ./...`, `changie batch <release_type>`, and `changie merge`, then creates or updates a PR from `release/changelog` back into `main` for review.
+- Merge the generated release PR after reviewing the versioned `.changes` file and `CHANGELOG.md` diff.
+- Run **Publish release tag and GitHub Release** on `main` after the PR is merged.
+- Publish uses the latest generated `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` release file as the GitHub Release notes body; newer unreleased fragments for the next cycle do not block publishing that prepared version.
+
 ### Local pre-commit linting
 
 This repo includes a tracked pre-commit hook at `.githooks/pre-commit`.
@@ -362,7 +429,7 @@ Migrations run automatically on startup.
 
 ## History
 
-Hyperindex was incubated and created by [GainForest](https://gainforest.earth) and [Claude Opus 4.5](https://www.anthropic.com/claude) (Anthropic), originally under the name *Hypergoat*. It has since been moved to [hypercerts-org](https://github.com/hypercerts-org) for community maintenance.
+Hyperindex was incubated and created by [GainForest](https://gainforest.earth) and [Claude Opus 4.5](https://www.anthropic.com/claude) (Anthropic). It has since been moved to [hypercerts-org](https://github.com/hypercerts-org) for community maintenance.
 
 ## License
 

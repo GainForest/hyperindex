@@ -1,17 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { graphqlClient } from "@/lib/graphql/client";
-import { UPDATE_SETTINGS, UPLOAD_LEXICONS, ADD_ADMIN } from "@/lib/graphql/mutations";
+import { GET_SETTINGS } from "@/lib/graphql/queries";
+import { UPDATE_SETTINGS, UPLOAD_LEXICONS } from "@/lib/graphql/mutations";
+import { useAdminSession } from "@/lib/auth";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Alert } from "@/components/ui/Alert";
+import type { SettingsResponse } from "@/types";
 
 interface OnboardingState {
   domainAuthority: string;
-  adminDid: string;
   lexiconsUploaded: boolean;
 }
 
@@ -25,11 +27,11 @@ const STEPS = [
 
 export default function OnboardingPage() {
   const router = useRouter();
+  const { isAdmin, isLoading: isAdminLoading } = useAdminSession();
   const [currentStep, setCurrentStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<OnboardingState>({
     domainAuthority: "",
-    adminDid: "",
     lexiconsUploaded: false,
   });
 
@@ -40,14 +42,8 @@ export default function OnboardingPage() {
     onError: (err: Error) => setError(err.message),
   });
 
-  // Add admin mutation
-  const addAdminMutation = useMutation({
-    mutationFn: (did: string) => graphqlClient.request(ADD_ADMIN, { did }),
-    onError: (err: Error) => setError(err.message),
-  });
-
-  // Upload lexicons mutation
-  const uploadLexiconsMutation = useMutation({
+	// Upload lexicons mutation
+	const uploadLexiconsMutation = useMutation({
     mutationFn: (zipBase64: string) =>
       graphqlClient.request(UPLOAD_LEXICONS, { zipBase64 }),
     onSuccess: () => {
@@ -55,6 +51,14 @@ export default function OnboardingPage() {
     },
     onError: (err: Error) => setError(err.message),
   });
+
+  const { data: settingsData, isLoading: isSettingsLoading } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => graphqlClient.request<SettingsResponse>(GET_SETTINGS),
+    enabled: isAdmin,
+  });
+
+  const adminDids = settingsData?.settings.adminDids ?? [];
 
   const handleNext = async () => {
     setError(null);
@@ -71,21 +75,7 @@ export default function OnboardingPage() {
       } catch {
         return;
       }
-    } else if (currentStep === 2) {
-      if (!state.adminDid.trim()) {
-        setError("Please enter an admin DID");
-        return;
-      }
-      if (!state.adminDid.startsWith("did:")) {
-        setError("Invalid DID format");
-        return;
-      }
-      try {
-        await addAdminMutation.mutateAsync(state.adminDid.trim());
-      } catch {
-        return;
-      }
-    }
+	}
 
     setCurrentStep((s) => Math.min(s + 1, STEPS.length - 1));
   };
@@ -120,7 +110,6 @@ export default function OnboardingPage() {
 
   const isLoading =
     updateSettingsMutation.isPending ||
-    addAdminMutation.isPending ||
     uploadLexiconsMutation.isPending;
 
   return (
@@ -199,7 +188,7 @@ export default function OnboardingPage() {
                     <svg className="h-4 w-4" style={{ color: "var(--primary)" }} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M18 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0ZM3 19.235v-.11a6.375 6.375 0 0 1 12.75 0v.109A12.318 12.318 0 0 1 9.374 21c-2.331 0-4.512-.645-6.374-1.766Z" />
                     </svg>
-                    An admin account
+                    Your environment-managed admin list
                   </li>
                   <li className="flex items-center justify-center gap-2">
                     <svg className="h-4 w-4" style={{ color: "var(--primary)" }} fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
@@ -255,24 +244,40 @@ export default function OnboardingPage() {
                 </div>
                 <div>
                   <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
-                    Admin Account
+                    Administrators
                   </h3>
                   <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
-                    Add the first administrator for your AppView
+                    Review the admin DIDs configured via environment variables
                   </p>
                 </div>
               </div>
               <div className="space-y-4">
-                <Input
-                  label="Admin DID"
-                  placeholder="did:plc:..."
-                  value={state.adminDid}
-                  onChange={(e) =>
-                    setState((s) => ({ ...s, adminDid: e.target.value }))
-                  }
-                  hint="Enter your AT Protocol DID. This account will have full admin access. You can find your DID in your Bluesky profile settings."
-                  className="font-mono"
-                />
+                <div className="rounded-lg border p-4" style={{ borderColor: "var(--border)", backgroundColor: "var(--muted)" }}>
+                  <p className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
+                    Current administrators
+                  </p>
+                  {isAdminLoading || isSettingsLoading ? (
+                    <div className="mt-3 space-y-2">
+                      <div className="h-4 w-40 animate-pulse rounded" style={{ backgroundColor: "var(--border)" }} />
+                      <div className="h-4 w-56 animate-pulse rounded" style={{ backgroundColor: "var(--border)" }} />
+                    </div>
+                  ) : adminDids.length === 0 ? (
+                    <p className="mt-2 text-sm" style={{ color: "var(--muted-foreground)" }}>
+                      No admin DIDs are configured on the backend.
+                    </p>
+                  ) : (
+                    <ul className="mt-3 space-y-2">
+                      {adminDids.map((did) => (
+                        <li key={did}>
+                          <code className="text-sm font-mono" style={{ color: "var(--foreground)" }}>{did}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
+                  Admin access is managed outside the app. Update <code className="font-mono">ADMIN_DIDS</code> on the backend if you need to change administrators.
+                </p>
               </div>
             </div>
           )}
@@ -368,9 +373,9 @@ export default function OnboardingPage() {
                     <dd className="font-mono" style={{ color: "var(--foreground)" }}>{state.domainAuthority || "Not set"}</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt style={{ color: "var(--muted-foreground)" }}>Admin:</dt>
+                    <dt style={{ color: "var(--muted-foreground)" }}>Admins:</dt>
                     <dd className="font-mono truncate max-w-[200px]" style={{ color: "var(--foreground)" }}>
-                      {state.adminDid || "Not set"}
+                      {adminDids.length > 0 ? adminDids.join(", ") : "Not set"}
                     </dd>
                   </div>
                   <div className="flex justify-between">

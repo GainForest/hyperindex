@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/GainForest/hypergoat/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 func TestResolver_PurgeActor_TrimsDID(t *testing.T) {
@@ -15,7 +15,7 @@ func TestResolver_PurgeActor_TrimsDID(t *testing.T) {
 		Records: db.Records,
 		Actors:  db.Actors,
 	}
-	r := NewResolver(repos, "did:plc:test-labeler")
+	r := NewResolver(repos, "did:plc:test-labeler", nil)
 
 	if err := db.Actors.Upsert(ctx, "did:plc:target", "target.bsky.social"); err != nil {
 		t.Fatalf("failed to seed actor: %v", err)

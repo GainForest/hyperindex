@@ -1,194 +1,130 @@
-# AGENTS.md - Hypergoat Development Guide
+# AGENTS.md
 
-Hypergoat is a Go port of Quickslice - an AT Protocol AppView server that indexes
-Lexicon-defined records and exposes them via a dynamically-generated GraphQL API.
+## Repository orientation
 
-**Status:** Core functionality complete (Phases 1-7). All tests passing.
+- Product name is **Hyperindex**. The project was renamed from Hypergoat; current technical identifiers should use **`hyperindex`**.
+- This repo contains two codebases:
+  - the **Go backend** at the repo root
+  - the **Next.js frontend** in `client/`
+- Use `bd` for task tracking. Run `bd onboard` if you need the repo-local workflow.
 
-Use `bd` for task tracking. Run `bd onboard` to get started.
+## Key boundaries and entrypoints
 
-## Build/Test Commands
+- Backend entrypoint: `cmd/hyperindex/`
+- Backend database schema source of truth: `internal/database/migrations/`
+- Frontend app: `client/`
+- Tap ingestion support is available and should be preferred for new ingestion work when applicable; Jetstream + backfill is the legacy path.
 
-```bash
-# Build
-make build                     # Build binary to bin/hypergoat
-go build ./...                 # Build all packages (quick check)
+## Commands agents should prefer
 
-# Run
-make run                       # Build and run server
-go run ./cmd/hypergoat         # Run directly
-make dev                       # Run with hot reload (requires air)
+### Backend
 
-# Test - ALL TESTS
-make test                      # Run all tests with race detector
-go test ./...                  # Run all tests (faster, no race)
+- `make build` — build backend binary to `bin/hyperindex`
+- `make run` — build and run backend
+- `make dev` — run backend with hot reload (`air` required)
+- `make test` — run Go tests with `-race`
+- `go test -v -run TestName ./...` — run a single Go test by name
+- `go test -v ./path/to/package/...` — run one Go package
+- `go test -v -race -tags=integration ./internal/integration/...` — run integration tests
+- `make lint` — run `golangci-lint`
+- `make fmt` — run `go fmt` + `gofumpt`
 
-# Test - SINGLE TEST
-go test -v -run TestName ./...                    # Run test by name pattern
-go test -v -run TestParseLexicon ./internal/lexicon/...  # Specific package
-go test -v ./internal/graphql/admin/...           # All tests in package
+### Frontend
 
-# Test - WITH COVERAGE
-make test-coverage             # Generate coverage.html report
+- `npm --prefix client run dev`
+- `npm --prefix client run build`
+- `npm --prefix client run lint`
+- `npm --prefix client run test`
 
-# Lint & Format
-make lint                      # Run golangci-lint
-make fmt                       # Format with go fmt + gofumpt
-go fmt ./...                   # Format only
+### Tooling
 
-# Install dev tools
-make tools                     # Install air, golangci-lint, gofumpt, migrate
-```
+- `make tools` — install repo development tools
+- `make hooks-install` — enable tracked git hooks
+- `make changie-new` — create a Changie fragment
 
-## Code Style Guidelines
+## Verification
 
-### Imports
-Group imports in this order with blank lines between:
-```go
-import (
-    "context"           // 1. Standard library
-    "fmt"
+Run verification based on what changed.
 
-    "github.com/go-chi/chi/v5"  // 2. External packages
+- If you changed **Go code**:
+  - `go build -v ./...`
+  - `make lint`
+  - `DATABASE_URL=sqlite::memory: go test -v -race ./...`
 
-    "github.com/GainForest/hypergoat/internal/database"  // 3. Internal packages
-)
-```
+- If you changed **database code, migrations, repositories, or dialect-specific behavior**:
+  - also run:
+    - `DATABASE_URL=postgres://hyperindex:hyperindex@localhost:5432/hyperindex_test?sslmode=disable go test -v -race ./...`
 
-### Package Documentation
-Every package must have a doc comment:
-```go
-// Package config handles application configuration loading from environment variables.
-package config
-```
+- If you changed **integration behavior**:
+  - `go test -v -race -tags=integration ./internal/integration/...`
 
-### Naming Conventions
-- **Packages:** lowercase, single word (`lexicon`, `oauth`, `backfill`)
-- **Files:** lowercase with underscores (`did_resolver.go`, `jetstream_activity.go`)
-- **Types:** PascalCase (`Executor`, `RecordFetcher`, `WhereClause`)
-- **Interfaces:** Noun or -er suffix (`Executor`, `Fetcher`, `Resolver`)
-- **Constants:** PascalCase exported, camelCase private
-- **Acronyms:** All caps (`URI`, `DID`, `HTTP`, `JSON`)
+- If you changed **frontend code in `client/`**:
+  - `npm --prefix client run lint`
+  - `npm --prefix client run test`
+  - `npm --prefix client run build`
 
-### Error Handling
-Always wrap errors with context:
-```go
-if err != nil {
-    return fmt.Errorf("failed to query records: %w", err)
-}
-```
+## Testing notes
 
-For typed errors:
-```go
-type DBError struct {
-    Code    string
-    Message string
-    Cause   error
-}
-func (e *DBError) Error() string { return e.Message }
-func (e *DBError) Unwrap() error { return e.Cause }
-```
+- CI runs Go tests against **both SQLite and PostgreSQL**.
+- Integration tests are run with `-tags=integration`.
+- Most DB-backed tests use `sqlite::memory:`.
+- Prefer shared test helpers such as `internal/testutil/db.go` when adding DB-backed tests.
 
-### Context
-Always pass context as the first parameter:
-```go
-func (r *RecordsRepository) GetByURI(ctx context.Context, uri string) (*Record, error)
-```
+## Schema and migrations
 
-### Repository Pattern
-All database access goes through repositories in `internal/database/repositories/`:
-```go
-type RecordsRepository struct {
-    db database.Executor
-}
+- Runtime and tests use **embedded migrations** from:
+  - `internal/database/migrations/sqlite/`
+  - `internal/database/migrations/postgres/`
+- These are embedded with `go:embed` and applied by the app at startup.
+- Do **not** assume `db/migrations/` or `db/migrations_postgres/` is the canonical runtime migration path.
+- If you change schema or migration behavior, verify both SQLite and PostgreSQL paths.
 
-func NewRecordsRepository(db database.Executor) *RecordsRepository {
-    return &RecordsRepository{db: db}
-}
+## Config and startup gotchas
 
-func (r *RecordsRepository) GetByURI(ctx context.Context, uri string) (*Record, error) {
-    // Use r.db.Placeholder() for SQL parameters
-    sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE uri = %s", r.recordColumns(), r.db.Placeholder(1))
-    // ...
-}
-```
+- `ADMIN_API_KEY` is required at startup.
+- `SECRET_KEY_BASE` must be at least 64 characters.
+- `TAP_ENABLED=true` switches ingestion to Tap mode.
+- Migrations run automatically on startup.
+- Be careful with `ALLOWED_ORIGINS`: current code allows all origins when unset, even if older prose suggests stricter defaults.
 
-### Testing
-Use table-driven tests:
-```go
-func TestParseLexicon(t *testing.T) {
-    tests := []struct {
-        name    string
-        input   string
-        want    *Lexicon
-        wantErr bool
-    }{
-        {name: "simple record", input: `{"lexicon":1}`, want: &Lexicon{}},
-        {name: "invalid json", input: `{`, wantErr: true},
-    }
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            got, err := ParseLexicon(tt.input)
-            if (err != nil) != tt.wantErr {
-                t.Errorf("error = %v, wantErr %v", err, tt.wantErr)
-            }
-        })
-    }
-}
-```
+## Changie fragments
 
-### Logging
-Use structured logging with `log/slog`:
-```go
-slog.Info("Starting backfill", "collections", collections, "count", len(repos))
-slog.Warn("Failed to resolve DID", "did", did, "error", err)
-slog.Error("Database connection failed", "error", err)
-```
+**Critical:** Do not skip Changie for externally meaningful changes. Release notes are produced from `.changes/unreleased/*.yaml`, not commit messages, so missing fragments mean the change will be absent from the curated changelog.
 
-## Project Structure
+- If your change affects any of the following, add a Changie fragment unless the change is docs-only or purely internal:
+  - end users
+  - operators/deployers
+  - contributors
+  - people forking or reusing this codebase
+- This applies whether the change is in Go or frontend code.
+- Good candidates include:
+  - user-visible behavior changes
+  - GraphQL/API changes
+  - config or deployment changes
+  - migration/runtime behavior changes
+  - contributor workflow changes that matter to downstream users or forks
+- Usually skip fragments for:
+  - docs-only changes
+  - tests-only changes
+  - internal refactors with no externally meaningful behavior change
+- Prefer `make changie-new`.
+- When writing the fragment, use the local **`writing-changie`** skill.
+- `Affects` must be one of:
+  - `user`
+  - `operator`
+  - `developer`
+- Maintainers should follow `docs/changelog-workflow.md` for the release execution runbook.
 
-```
-cmd/hypergoat/          # Main entry point (server initialization, routing)
-internal/
-  backfill/             # Historical data backfill from AT Protocol relays
-  config/               # Configuration loading from environment
-  database/
-    migrations/         # SQL migrations (auto-run on startup)
-    repositories/       # Data access layer (records, actors, lexicons, oauth, etc.)
-    sqlite/             # SQLite implementation (pure Go, no CGO)
-    postgres/           # PostgreSQL implementation (pgx)
-  graphql/
-    admin/              # Admin API (schema.go, resolvers.go, handler.go, types.go)
-    schema/             # Public schema builder (dynamic from lexicons)
-    resolver/           # Public resolvers and context
-    query/              # Connection types (Relay spec)
-    subscription/       # WebSocket subscriptions (graphql-transport-ws)
-    types/              # GraphQL type mapping from lexicons
-  integration/          # Integration tests
-  jetstream/            # Real-time AT Protocol event consumer
-  lexicon/              # Lexicon parsing, registry, NSID utilities
-  oauth/                # OAuth 2.0 + DPoP + PKCE implementation
-  server/               # HTTP handlers (GraphiQL, OAuth endpoints)
-  workers/              # Background jobs (activity cleanup, backfill state)
-docs/                   # Implementation plan and documentation
-testdata/               # Test fixtures and sample lexicons
-```
+## Keeping this file current
 
-## Landing the Plane (Session Completion)
+- Update `AGENTS.md` whenever changes affect repository structure, entrypoints, required commands, verification steps, config requirements, migration behavior, release-note workflow, or agent/developer operating instructions.
+- Do not leave stale guidance in this file; update or remove obsolete instructions in the same change that makes them obsolete.
 
-**When ending a work session**, you MUST complete ALL steps below.
+## Git hooks
 
-1. **Run quality gates** (if code changed):
-   ```bash
-   go build ./...
-   go test ./...
-   ```
-2. **Commit and PUSH**:
-   ```bash
-   git add -A && git commit -m "feat: description"
-   git push origin $branchname
-   git status  # MUST show "up to date with origin"
-   ```
-3. **Verify** - Work is NOT complete until `git push` succeeds
-
-**CRITICAL:** Never stop before pushing - that leaves work stranded locally.
+- Run `make hooks-install` once to enable the tracked hooks in `.githooks/`.
+- The pre-commit hook checks **staged Go files only**.
+- It fails if staged Go files are not `gofmt`-formatted.
+- It then runs `golangci-lint` on changed Go packages.
+- The hook requires **Bash 4+**.
+- `SKIP_GOLANGCI=1` is an emergency local bypass, not normal workflow.

@@ -9,7 +9,7 @@ import (
 
 	graphqlgo "github.com/graphql-go/graphql"
 
-	"github.com/GainForest/hypergoat/internal/graphql/resolver"
+	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 )
 
 // createMinimalSchema creates a minimal GraphQL schema for testing

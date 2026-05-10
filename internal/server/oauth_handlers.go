@@ -1,4 +1,4 @@
-// Package server contains HTTP handlers for the hypergoat server.
+// Package server contains HTTP handlers for the hyperindex server.
 // OAuth HTTP handlers for AT Protocol authentication.
 package server
 
@@ -13,9 +13,9 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/GainForest/hypergoat/internal/database"
-	"github.com/GainForest/hypergoat/internal/database/repositories"
-	"github.com/GainForest/hypergoat/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
 // OAuthHandlerConfig contains configuration for OAuth handlers.
