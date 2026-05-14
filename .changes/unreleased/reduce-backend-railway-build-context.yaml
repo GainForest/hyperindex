@@ -1,0 +1,4 @@
+kind: changed
+body: Reduce backend Railway deploy overhead by pruning the backend Docker build context, using the matching Go builder image, and stripping release binary debug metadata.
+custom:
+  Affects: operator
