@@ -4,7 +4,7 @@ This directory contains a tiny Prometheus image for scraping Tap metrics. It gen
 
 ## Railway service
 
-Deploy this directory as its own Railway service and set the service root directory to `prometheus`.
+Deploy this as its own Railway service from the repository root using `prometheus/Dockerfile` as the Dockerfile path.
 
 Required variables:
 
