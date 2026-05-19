@@ -4,7 +4,15 @@ This directory contains a tiny Prometheus image for scraping Tap metrics. It gen
 
 ## Railway service
 
-Deploy this as its own Railway service with the service root directory set to `prometheus`. The included `railway.toml` uses `Dockerfile` and sets the healthcheck path to `/-/healthy`.
+Deploy this as its own Railway service with these Railway settings:
+
+- Root Directory: `/prometheus`
+- Railway Config File: `/prometheus/railway.toml`
+- Dockerfile Path: `Dockerfile`
+
+The included `railway.toml` sets the healthcheck path to `/-/healthy`.
+
+If build logs still say `load build definition from prometheus/Dockerfile`, the service is still building from the repository root instead of `/prometheus`.
 
 Required variables:
 
