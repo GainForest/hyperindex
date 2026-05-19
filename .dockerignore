@@ -9,9 +9,6 @@
 !go.mod
 !go.sum
 
-!prometheus
-!prometheus/**
-
 !cmd
 !cmd/**
 !internal
