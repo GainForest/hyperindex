@@ -33,6 +33,7 @@ type Event struct {
 
 // RecordEvent is a record change event from Tap.
 type RecordEvent struct {
+	EventID    int64           `json:"-"` // copied from the Tap event envelope for logging/correlation
 	Live       bool            `json:"live"`
 	Rev        string          `json:"rev"`
 	DID        string          `json:"did"`
@@ -50,6 +51,7 @@ func (r *RecordEvent) URI() string {
 
 // IdentityEvent is an identity change event from Tap.
 type IdentityEvent struct {
+	EventID         int64  `json:"-"` // copied from the Tap event envelope for logging/correlation
 	DID             string `json:"did"`
 	Handle          string `json:"handle"`
 	IsActive        bool   `json:"is_active"`
@@ -114,6 +116,7 @@ func ParseEvent(data []byte) (*Event, error) {
 		// protocol events — the handler will skip them gracefully rather than
 		// treating them as errors. Rejecting them here would cause an un-acked
 		// delivery loop when TAP_DISABLE_ACKS=false.
+		event.Record.EventID = event.ID
 	}
 	// Validate identity events.
 	if event.Type == EventTypeIdentity {
@@ -123,6 +126,7 @@ func ParseEvent(data []byte) (*Event, error) {
 		if event.Identity.DID == "" {
 			return nil, fmt.Errorf("tap identity event missing did field")
 		}
+		event.Identity.EventID = event.ID
 	}
 	return &event, nil
 }

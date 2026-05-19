@@ -34,6 +34,9 @@ func TestParseEvent_RecordCreate(t *testing.T) {
 	if event.Record == nil {
 		t.Fatal("expected record to be non-nil")
 	}
+	if event.Record.EventID != event.ID {
+		t.Errorf("expected record EventID %d, got %d", event.ID, event.Record.EventID)
+	}
 	if !event.Record.Live {
 		t.Error("expected live to be true")
 	}
@@ -84,6 +87,9 @@ func TestParseEvent_RecordDelete(t *testing.T) {
 	if event.Record == nil {
 		t.Fatal("expected record to be non-nil")
 	}
+	if event.Record.EventID != event.ID {
+		t.Errorf("expected record EventID %d, got %d", event.ID, event.Record.EventID)
+	}
 	if event.Record.Action != ActionDelete {
 		t.Errorf("expected action %q, got %q", ActionDelete, event.Record.Action)
 	}
@@ -119,6 +125,9 @@ func TestParseEvent_Identity(t *testing.T) {
 	}
 	if event.Identity == nil {
 		t.Fatal("expected identity to be non-nil")
+	}
+	if event.Identity.EventID != event.ID {
+		t.Errorf("expected identity EventID %d, got %d", event.ID, event.Identity.EventID)
 	}
 	if event.Identity.DID != "did:plc:abc" {
 		t.Errorf("expected DID %q, got %q", "did:plc:abc", event.Identity.DID)
