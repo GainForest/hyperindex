@@ -1,0 +1,4 @@
+kind: added
+body: Add a small Prometheus deployment service for scraping Tap metrics in Railway.
+custom:
+  Affects: operator

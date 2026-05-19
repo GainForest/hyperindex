@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+: "${TAP_METRICS_TARGET:?Set TAP_METRICS_TARGET, e.g. tap.railway.internal:9090}"
+: "${PORT:=9090}"
+: "${SCRAPE_INTERVAL:=15s}"
+
+mkdir -p /tmp/prometheus-data
+
+cat > /tmp/prometheus.yml <<EOF
+global:
+  scrape_interval: ${SCRAPE_INTERVAL}
+  evaluation_interval: ${SCRAPE_INTERVAL}
+
+scrape_configs:
+  - job_name: tap
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "${TAP_METRICS_TARGET}"
+EOF
+
+echo "Starting Prometheus. Scraping Tap target: ${TAP_METRICS_TARGET}"
+
+exec /bin/prometheus \
+  --config.file=/tmp/prometheus.yml \
+  --storage.tsdb.path=/tmp/prometheus-data \
+  --web.listen-address=0.0.0.0:${PORT}
