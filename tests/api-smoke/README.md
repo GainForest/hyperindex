@@ -1,12 +1,12 @@
 # API smoke tests
 
-This directory contains a public, read-only, post-deploy API and GraphQL smoke suite for Hyperindex operators. Use it after deployment to verify that the public API endpoint is reachable and serving the expected read paths.
+This directory contains a post-deploy API and GraphQL smoke suite for Hyperindex operators. By default it is public and read-only; an opt-in write-through check can also create, update, and delete disposable ATProto records to verify ingestion end to end.
 
-The suite does not test the Next.js client, admin authentication, lexicon upload or register flows, mutations, OAuth, or subscriptions.
+The default suite does not test the Next.js client, admin authentication, lexicon upload or register flows, mutations, OAuth, subscriptions, or writes. The opt-in write-through check writes through an ATProto PDS, not Hyperindex mutations.
 
 ## Run manually
 
-`HYPERINDEX_SMOKE_URL` is required for both direct `go test` runs and the Make target. It must point to the public Hyperindex API endpoint you want to check.
+`HYPERINDEX_SMOKE_URL` is required unless it is provided by the smoke `.env` file. It must point to the public Hyperindex API endpoint you want to check.
 
 ```bash
 HYPERINDEX_SMOKE_URL=https://api.example.com \
@@ -15,13 +15,13 @@ HYPERINDEX_SMOKE_URL=https://api.example.com \
 
 Direct `go test` runs use standard Go test output. Successful test stdout is only shown when you pass `-v`.
 
-Use the Make target for operator-friendly smoke output, with the URL supplied by your environment. The target runs verbose tests internally so friendly progress lines are streamed incrementally, then filters Go harness noise such as `=== RUN`, `--- PASS`, package `PASS`, and final `ok` lines.
+Use the Make target for operator-friendly smoke output, with the URL supplied by your environment or `tests/api-smoke/.env`. The target runs verbose tests internally so friendly progress lines are streamed incrementally, then filters Go harness noise such as `=== RUN`, `--- PASS`, package `PASS`, and final `ok` lines.
 
 ```bash
 HYPERINDEX_SMOKE_URL=https://api.example.com make smoke-api
 ```
 
-`make smoke-api` fails before running tests when `HYPERINDEX_SMOKE_URL` is unset. If a smoke check fails, the target preserves the failure output, exits non-zero, and does not print the final `✓ API smoke checks passed` line. That success message is printed only after all checks pass.
+If `HYPERINDEX_SMOKE_URL` is unset in both the environment and the smoke `.env` file, `make smoke-api` fails with the test suite's config error. If a smoke check fails, the target preserves the failure output, exits non-zero, and does not print the final `✓ API smoke checks passed` line. That success message is printed only after all checks pass.
 
 Do not bake an environment-specific URL into the command or Makefile target.
 
@@ -39,6 +39,10 @@ Developers who want Go test and subtest names can manually add `-v` to direct `g
 HYPERINDEX_SMOKE_URL=https://api.example.com \
   go test -v -tags=api_smoke ./tests/api-smoke -count=1
 ```
+
+## Optional smoke `.env` file
+
+By default, the suite loads `tests/api-smoke/.env` if the file exists. Copy `tests/api-smoke/.env.example` to `tests/api-smoke/.env` for local or staging smoke settings. Set `HYPERINDEX_SMOKE_ENV_FILE=/path/to/.env` to load a different file. Values already present in the process environment take precedence over values from the file.
 
 ## Optional expectations file
 
@@ -58,10 +62,28 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - Search
 - Strict pagination
 - Typed `ByUri` roundtrip
+- Optional ATProto write-through lifecycle for `app.certified.actor.profile` and `org.hypercerts.claim.activity`
 
-## Public-only limitation
+## Optional write-through smoke check
 
-Because this suite uses only the public GraphQL API, it cannot strictly prove that helper and non-record lexicons are loaded. Strict lexicon identity would require a future admin-authenticated smoke mode.
+Set `HYPERINDEX_SMOKE_WRITE_THROUGH=1` to enable an end-to-end ingestion check. The test logs in to an ATProto PDS, creates `app.certified.actor.profile/self`, waits for Hyperindex to expose it, updates it and verifies the new CID/fields, then creates, updates, and deletes an `org.hypercerts.claim.activity` record and finally deletes the profile. Each create/update/delete verification logs the observed ingestion time and poll count.
+
+Required write-through settings:
+
+- `HYPERINDEX_SMOKE_ATPROTO_PDS_URL` — ATProto PDS base URL, for example `https://bsky.social`
+- `HYPERINDEX_SMOKE_ATPROTO_IDENTIFIER` — handle or DID for a disposable smoke account
+- `HYPERINDEX_SMOKE_ATPROTO_PASSWORD` — app password or account password for that smoke account
+
+Optional timing settings:
+
+- `HYPERINDEX_SMOKE_WRITE_POLL_TIMEOUT` — per-step indexing timeout, default `60s`
+- `HYPERINDEX_SMOKE_WRITE_POLL_INTERVAL` — polling interval, default `2s`
+
+Use a dedicated disposable account. If `app.certified.actor.profile/self` already exists, the test temporarily deletes it so it can exercise create semantics and restores the original record during cleanup.
+
+## Public API limitation
+
+Because the suite verifies Hyperindex through the public GraphQL API, it cannot strictly prove that helper and non-record lexicons are loaded. Strict lexicon identity would require a future admin-authenticated smoke mode.
 
 Public typed GraphQL collection and `ByUri` fields are generated from the lexicons available when the backend starts. After changing which lexicons the backend loads, or after updating smoke expectations for newly loaded lexicons, restart or redeploy the API before expecting schema checks for those typed fields to pass.
 

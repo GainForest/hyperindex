@@ -11,12 +11,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 const (
 	smokeURLEnv          = "HYPERINDEX_SMOKE_URL"
 	smokeExpectationsEnv = "HYPERINDEX_SMOKE_EXPECTATIONS"
 	smokeDebugEnv        = "HYPERINDEX_SMOKE_DEBUG"
+	smokeEnvFileEnv      = "HYPERINDEX_SMOKE_ENV_FILE"
 )
 
 type smokeConfig struct {
@@ -52,6 +55,8 @@ type searchExpectation struct {
 
 func loadSmokeConfig(t testing.TB) smokeConfig {
 	t.Helper()
+
+	loadSmokeDotEnv(t)
 
 	baseURL, err := parseSmokeBaseURL(os.Getenv(smokeURLEnv))
 	if err != nil {
@@ -95,7 +100,30 @@ func parseSmokeBaseURL(rawURL string) (string, error) {
 	return strings.TrimRight(parsedURL.String(), "/"), nil
 }
 
+func loadSmokeDotEnv(t testing.TB) {
+	t.Helper()
+
+	path := os.Getenv(smokeEnvFileEnv)
+	usingDefaultPath := path == ""
+	if usingDefaultPath {
+		path = filepath.Join(apiSmokePackageDir(t), ".env")
+	}
+
+	if err := godotenv.Load(path); err != nil {
+		if usingDefaultPath && os.IsNotExist(err) {
+			return
+		}
+		t.Fatalf("load smoke env file %q: %v", path, err)
+	}
+}
+
 func defaultExpectationsPath(t testing.TB) string {
+	t.Helper()
+
+	return filepath.Join(apiSmokePackageDir(t), "expectations.json")
+}
+
+func apiSmokePackageDir(t testing.TB) string {
 	t.Helper()
 
 	_, currentFile, _, ok := runtime.Caller(0)
@@ -103,7 +131,7 @@ func defaultExpectationsPath(t testing.TB) string {
 		t.Fatal("load smoke config: cannot locate api smoke package directory")
 	}
 
-	return filepath.Join(filepath.Dir(currentFile), "expectations.json")
+	return filepath.Dir(currentFile)
 }
 
 func loadExpectations(path string) (expectations, error) {
@@ -200,6 +228,7 @@ func makeSet(values []string) map[string]bool {
 func TestConfig(t *testing.T) {
 	t.Setenv(smokeURLEnv, "http://127.0.0.1:1/")
 	t.Setenv(smokeExpectationsEnv, "")
+	t.Setenv(smokeEnvFileEnv, "")
 
 	config := loadSmokeConfig(t)
 	if config.baseURL != "http://127.0.0.1:1" {
