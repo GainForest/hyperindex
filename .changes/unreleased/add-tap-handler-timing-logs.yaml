@@ -1,0 +1,4 @@
+kind: added
+body: Add Tap record and identity handler timing logs so operators can identify slow ingestion stages during stress tests.
+custom:
+  Affects: operator
