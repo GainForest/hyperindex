@@ -515,11 +515,16 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 
 			inputFields := whereInput.Fields()
 
-			// The colliding property must NOT appear as a filter field in the WhereInput.
-			// (The reserved metadata field "uri"/"cid"/"rkey" is not added to WhereInput
-			// by default — only "did" is added as a metadata filter.)
-			// So the colliding property should simply be absent.
-			if _, exists := inputFields[tt.colliding]; exists {
+			// The colliding lexicon property must not overwrite generated metadata filters.
+			if tt.colliding == "externalLabels" {
+				field, exists := inputFields[tt.colliding]
+				if !exists {
+					t.Fatalf("WhereInput missing generated externalLabels metadata filter")
+				}
+				if field.Type.String() != "ExternalLabelWhereInput" {
+					t.Errorf("externalLabels filter type = %q, want ExternalLabelWhereInput", field.Type.String())
+				}
+			} else if _, exists := inputFields[tt.colliding]; exists {
 				t.Errorf("WhereInput has field %q which should have been skipped (reserved name collision)", tt.colliding)
 			}
 
@@ -1597,4 +1602,170 @@ func setupExternalLabelsGraphQLTestDB(t *testing.T) context.Context {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func TestExternalLabelsGraphQLWhereFilterAndPagination(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx, uris := setupExternalLabelsWhereTestDB(t)
+
+	query := `{
+		comExampleLabelRecord(
+			first: 2
+			where: { externalLabels: { has: { val: { eq: "high-quality" } }, none: { val: { eq: "spam" } } } }
+		) {
+			edges {
+				cursor
+				node {
+					uri
+					externalLabels(values: ["high-quality"]) { val }
+				}
+			}
+			pageInfo { hasNextPage endCursor }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	conn := data["comExampleLabelRecord"].(map[string]interface{})
+	edges := conn["edges"].([]interface{})
+	if len(edges) != 2 {
+		t.Fatalf("first page edges = %d, want 2: %v", len(edges), edges)
+	}
+	firstNode := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	secondNode := edges[1].(map[string]interface{})["node"].(map[string]interface{})
+	if firstNode["uri"] != uris["five"] || secondNode["uri"] != uris["three"] {
+		t.Fatalf("first page URIs = [%v, %v], want [%s, %s]", firstNode["uri"], secondNode["uri"], uris["five"], uris["three"])
+	}
+	pageInfo := conn["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != true {
+		t.Fatalf("hasNextPage = %v, want true", pageInfo["hasNextPage"])
+	}
+	endCursor, ok := pageInfo["endCursor"].(string)
+	if !ok || endCursor == "" {
+		t.Fatalf("endCursor = %v, want non-empty string", pageInfo["endCursor"])
+	}
+
+	query = fmt.Sprintf(`{
+		comExampleLabelRecord(
+			first: 2
+			after: %q
+			where: { externalLabels: { has: { val: { eq: "high-quality" } }, none: { val: { eq: "spam" } } } }
+		) {
+			edges { node { uri } }
+			pageInfo { hasNextPage }
+		}
+	}`, endCursor)
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("second page GraphQL returned errors: %v", result.Errors)
+	}
+
+	data = result.Data.(map[string]interface{})
+	conn = data["comExampleLabelRecord"].(map[string]interface{})
+	edges = conn["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("second page edges = %d, want 1: %v", len(edges), edges)
+	}
+	node := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if node["uri"] != uris["one"] {
+		t.Fatalf("second page URI = %v, want %s", node["uri"], uris["one"])
+	}
+	pageInfo = conn["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false {
+		t.Fatalf("second page hasNextPage = %v, want false", pageInfo["hasNextPage"])
+	}
+}
+
+func TestExternalLabelsGraphQLWhereNoneAndSourceFilter(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx, uris := setupExternalLabelsWhereTestDB(t)
+
+	query := `{
+		comExampleLabelRecord(
+			first: 10
+			where: {
+				externalLabels: {
+					has: { src: { in: ["did:plc:labeler"] }, val: { eq: "high-quality" } }
+					none: { val: { eq: "spam" } }
+				}
+			}
+		) {
+			edges { node { uri } }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	conn := data["comExampleLabelRecord"].(map[string]interface{})
+	edges := conn["edges"].([]interface{})
+	got := make(map[string]bool, len(edges))
+	for _, edge := range edges {
+		node := edge.(map[string]interface{})["node"].(map[string]interface{})
+		got[node["uri"].(string)] = true
+	}
+	want := []string{uris["one"], uris["three"], uris["five"]}
+	if len(got) != len(want) {
+		t.Fatalf("filtered URI count = %d, want %d: %v", len(got), len(want), got)
+	}
+	for _, uri := range want {
+		if !got[uri] {
+			t.Fatalf("missing URI %s in filtered result %v", uri, got)
+		}
+	}
+	if got[uris["four"]] {
+		t.Fatalf("spam-labelled URI %s should have been excluded", uris["four"])
+	}
+}
+
+func setupExternalLabelsWhereTestDB(t *testing.T) (context.Context, map[string]string) {
+	t.Helper()
+
+	exec, err := sqlite.NewExecutor("sqlite::memory:")
+	if err != nil {
+		t.Fatalf("setupExternalLabelsWhereTestDB: failed to create SQLite executor: %v", err)
+	}
+	t.Cleanup(func() { exec.Close() })
+
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("setupExternalLabelsWhereTestDB: failed to run migrations: %v", err)
+	}
+
+	records := repositories.NewRecordsRepository(exec)
+	externalLabels := repositories.NewExternalLabelsRepository(exec)
+	uris := map[string]string{}
+	for i, rkey := range []string{"one", "two", "three", "four", "five"} {
+		uri := "at://did:plc:test/com.example.label.record/" + rkey
+		uris[rkey] = uri
+		_, err := records.Insert(ctx, uri, "cid-"+rkey, "did:plc:test", "com.example.label.record", `{"text":"hello `+rkey+`"}`)
+		if err != nil {
+			t.Fatalf("setupExternalLabelsWhereTestDB: insert %s: %v", rkey, err)
+		}
+		indexedAt := fmt.Sprintf("2025-01-02T03:04:%02dZ", i+1)
+		if _, err := exec.DB().ExecContext(ctx, "UPDATE record SET indexed_at = ? WHERE uri = ?", indexedAt, uri); err != nil {
+			t.Fatalf("setupExternalLabelsWhereTestDB: set indexed_at %s: %v", rkey, err)
+		}
+	}
+
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := externalLabels.PersistEvent(ctx, url, 1, []repositories.ExternalLabelInput{
+		{LabelIndex: 0, Src: "did:plc:labeler", URI: uris["one"], Val: "high-quality", Cts: "2025-01-02T03:05:01Z", RawJSON: `{}`},
+		{LabelIndex: 1, Src: "did:plc:labeler", URI: uris["three"], Val: "high-quality", Cts: "2025-01-02T03:05:03Z", RawJSON: `{}`},
+		{LabelIndex: 2, Src: "did:plc:labeler", URI: uris["four"], Val: "high-quality", Cts: "2025-01-02T03:05:04Z", RawJSON: `{}`},
+		{LabelIndex: 3, Src: "did:plc:labeler", URI: uris["four"], Val: "spam", Cts: "2025-01-02T03:06:04Z", RawJSON: `{}`},
+		{LabelIndex: 4, Src: "did:plc:labeler", URI: uris["five"], Val: "high-quality", Cts: "2025-01-02T03:05:05Z", RawJSON: `{}`},
+	}); err != nil {
+		t.Fatalf("setupExternalLabelsWhereTestDB: persist labels: %v", err)
+	}
+
+	repos := &resolver.Repositories{Records: records, ExternalLabels: externalLabels}
+	return resolver.WithRepositories(ctx, repos), uris
 }

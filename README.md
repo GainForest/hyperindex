@@ -256,7 +256,31 @@ query {
 
 By default, `externalLabels` returns only active labels: the latest label for each `(src, uri, val)` tuple, excluding latest negations and expired labels. Use `activeOnly: false` to inspect historical rows. Hyperindex only serves labels already ingested locally; it does not subscribe to arbitrary request-provided labelers.
 
-Record filtering with `where.externalLabels` is not available yet; the `externalLabels` field only controls which labels are displayed on returned records.
+Typed collection queries can filter records by external labels before pagination with `where.externalLabels`:
+
+```graphql
+query {
+  appBskyFeedPost(
+    first: 20
+    where: {
+      externalLabels: {
+        has: { val: { eq: "high-quality" } }
+        none: { val: { eq: "spam" } }
+      }
+    }
+  ) {
+    edges {
+      node {
+        uri
+        externalLabels(values: ["high-quality"]) { src val }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+`where.externalLabels` decides which records qualify. The `node.externalLabels(...)` field decides which labels are displayed on each returned record, so repeat the same source/value constraints on the field if you only want to display labels used for filtering.
 
 #### Filtering (`where`)
 

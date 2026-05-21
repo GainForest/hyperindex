@@ -1,0 +1,4 @@
+kind: added
+body: Add external label filters to generated GraphQL record queries so clients can page through records that have or do not have specific locally ingested ATProto labels.
+custom:
+  Affects: user
