@@ -109,6 +109,32 @@ TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.ym
 | `TAP_DISABLE_ACKS` | Disable ack-based delivery (useful for debugging) | `false` |
 | `TAP_SIGNAL_COLLECTION` | Collection NSID for auto-discovery of repos | *(empty)* |
 
+#### Optional: External Labeler Streams
+
+Hyperindex can subscribe to external ATProto labeler streams using `com.atproto.label.subscribeLabels` and persist raw label events locally. This is independent of Tap or Jetstream record ingestion: Tap/Jetstream store records, while labeler subscriptions store external labels.
+
+External labels are written to dedicated tables:
+
+- `label_subscription_state` — one cursor row per subscription URL
+- `external_label` — one row per label event item
+
+Stored external labels are exposed through public GraphQL subject lookups and record `externalLabels` fields. They are not merged into the existing local/admin `label` table.
+
+```bash
+LABELER_SUBSCRIBE_ENABLED=true
+LABELER_SUBSCRIBE_URLS=wss://hyperlabel-proxy-test.up.railway.app/xrpc/com.atproto.label.subscribeLabels
+# Optional reconnect backoff bounds:
+# LABELER_SUBSCRIBE_RECONNECT_MIN=1s
+# LABELER_SUBSCRIBE_RECONNECT_MAX=60s
+```
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LABELER_SUBSCRIBE_ENABLED` | Enable external labeler websocket ingestion | `false` |
+| `LABELER_SUBSCRIBE_URLS` | Comma-separated `com.atproto.label.subscribeLabels` websocket URLs | *(empty)* |
+| `LABELER_SUBSCRIBE_RECONNECT_MIN` | Minimum reconnect backoff | `1s` |
+| `LABELER_SUBSCRIBE_RECONNECT_MAX` | Maximum reconnect backoff | `60s` |
+
 #### Legacy Mode: Jetstream + Backfill
 
 > **Note:** Jetstream+Backfill mode is the legacy ingestion path. It lacks cryptographic verification and ordering guarantees. Use Tap (above) for new deployments.
@@ -188,6 +214,73 @@ query {
   }
 }
 ```
+
+#### External labels
+
+When external labeler ingestion is enabled, Hyperindex stores received ATProto labels locally and exposes them as generic subject metadata. Labels attach to DIDs or AT-URIs, not to app-specific fields inside a record.
+
+```graphql
+query {
+  externalLabels(
+    subjects: ["at://did:plc:abc/app.bsky.feed.post/3kabc"]
+    values: ["high-quality"]
+  ) {
+    src
+    uri
+    cid
+    val
+    cts
+  }
+}
+```
+
+Generated record types and `GenericRecord` also include a virtual `externalLabels` field:
+
+```graphql
+query {
+  appBskyFeedPost(first: 20) {
+    edges {
+      node {
+        uri
+        cid
+        externalLabels(values: ["high-quality"]) {
+          src
+          val
+          cts
+        }
+      }
+    }
+  }
+}
+```
+
+By default, `externalLabels` returns only active labels: the latest label for each `(src, uri, val)` tuple, excluding latest negations and expired labels. Use `activeOnly: false` to inspect historical rows. Hyperindex only serves labels already ingested locally; it does not subscribe to arbitrary request-provided labelers.
+
+Typed collection queries can filter records by external labels before pagination with `where.externalLabels`:
+
+```graphql
+query {
+  appBskyFeedPost(
+    first: 20
+    where: {
+      externalLabels: {
+        has: { val: { eq: "high-quality" } }
+        none: { val: { eq: "spam" } }
+      }
+    }
+  ) {
+    edges {
+      node {
+        uri
+        externalLabels(values: ["high-quality"]) { src val }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+`where.externalLabels` decides which records qualify. The `node.externalLabels(...)` field decides which labels are displayed on each returned record, so repeat the same source/value constraints on the field if you only want to display labels used for filtering.
 
 #### Filtering (`where`)
 
@@ -275,7 +368,16 @@ ADMIN_API_KEY=replace-with-a-random-secret
 # Unset or empty allows all origins. Set a comma-separated list to restrict origins; "*" also allows all origins.
 # ALLOWED_ORIGINS=https://your-frontend.vercel.app
 
-# Jetstream (real-time indexing)
+# Tap record ingestion (recommended)
+# TAP_ENABLED=true
+# TAP_URL=ws://localhost:2480
+# TAP_ADMIN_PASSWORD=replace-with-a-random-secret
+
+# Optional external labeler ingestion. Stores raw labels locally and exposes them through public GraphQL.
+# LABELER_SUBSCRIBE_ENABLED=true
+# LABELER_SUBSCRIBE_URLS=wss://hyperlabel-proxy-test.up.railway.app/xrpc/com.atproto.label.subscribeLabels
+
+# Jetstream (legacy real-time indexing)
 # Collections are auto-discovered from registered lexicons
 # Or specify manually:
 # JETSTREAM_COLLECTIONS=app.bsky.feed.post,app.bsky.feed.like
@@ -304,7 +406,7 @@ The admin API at `/admin/graphql` provides:
 **Queries:**
 - `statistics` - Record, actor, lexicon counts
 - `lexicons` - List registered lexicons
-- `activityBuckets` / `recentActivity` - Jetstream activity data
+- `activityBuckets` / `recentActivity` - Record indexing activity data
 - `settings` - Server configuration
 
 **Mutations:**
@@ -318,25 +420,23 @@ The admin API at `/admin/graphql` provides:
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   Hyperindex (hi) Server                  │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  Jetstream ──→ Consumer ──→ Records DB ──→ GraphQL API │
-│                    │                                    │
-│              Activity Log ──→ Admin Dashboard           │
-│                                                         │
-│  Backfill Worker ──→ AT Protocol Relay ──→ Records DB  │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+```txt
+Tap Sidecar ──→ Tap Consumer ──→ Records DB ──→ GraphQL API
+                         │
+                         └──→ Activity Log ──→ Admin Dashboard
+
+Labeler WebSocket ──→ Labeler Subscriber ──→ External Labels DB
+
+Legacy mode: Jetstream + Backfill ─────────→ Records DB
 ```
 
 **Key Components:**
-- **Jetstream Consumer** - Subscribes to real-time AT Protocol events
-- **Backfill Worker** - Imports historical data from relays
+- **Tap Consumer** - Recommended record ingestion path backed by the Tap sidecar
+- **Labeler Subscriber** - Optionally stores raw external `com.atproto.label.subscribeLabels` events and saved cursors
+- **Jetstream Consumer** - Legacy real-time AT Protocol event ingestion
+- **Backfill Worker** - Legacy historical import from relays
 - **GraphQL Schema Builder** - Generates schema from Lexicons
-- **Activity Tracker** - Logs all indexing activity for monitoring
+- **Activity Tracker** - Logs record indexing activity for monitoring
 
 ## Development
 

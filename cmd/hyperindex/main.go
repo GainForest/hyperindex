@@ -36,7 +36,9 @@ import (
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/jetstream"
+	"github.com/GainForest/hyperindex/internal/labeler"
 	"github.com/GainForest/hyperindex/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/logsafe"
 	"github.com/GainForest/hyperindex/internal/oauth"
 	"github.com/GainForest/hyperindex/internal/server"
 	"github.com/GainForest/hyperindex/internal/tap"
@@ -62,6 +64,7 @@ type services struct {
 	activity         *repositories.JetstreamActivityRepository
 	oauthClients     *repositories.OAuthClientsRepository
 	labels           *repositories.LabelsRepository
+	externalLabels   *repositories.ExternalLabelsRepository
 	labelDefinitions *repositories.LabelDefinitionsRepository
 	labelPreferences *repositories.LabelPreferencesRepository
 	reports          *repositories.ReportsRepository
@@ -76,6 +79,7 @@ type backgroundServices struct {
 	tapConsumer        *tap.Consumer
 	tapCancel          context.CancelFunc
 	tapAdminClient     *tap.AdminClient // reused for health checks; nil when TAP_ENABLED=false
+	labelerCancel      context.CancelFunc
 }
 
 // Stop cleanly shuts down all background services.
@@ -97,6 +101,9 @@ func (bg *backgroundServices) Stop() {
 	}
 	if bg.tapCancel != nil {
 		bg.tapCancel()
+	}
+	if bg.labelerCancel != nil {
+		bg.labelerCancel()
 	}
 }
 
@@ -146,6 +153,9 @@ func run() error {
 	// Start background workers (activity cleanup)
 	startWorkers(svc, bg)
 
+	// Start external labeler subscriptions if configured.
+	startLabelerSubscribers(cfg, svc, bg)
+
 	if cfg.TapEnabled {
 		// Start Tap consumer instead of Jetstream+Backfill
 		startTap(cfg, svc, pubsub, adminHandler, bg)
@@ -186,6 +196,7 @@ func initServices(cfg *config.Config) (*services, error) {
 		activity:         repositories.NewJetstreamActivityRepository(db),
 		oauthClients:     repositories.NewOAuthClientsRepository(db),
 		labels:           repositories.NewLabelsRepository(db),
+		externalLabels:   repositories.NewExternalLabelsRepository(db),
 		labelDefinitions: repositories.NewLabelDefinitionsRepository(db),
 		labelPreferences: repositories.NewLabelPreferencesRepository(db),
 		reports:          repositories.NewReportsRepository(db),
@@ -625,9 +636,10 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 
 	// Create GraphQL handler
 	repos := &resolver.Repositories{
-		Records:  svc.records,
-		Actors:   svc.actors,
-		Lexicons: svc.lexicons,
+		Records:        svc.records,
+		Actors:         svc.actors,
+		Lexicons:       svc.lexicons,
+		ExternalLabels: svc.externalLabels,
 	}
 
 	graphqlHandler, err := hgraphql.NewHandler(registry, repos)
@@ -670,6 +682,28 @@ func startWorkers(svc *services, bg *backgroundServices) {
 	workersCtx, workersCancel := context.WithCancel(context.Background())
 	bg.workersCancel = workersCancel
 	activityCleanupWorker.Start(workersCtx)
+}
+
+func startLabelerSubscribers(cfg *config.Config, svc *services, bg *backgroundServices) {
+	urls := cfg.LabelerSubscribeURLList()
+	if !cfg.LabelerSubscribeEnabled || len(urls) == 0 {
+		if cfg.LabelerSubscribeEnabled && len(urls) == 0 {
+			slog.Info("Labeler subscriptions disabled (LABELER_SUBSCRIBE_URLS empty)")
+		}
+		return
+	}
+
+	labelerCtx, labelerCancel := context.WithCancel(context.Background())
+	bg.labelerCancel = labelerCancel
+
+	subscriber := labeler.NewSubscriber(svc.externalLabels, labeler.Config{
+		URLs:         urls,
+		ReconnectMin: cfg.LabelerSubscribeReconnectMin,
+		ReconnectMax: cfg.LabelerSubscribeReconnectMax,
+	})
+	subscriber.Start(labelerCtx)
+
+	slog.Info("Labeler subscriptions started", "urls", logsafe.URLs(urls))
 }
 
 // startJetstream creates and starts the Jetstream consumer for real-time AT Protocol

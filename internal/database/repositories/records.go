@@ -75,6 +75,36 @@ func (d DIDFilter) IsEmpty() bool {
 	return d.EQ == "" && len(d.IN) == 0
 }
 
+// ExternalLabelStringFilter represents one string condition on an external
+// label column such as src or val. It supports the same string operators exposed
+// by GraphQL StringFilterInput where they are meaningful for label metadata.
+type ExternalLabelStringFilter struct {
+	Operator string      // One of: "eq", "neq", "in", "contains", "startsWith", "isNull".
+	Value    interface{} // For "in", use []interface{} or []string. Other operators expect a scalar string.
+}
+
+// ExternalLabelPredicate describes labels that should exist or not exist for a
+// record. Source filters apply to external_label.src, value filters apply to
+// external_label.val, and ActiveOnly applies ATProto current-label semantics.
+type ExternalLabelPredicate struct {
+	Sources    []ExternalLabelStringFilter
+	Values     []ExternalLabelStringFilter
+	ActiveOnly bool
+}
+
+// ExternalLabelRecordFilter applies external-label existence predicates to
+// record queries. Has keeps records with a matching label. None excludes records
+// with a matching label. When both are set, both conditions must hold.
+type ExternalLabelRecordFilter struct {
+	Has  *ExternalLabelPredicate
+	None *ExternalLabelPredicate
+}
+
+// IsEmpty reports whether no external-label conditions are configured.
+func (f ExternalLabelRecordFilter) IsEmpty() bool {
+	return f.Has == nil && f.None == nil
+}
+
 // SortOption specifies a sort field and direction for record queries.
 type SortOption struct {
 	Field     string // Field name. If "indexed_at", "uri", "did", "collection", "cid", "rkey" — use column directly. Otherwise, use JSONExtract.
@@ -525,6 +555,184 @@ func (r *RecordsRepository) buildDIDFilterClause(f DIDFilter, startPlaceholder i
 	return clause, params, len(f.IN), nil
 }
 
+func (r *RecordsRepository) buildExternalLabelRecordFilterClause(filter ExternalLabelRecordFilter, startPlaceholder int) (string, []database.Value, error) {
+	if filter.IsEmpty() {
+		return "", nil, nil
+	}
+
+	var clauses []string
+	var params []database.Value
+	placeholderIdx := startPlaceholder
+
+	if filter.Has != nil {
+		clause, clauseParams, consumed, err := r.buildExternalLabelExistsSubquery("el_has", *filter.Has, placeholderIdx)
+		if err != nil {
+			return "", nil, err
+		}
+		clauses = append(clauses, fmt.Sprintf("EXISTS (%s)", clause))
+		params = append(params, clauseParams...)
+		placeholderIdx += consumed
+	}
+
+	if filter.None != nil {
+		clause, clauseParams, _, err := r.buildExternalLabelExistsSubquery("el_none", *filter.None, placeholderIdx)
+		if err != nil {
+			return "", nil, err
+		}
+		clauses = append(clauses, fmt.Sprintf("NOT EXISTS (%s)", clause))
+		params = append(params, clauseParams...)
+	}
+
+	return strings.Join(clauses, " AND "), params, nil
+}
+
+func (r *RecordsRepository) buildExternalLabelExistsSubquery(alias string, predicate ExternalLabelPredicate, startPlaceholder int) (string, []database.Value, int, error) {
+	conditions := []string{
+		fmt.Sprintf("%s.uri = record.uri", alias),
+		fmt.Sprintf("(%s.cid IS NULL OR %s.cid = record.cid)", alias, alias),
+	}
+	var params []database.Value
+	placeholderIdx := startPlaceholder
+
+	sourceConditions, sourceParams, consumed, err := r.buildExternalLabelStringFilterConditions(alias+".src", predicate.Sources, placeholderIdx)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	conditions = append(conditions, sourceConditions...)
+	params = append(params, sourceParams...)
+	placeholderIdx += consumed
+
+	valueConditions, valueParams, consumed, err := r.buildExternalLabelStringFilterConditions(alias+".val", predicate.Values, placeholderIdx)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	conditions = append(conditions, valueConditions...)
+	params = append(params, valueParams...)
+	placeholderIdx += consumed
+
+	if predicate.ActiveOnly {
+		conditions = append(conditions, externalLabelActivePredicate(r.db, alias))
+	}
+
+	return fmt.Sprintf("SELECT 1 FROM external_label %s WHERE %s", alias, strings.Join(conditions, " AND ")), params, placeholderIdx - startPlaceholder, nil
+}
+
+func (r *RecordsRepository) buildExternalLabelStringFilterConditions(column string, filters []ExternalLabelStringFilter, startPlaceholder int) ([]string, []database.Value, int, error) {
+	if len(filters) == 0 {
+		return nil, nil, 0, nil
+	}
+
+	var conditions []string
+	var params []database.Value
+	placeholderIdx := startPlaceholder
+	for _, filter := range filters {
+		switch filter.Operator {
+		case "eq":
+			value, err := externalLabelStringFilterValue(filter.Value)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			conditions = append(conditions, fmt.Sprintf("%s = %s", column, r.db.Placeholder(placeholderIdx)))
+			params = append(params, database.Text(value))
+			placeholderIdx++
+		case "neq":
+			value, err := externalLabelStringFilterValue(filter.Value)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			conditions = append(conditions, fmt.Sprintf("%s != %s", column, r.db.Placeholder(placeholderIdx)))
+			params = append(params, database.Text(value))
+			placeholderIdx++
+		case "in":
+			values, err := externalLabelStringFilterList(filter.Value)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			if len(values) == 0 {
+				conditions = append(conditions, "1 = 0")
+				continue
+			}
+			if len(values) > MaxINListSize {
+				return nil, nil, 0, fmt.Errorf("external label filter IN list exceeds maximum of %d values", MaxINListSize)
+			}
+			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", column, r.db.Placeholders(len(values), placeholderIdx)))
+			for _, value := range values {
+				params = append(params, database.Text(value))
+				placeholderIdx++
+			}
+		case "contains":
+			value, err := externalLabelStringFilterValue(filter.Value)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			likeOp := "LIKE"
+			if r.db.Dialect() == database.PostgreSQL {
+				likeOp = "ILIKE"
+			}
+			conditions = append(conditions, fmt.Sprintf("%s %s %s ESCAPE '\\'", column, likeOp, r.db.Placeholder(placeholderIdx)))
+			params = append(params, database.Text("%"+escapeLIKE(value)+"%"))
+			placeholderIdx++
+		case "startsWith":
+			value, err := externalLabelStringFilterValue(filter.Value)
+			if err != nil {
+				return nil, nil, 0, err
+			}
+			likeOp := "LIKE"
+			if r.db.Dialect() == database.PostgreSQL {
+				likeOp = "ILIKE"
+			}
+			conditions = append(conditions, fmt.Sprintf("%s %s %s ESCAPE '\\'", column, likeOp, r.db.Placeholder(placeholderIdx)))
+			params = append(params, database.Text(escapeLIKE(value)+"%"))
+			placeholderIdx++
+		case "isNull":
+			isNull, _ := filter.Value.(bool)
+			if isNull {
+				conditions = append(conditions, fmt.Sprintf("%s IS NULL", column))
+			} else {
+				conditions = append(conditions, fmt.Sprintf("%s IS NOT NULL", column))
+			}
+		default:
+			return nil, nil, 0, fmt.Errorf("unsupported external label filter operator %q", filter.Operator)
+		}
+	}
+
+	return conditions, params, placeholderIdx - startPlaceholder, nil
+}
+
+func externalLabelStringFilterValue(value interface{}) (string, error) {
+	valueString, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("external label string filter value must be a string, got %T", value)
+	}
+	return valueString, nil
+}
+
+func externalLabelStringFilterList(value interface{}) ([]string, error) {
+	switch typedValue := value.(type) {
+	case []interface{}:
+		values := make([]string, 0, len(typedValue))
+		for _, item := range typedValue {
+			valueString, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("external label IN filter value must contain strings, got %T", item)
+			}
+			values = append(values, valueString)
+		}
+		return values, nil
+	case []string:
+		return typedValue, nil
+	default:
+		return nil, fmt.Errorf("external label IN filter value must be a string list, got %T", value)
+	}
+}
+
+func (r *RecordsRepository) appendConvertedParams(args []any, params []database.Value) []any {
+	for _, p := range params {
+		args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+	}
+	return args
+}
+
 // toDBValue converts an interface{} value to a database.Value.
 func toDBValue(v interface{}) database.Value {
 	switch val := v.(type) {
@@ -733,6 +941,22 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	limit int,
 	afterCursorValues []string,
 ) ([]*Record, error) {
+	return r.GetByCollectionSortedWithKeysetCursorAndExternalLabels(ctx, collection, filters, didFilter, ExternalLabelRecordFilter{}, sort, limit, afterCursorValues)
+}
+
+// GetByCollectionSortedWithKeysetCursorAndExternalLabels retrieves records for a
+// collection with JSON field filters, DID filters, external-label filters, a
+// configurable sort order, and keyset-based pagination.
+func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursorAndExternalLabels(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilter ExternalLabelRecordFilter,
+	sort *SortOption,
+	limit int,
+	afterCursorValues []string,
+) ([]*Record, error) {
 	var whereParts []string
 	var args []any
 
@@ -790,13 +1014,20 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	}
 
 	// DID filter
-	if didClause, didParams, _, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
+	if didClause, didParams, consumed, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
 		return nil, fmt.Errorf("failed to build DID filter clause: %w", err)
 	} else if didClause != "" {
 		whereParts = append(whereParts, didClause)
-		for _, p := range didParams {
-			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
-		}
+		args = r.appendConvertedParams(args, didParams)
+		nextPlaceholder += consumed
+	}
+
+	// External label filters
+	if labelClause, labelParams, err := r.buildExternalLabelRecordFilterClause(externalLabelFilter, nextPlaceholder); err != nil {
+		return nil, fmt.Errorf("failed to build external label filter clause: %w", err)
+	} else if labelClause != "" {
+		whereParts = append(whereParts, labelClause)
+		args = r.appendConvertedParams(args, labelParams)
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
@@ -836,6 +1067,22 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	collection string,
 	filters []FieldFilter,
 	didFilter DIDFilter,
+	sort *SortOption,
+	limit int,
+	beforeCursorValues []string,
+) ([]*Record, error) {
+	return r.GetByCollectionReversedWithKeysetCursorAndExternalLabels(ctx, collection, filters, didFilter, ExternalLabelRecordFilter{}, sort, limit, beforeCursorValues)
+}
+
+// GetByCollectionReversedWithKeysetCursorAndExternalLabels retrieves records for
+// backward pagination while applying JSON field, DID, and external-label filters
+// before LIMIT so Relay pagination stays correct.
+func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursorAndExternalLabels(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilter ExternalLabelRecordFilter,
 	sort *SortOption,
 	limit int,
 	beforeCursorValues []string,
@@ -911,13 +1158,20 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	}
 
 	// DID filter
-	if didClause, didParams, _, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
+	if didClause, didParams, consumed, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
 		return nil, fmt.Errorf("failed to build DID filter clause: %w", err)
 	} else if didClause != "" {
 		whereParts = append(whereParts, didClause)
-		for _, p := range didParams {
-			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
-		}
+		args = r.appendConvertedParams(args, didParams)
+		nextPlaceholder += consumed
+	}
+
+	// External label filters
+	if labelClause, labelParams, err := r.buildExternalLabelRecordFilterClause(externalLabelFilter, nextPlaceholder); err != nil {
+		return nil, fmt.Errorf("failed to build external label filter clause: %w", err)
+	} else if labelClause != "" {
+		whereParts = append(whereParts, labelClause)
+		args = r.appendConvertedParams(args, labelParams)
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
@@ -1034,6 +1288,18 @@ func (r *RecordsRepository) GetCountByDID(ctx context.Context, did string) (int6
 func (r *RecordsRepository) GetCollectionCountFiltered(
 	ctx context.Context, collection string, filters []FieldFilter, didFilter DIDFilter,
 ) (int64, error) {
+	return r.GetCollectionCountFilteredWithExternalLabels(ctx, collection, filters, didFilter, ExternalLabelRecordFilter{})
+}
+
+// GetCollectionCountFilteredWithExternalLabels returns the count with optional
+// DID, JSON field, and external-label filters applied.
+func (r *RecordsRepository) GetCollectionCountFilteredWithExternalLabels(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilter ExternalLabelRecordFilter,
+) (int64, error) {
 	var whereParts []string
 	var params []database.Value
 
@@ -1054,11 +1320,20 @@ func (r *RecordsRepository) GetCollectionCountFiltered(
 	}
 
 	// DID filter
-	if didClause, didParams, _, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
+	if didClause, didParams, consumed, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
 		return 0, fmt.Errorf("failed to build DID filter clause: %w", err)
 	} else if didClause != "" {
 		whereParts = append(whereParts, didClause)
 		params = append(params, didParams...)
+		nextPlaceholder += consumed
+	}
+
+	// External label filters
+	if labelClause, labelParams, err := r.buildExternalLabelRecordFilterClause(externalLabelFilter, nextPlaceholder); err != nil {
+		return 0, fmt.Errorf("failed to build external label filter clause: %w", err)
+	} else if labelClause != "" {
+		whereParts = append(whereParts, labelClause)
+		params = append(params, labelParams...)
 	}
 
 	whereClause := strings.Join(whereParts, " AND ")
