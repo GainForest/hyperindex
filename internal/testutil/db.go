@@ -22,6 +22,7 @@ type TestDB struct {
 	Activity         *repositories.JetstreamActivityRepository
 	OAuthClients     *repositories.OAuthClientsRepository
 	Labels           *repositories.LabelsRepository
+	ExternalLabels   *repositories.ExternalLabelsRepository
 	LabelDefinitions *repositories.LabelDefinitionsRepository
 	LabelPreferences *repositories.LabelPreferencesRepository
 	Reports          *repositories.ReportsRepository
@@ -52,6 +53,7 @@ func SetupTestDB(t *testing.T) *TestDB {
 		Activity:         repositories.NewJetstreamActivityRepository(exec),
 		OAuthClients:     repositories.NewOAuthClientsRepository(exec),
 		Labels:           repositories.NewLabelsRepository(exec),
+		ExternalLabels:   repositories.NewExternalLabelsRepository(exec),
 		LabelDefinitions: repositories.NewLabelDefinitionsRepository(exec),
 		LabelPreferences: repositories.NewLabelPreferencesRepository(exec),
 		Reports:          repositories.NewReportsRepository(exec),
