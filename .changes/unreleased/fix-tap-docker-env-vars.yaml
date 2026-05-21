@@ -1,5 +1,0 @@
-kind: fixed
-body: Fix Tap Docker configuration so deployments use TAP_COLLECTION_FILTERS for sidecar filtering and require ADMIN_API_KEY explicitly at startup.
-time: 2026-04-30T00:00:00.000000000+00:00
-custom:
-    Affects: operator

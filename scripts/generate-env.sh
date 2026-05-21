@@ -84,10 +84,17 @@ elif (( ${#admin_api_key} < 16 )); then
   fail "ADMIN_API_KEY must be at least 16 characters, or blank to generate a secure value."
 fi
 
-tap_admin_password="$(prompt_secret_value 'TAP_ADMIN_PASSWORD (blank to generate): ')"
-if [[ -z "$tap_admin_password" ]]; then
-  tap_admin_password="$(generate_secret)"
-fi
+while true; do
+  tap_admin_password="$(prompt_secret_value 'TAP_ADMIN_PASSWORD (blank to generate): ')"
+  if [[ -z "$tap_admin_password" ]]; then
+    tap_admin_password="$(generate_secret)"
+    break
+  fi
+  if (( ${#tap_admin_password} >= 16 )); then
+    break
+  fi
+  printf 'TAP_ADMIN_PASSWORD must be at least 16 characters, or blank to generate a secure value.\n' >&2
+done
 
 tap_signal_collection="$(prompt_value 'TAP_SIGNAL_COLLECTION (optional): ')"
 tap_collection_filters="$(prompt_value 'TAP_COLLECTION_FILTERS (optional): ')"

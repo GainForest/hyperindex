@@ -1,5 +1,0 @@
-kind: added
-body: Add a Tap Docker environment generator so operators can create required secrets and optional Tap filters without copying the full example environment. Manually entered secrets are hidden, and OpenSSL is only required when the script generates missing values.
-time: 2026-04-30T00:00:00.000000000+00:00
-custom:
-    Affects: operator
