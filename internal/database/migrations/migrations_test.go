@@ -40,6 +40,8 @@ func TestMigrations_Run(t *testing.T) {
 		"report",
 		"label_definition",
 		"actor_label_preference",
+		"label_subscription_state",
+		"external_label",
 	}
 
 	for _, table := range expectedTables {
