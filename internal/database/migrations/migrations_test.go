@@ -53,6 +53,20 @@ func TestMigrations_Run(t *testing.T) {
 			t.Errorf("expected table %q to exist, but got error: %v", table, err)
 		}
 	}
+
+	expectedIndexes := []string{
+		"idx_external_label_active_lookup",
+	}
+
+	for _, index := range expectedIndexes {
+		var name string
+		err := exec.DB().QueryRowContext(ctx,
+			"SELECT name FROM sqlite_master WHERE type='index' AND name=?", index,
+		).Scan(&name)
+		if err != nil {
+			t.Errorf("expected index %q to exist, but got error: %v", index, err)
+		}
+	}
 }
 
 func TestMigrations_RunIdempotent(t *testing.T) {
