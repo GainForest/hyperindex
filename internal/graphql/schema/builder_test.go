@@ -435,11 +435,13 @@ func TestBuildRecordType_ReservedFieldCollision(t *testing.T) {
 	tests := []struct {
 		name      string
 		colliding string // reserved property name the lexicon tries to define
+		wantType  string
 	}{
-		{name: "uri collision", colliding: "uri"},
-		{name: "did collision", colliding: "did"},
-		{name: "cid collision", colliding: "cid"},
-		{name: "rkey collision", colliding: "rkey"},
+		{name: "uri collision", colliding: "uri", wantType: "String!"},
+		{name: "did collision", colliding: "did", wantType: "String!"},
+		{name: "cid collision", colliding: "cid", wantType: "String!"},
+		{name: "rkey collision", colliding: "rkey", wantType: "String!"},
+		{name: "externalLabels collision", colliding: "externalLabels", wantType: "[ExternalLabel!]!"},
 	}
 
 	for _, tt := range tests {
@@ -463,14 +465,14 @@ func TestBuildRecordType_ReservedFieldCollision(t *testing.T) {
 
 			fields := recordType.Fields()
 
-			// The reserved metadata field must still be present and be NonNull String.
+			// The reserved metadata field must still be present with its generated type.
 			metaField, ok := fields[tt.colliding]
 			if !ok {
 				t.Fatalf("metadata field %q is missing from the type", tt.colliding)
 			}
-			if metaField.Type.String() != "String!" {
+			if metaField.Type.String() != tt.wantType {
 				t.Errorf("metadata field %q type = %q, want %q (lexicon property must not overwrite it)",
-					tt.colliding, metaField.Type.String(), "String!")
+					tt.colliding, metaField.Type.String(), tt.wantType)
 			}
 
 			// The normal non-colliding property must still be present.
@@ -489,6 +491,7 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 		{name: "uri collision in WhereInput", colliding: "uri"},
 		{name: "cid collision in WhereInput", colliding: "cid"},
 		{name: "rkey collision in WhereInput", colliding: "rkey"},
+		{name: "externalLabels collision in WhereInput", colliding: "externalLabels"},
 	}
 
 	for _, tt := range tests {
@@ -915,7 +918,8 @@ func setupSchemaRecordTestDB(t *testing.T, rec *repositories.Record) context.Con
 	}
 
 	repos := &resolver.Repositories{
-		Records: records,
+		Records:        records,
+		ExternalLabels: repositories.NewExternalLabelsRepository(exec),
 	}
 	return resolver.WithRepositories(ctx, repos)
 }
@@ -1383,4 +1387,214 @@ func TestExtractFilters_MaxFilterConditions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExternalLabelsGraphQLRootAndRecordHydration(t *testing.T) {
+	const recordURI = "at://did:plc:test/com.example.label.record/rkey1"
+
+	schema := buildExternalLabelsTestSchema(t)
+	ctx := setupExternalLabelsGraphQLTestDB(t)
+
+	query := `{
+		externalLabels(subjects: ["at://did:plc:test/com.example.label.record/rkey1"], values: ["high-quality"]) {
+			src
+			uri
+			cid
+			val
+			neg
+			cts
+		}
+		comExampleLabelRecord(first: 10) {
+			edges {
+				node {
+					uri
+					cid
+					externalLabels(values: ["high-quality"]) { src val neg }
+					history: externalLabels(activeOnly: false, values: ["draft"]) { val neg }
+				}
+			}
+		}
+		records(collection: "com.example.label.record", first: 10) {
+			edges {
+				node {
+					uri
+					externalLabels(values: ["high-quality"]) { val neg }
+				}
+			}
+		}
+		search(query: "hello", collection: "com.example.label.record", first: 10) {
+			edges {
+				node {
+					uri
+					externalLabels(values: ["high-quality"]) { val neg }
+				}
+			}
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+
+	rootLabels := data["externalLabels"].([]interface{})
+	if len(rootLabels) != 1 {
+		t.Fatalf("root externalLabels length = %d, want 1: %v", len(rootLabels), rootLabels)
+	}
+	rootLabel := rootLabels[0].(map[string]interface{})
+	if rootLabel["uri"] != recordURI || rootLabel["val"] != "high-quality" || rootLabel["neg"] != false {
+		t.Fatalf("root label = %+v, want active high-quality label for %s", rootLabel, recordURI)
+	}
+
+	typedNode := firstConnectionNode(t, data["comExampleLabelRecord"], "comExampleLabelRecord")
+	typedLabels := typedNode["externalLabels"].([]interface{})
+	if len(typedLabels) != 1 {
+		t.Fatalf("typed externalLabels length = %d, want 1: %v", len(typedLabels), typedLabels)
+	}
+	if got := typedLabels[0].(map[string]interface{})["val"]; got != "high-quality" {
+		t.Fatalf("typed externalLabels[0].val = %v, want high-quality", got)
+	}
+
+	historyLabels := typedNode["history"].([]interface{})
+	if len(historyLabels) != 2 {
+		t.Fatalf("history length = %d, want 2: %v", len(historyLabels), historyLabels)
+	}
+	if got := historyLabels[0].(map[string]interface{})["neg"]; got != true {
+		t.Fatalf("history[0].neg = %v, want latest negation first", got)
+	}
+	if got := historyLabels[1].(map[string]interface{})["neg"]; got != false {
+		t.Fatalf("history[1].neg = %v, want older positive second", got)
+	}
+
+	genericNode := firstConnectionNode(t, data["records"], "records")
+	genericLabels := genericNode["externalLabels"].([]interface{})
+	if len(genericLabels) != 1 {
+		t.Fatalf("generic externalLabels length = %d, want 1: %v", len(genericLabels), genericLabels)
+	}
+	if got := genericLabels[0].(map[string]interface{})["val"]; got != "high-quality" {
+		t.Fatalf("generic externalLabels[0].val = %v, want high-quality", got)
+	}
+
+	searchNode := firstConnectionNode(t, data["search"], "search")
+	searchLabels := searchNode["externalLabels"].([]interface{})
+	if len(searchLabels) != 1 {
+		t.Fatalf("search externalLabels length = %d, want 1: %v", len(searchLabels), searchLabels)
+	}
+	if got := searchLabels[0].(map[string]interface{})["val"]; got != "high-quality" {
+		t.Fatalf("search externalLabels[0].val = %v, want high-quality", got)
+	}
+}
+
+func TestExternalLabelsGraphQLByURIHydration(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx := setupExternalLabelsGraphQLTestDB(t)
+
+	query := `{
+		comExampleLabelRecordByUri(uri: "at://did:plc:test/com.example.label.record/rkey1") {
+			uri
+			externalLabels(values: ["high-quality"]) { val }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	record := data["comExampleLabelRecordByUri"].(map[string]interface{})
+	labels := record["externalLabels"].([]interface{})
+	if len(labels) != 1 {
+		t.Fatalf("ByUri externalLabels length = %d, want 1: %v", len(labels), labels)
+	}
+}
+
+func buildExternalLabelsTestSchema(t *testing.T) *graphql.Schema {
+	t.Helper()
+
+	registry := lexicon.NewRegistry()
+	registry.Register(&lexicon.Lexicon{
+		ID: "com.example.label.record",
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "text", Property: lexicon.Property{Type: lexicon.TypeString}},
+				},
+			},
+		},
+	})
+
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("buildExternalLabelsTestSchema: failed to build schema: %v", err)
+	}
+	return schema
+}
+
+func setupExternalLabelsGraphQLTestDB(t *testing.T) context.Context {
+	t.Helper()
+
+	exec, err := sqlite.NewExecutor("sqlite::memory:")
+	if err != nil {
+		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to create SQLite executor: %v", err)
+	}
+	t.Cleanup(func() { exec.Close() })
+
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to run migrations: %v", err)
+	}
+
+	records := repositories.NewRecordsRepository(exec)
+	externalLabels := repositories.NewExternalLabelsRepository(exec)
+	const recordURI = "at://did:plc:test/com.example.label.record/rkey1"
+	const recordCID = "bafyrecordcid"
+	if err := records.BatchInsert(ctx, []*repositories.Record{{
+		URI:        recordURI,
+		CID:        recordCID,
+		DID:        "did:plc:test",
+		Collection: "com.example.label.record",
+		JSON:       `{"text":"hello"}`,
+		RKey:       "rkey1",
+	}}); err != nil {
+		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to insert record: %v", err)
+	}
+
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := externalLabels.PersistEvent(ctx, url, 1, []repositories.ExternalLabelInput{
+		{LabelIndex: 0, Src: "did:plc:labeler", URI: recordURI, CID: stringPtr(recordCID), Val: "high-quality", Cts: "2025-01-02T03:04:05Z", RawJSON: `{}`},
+		{LabelIndex: 1, Src: "did:plc:labeler", URI: recordURI, CID: stringPtr(recordCID), Val: "draft", Cts: "2025-01-02T03:05:05Z", RawJSON: `{}`},
+	}); err != nil {
+		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to persist first labels: %v", err)
+	}
+	if err := externalLabels.PersistEvent(ctx, url, 2, []repositories.ExternalLabelInput{
+		{LabelIndex: 0, Src: "did:plc:labeler", URI: recordURI, CID: stringPtr(recordCID), Val: "draft", Neg: true, Cts: "2025-01-02T03:06:05Z", RawJSON: `{}`},
+	}); err != nil {
+		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to persist second labels: %v", err)
+	}
+
+	repos := &resolver.Repositories{
+		Records:        records,
+		ExternalLabels: externalLabels,
+	}
+	return resolver.WithRepositories(ctx, repos)
+}
+
+func stringPtr(value string) *string {
+	return &value
 }

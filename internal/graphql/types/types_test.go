@@ -312,8 +312,8 @@ func TestObjectBuilder_BuildRecordType(t *testing.T) {
 	// Force field thunk resolution by getting the fields.
 	fields := obj.Fields()
 
-	// Must have "uri" and "cid" standard fields.
-	for _, std := range []string{"uri", "cid"} {
+	// Must have standard metadata fields.
+	for _, std := range []string{"uri", "cid", "externalLabels"} {
 		if _, ok := fields[std]; !ok {
 			t.Errorf("missing standard field %q", std)
 		}
@@ -335,7 +335,7 @@ func TestObjectBuilder_BuildRecordType(t *testing.T) {
 }
 
 func TestObjectBuilder_BuildRecordType_SkipsReservedFields(t *testing.T) {
-	// A lexicon that defines properties named "uri", "did", "cid", "rkey" — all reserved.
+	// A lexicon that defines reserved metadata field names must not overwrite them.
 	// These must NOT overwrite the metadata fields injected by buildRecordFields.
 	tests := []struct {
 		name         string
@@ -346,6 +346,7 @@ func TestObjectBuilder_BuildRecordType_SkipsReservedFields(t *testing.T) {
 		{name: "did collision", colliding: "did", wantMetaType: "String!"},
 		{name: "cid collision", colliding: "cid", wantMetaType: "String!"},
 		{name: "rkey collision", colliding: "rkey", wantMetaType: "String!"},
+		{name: "externalLabels collision", colliding: "externalLabels", wantMetaType: "[ExternalLabel!]!"},
 	}
 
 	for _, tt := range tests {

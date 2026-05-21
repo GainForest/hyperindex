@@ -635,9 +635,10 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 
 	// Create GraphQL handler
 	repos := &resolver.Repositories{
-		Records:  svc.records,
-		Actors:   svc.actors,
-		Lexicons: svc.lexicons,
+		Records:        svc.records,
+		Actors:         svc.actors,
+		Lexicons:       svc.lexicons,
+		ExternalLabels: svc.externalLabels,
 	}
 
 	graphqlHandler, err := hgraphql.NewHandler(registry, repos)

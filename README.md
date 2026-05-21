@@ -118,7 +118,7 @@ External labels are written to dedicated tables:
 - `label_subscription_state` — one cursor row per subscription URL
 - `external_label` — one row per label event item
 
-This ingestion slice does **not** expose external labels in public GraphQL responses yet, and it does **not** merge remote labels into the existing local/admin `label` table.
+Stored external labels are exposed through public GraphQL subject lookups and record `externalLabels` fields. They are not merged into the existing local/admin `label` table.
 
 ```bash
 LABELER_SUBSCRIBE_ENABLED=true
@@ -215,6 +215,49 @@ query {
 }
 ```
 
+#### External labels
+
+When external labeler ingestion is enabled, Hyperindex stores received ATProto labels locally and exposes them as generic subject metadata. Labels attach to DIDs or AT-URIs, not to app-specific fields inside a record.
+
+```graphql
+query {
+  externalLabels(
+    subjects: ["at://did:plc:abc/app.bsky.feed.post/3kabc"]
+    values: ["high-quality"]
+  ) {
+    src
+    uri
+    cid
+    val
+    cts
+  }
+}
+```
+
+Generated record types and `GenericRecord` also include a virtual `externalLabels` field:
+
+```graphql
+query {
+  appBskyFeedPost(first: 20) {
+    edges {
+      node {
+        uri
+        cid
+        externalLabels(values: ["high-quality"]) {
+          src
+          val
+          cts
+        }
+      }
+    }
+  }
+}
+```
+
+By default, `externalLabels` returns only active labels: the latest label for each `(src, uri, val)` tuple, excluding latest negations and expired labels. Use `activeOnly: false` to inspect historical rows. Hyperindex only serves labels already ingested locally; it does not subscribe to arbitrary request-provided labelers.
+
+Record filtering with `where.externalLabels` is not available yet; the `externalLabels` field only controls which labels are displayed on returned records.
+
 #### Filtering (`where`)
 
 Typed collection queries accept a `where` argument with per-field filters:
@@ -306,8 +349,7 @@ ADMIN_API_KEY=replace-with-a-random-secret
 # TAP_URL=ws://localhost:2480
 # TAP_ADMIN_PASSWORD=replace-with-a-random-secret
 
-# Optional external labeler ingestion. Stores raw labels locally only;
-# external labels are not exposed in public GraphQL responses yet.
+# Optional external labeler ingestion. Stores raw labels locally and exposes them through public GraphQL.
 # LABELER_SUBSCRIBE_ENABLED=true
 # LABELER_SUBSCRIBE_URLS=wss://hyperlabel-proxy-test.up.railway.app/xrpc/com.atproto.label.subscribeLabels
 

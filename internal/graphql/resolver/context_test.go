@@ -70,4 +70,7 @@ func TestRepositoriesStruct(t *testing.T) {
 	if repos.Lexicons != nil {
 		t.Errorf("Expected Lexicons to be nil initially")
 	}
+	if repos.ExternalLabels != nil {
+		t.Errorf("Expected ExternalLabels to be nil initially")
+	}
 }

@@ -29,7 +29,7 @@ It is not ideal as the first storage target for external labeler events because:
 - It does not store label signatures or protocol version.
 - It was designed for local/admin moderation state, not raw external labeler ingestion.
 
-For this reason, external labeler events should be stored in dedicated tables first. A later slice can decide how to expose or merge those labels in GraphQL.
+For this reason, external labeler events should be stored in dedicated tables first. GraphQL exposure is handled separately in `docs/external-labels-graphql-plan.md`; external labels still remain separate from the local/admin moderation label table.
 
 ## Initial labeler URL
 
@@ -403,14 +403,14 @@ Suggested summary:
 Add configurable ATProto labeler websocket ingestion that stores external label events locally and resumes from saved cursors.
 ```
 
-Mention that this does not yet expose external labels in public GraphQL responses.
+Mention that this ingestion-only slice did not expose external labels in public GraphQL responses by itself.
 
-## Later slice
+## Follow-up slices
 
 After ingestion/storage lands:
 
 1. Query active external labels from `external_label`.
-2. Expose external labels alongside local/admin `label` table results in the query layer without writing remote assertions into the local/admin `label` table by default.
-3. Add `labels` to generated record GraphQL types and generic records.
+2. Expose external labels in public GraphQL subject lookups and record fields without writing remote assertions into the local/admin `label` table.
+3. Optionally support `where.externalLabels` record filtering before pagination.
 4. Optionally support `atproto-accept-labelers` to let callers choose label sources.
 5. Add reconciliation/fallback through `queryLabels` for cases where websocket cursor history is unavailable.

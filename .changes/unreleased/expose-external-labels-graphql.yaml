@@ -1,0 +1,4 @@
+kind: added
+body: Expose locally ingested external ATProto labels through public GraphQL subject lookups and record-level externalLabels fields.
+custom:
+  Affects: user
