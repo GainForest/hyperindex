@@ -1,0 +1,4 @@
+kind: added
+body: Add a Lexicons page action and docs so operators can reload the public GraphQL schema after lexicon changes without restarting the backend.
+custom:
+  Affects: operator

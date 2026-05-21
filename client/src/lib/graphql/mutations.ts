@@ -47,6 +47,18 @@ export const UPLOAD_LEXICONS = gql`
   }
 `;
 
+// RELOAD_SCHEMA rebuilds the live public /graphql schema from current lexicon sources without restarting the backend.
+export const RELOAD_SCHEMA = gql`
+  mutation ReloadSchema {
+    reloadSchema {
+      success
+      lexiconCount
+      reloadedAt
+      error
+    }
+  }
+`;
+
 // Reset All
 export const RESET_ALL = gql`
   mutation ResetAll($confirm: String!) {
