@@ -9,8 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/GainForest/hyperindex/internal/buildinfo"
 	"github.com/GainForest/hyperindex/internal/config"
+	"github.com/GainForest/hyperindex/internal/graphql/admin"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 func TestRootEndpointReturnsBuildInfoVersion(t *testing.T) {
@@ -90,5 +95,36 @@ func TestApplyTapSidecarHealth(t *testing.T) {
 				t.Fatalf("unexpected sidecar_error in stats payload")
 			}
 		})
+	}
+}
+
+func TestSetupGraphQLWiresAdminSchemaReloadCallback(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	svc := &services{
+		db:       db.Executor,
+		records:  db.Records,
+		actors:   db.Actors,
+		lexicons: db.Lexicons,
+	}
+	adminHandler, err := admin.NewHandler(&admin.Repositories{}, nil, "did:web:example.com", "super-secret-key", []string{"did:plc:admin1"})
+	if err != nil {
+		t.Fatalf("failed to create admin handler: %v", err)
+	}
+
+	r := chi.NewRouter()
+	collections := setupGraphQL(r, &config.Config{LexiconDir: t.TempDir()}, svc, subscription.NewPubSub(), adminHandler)
+	if len(collections) != 0 {
+		t.Fatalf("collections = %v, want empty", collections)
+	}
+
+	result, err := adminHandler.Resolver().ReloadSchema(context.Background())
+	if err != nil {
+		t.Fatalf("reload callback was not wired correctly: %v", err)
+	}
+	if result["success"] != true {
+		t.Fatalf("reload success = %v, want true; result=%+v", result["success"], result)
+	}
+	if result["lexiconCount"] != 0 {
+		t.Fatalf("lexiconCount = %v, want 0", result["lexiconCount"])
 	}
 }

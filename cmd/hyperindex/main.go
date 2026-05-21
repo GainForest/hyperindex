@@ -35,7 +35,6 @@ import (
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/jetstream"
-	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/oauth"
 	"github.com/GainForest/hyperindex/internal/server"
 	"github.com/GainForest/hyperindex/internal/tap"
@@ -140,7 +139,7 @@ func run() error {
 
 	// Load lexicons and set up public GraphQL + subscriptions
 	pubsub := subscription.NewPubSub()
-	collections := setupGraphQL(r, cfg, svc, pubsub)
+	collections := setupGraphQL(r, cfg, svc, pubsub, adminHandler)
 
 	// Start background workers (activity cleanup)
 	startWorkers(svc, bg)
@@ -438,7 +437,7 @@ func setupOAuth(r *chi.Mux, cfg *config.Config, svc *services, bg *backgroundSer
 
 // setupAdmin creates the admin GraphQL handler with backfill callbacks and
 // registers admin routes + GraphiQL playgrounds. Returns the handler (or nil
-// if setup fails) so callers can wire up the lexicon change callback.
+// if setup fails) so callers can wire reload and lexicon-change callbacks.
 func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 	adminRepos := &admin.Repositories{
 		Records:          svc.records,
@@ -584,52 +583,32 @@ func configureBackfillCallbacks(adminHandler *admin.Handler, cfg *config.Config,
 	slog.Info("Backfill callbacks configured for admin UI")
 }
 
-// setupGraphQL loads lexicons from disk and database, creates the public GraphQL
-// handler with WebSocket subscriptions, and returns the resolved collection list
-// for Jetstream configuration.
-func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscription.PubSub) []string {
-	// Load lexicons from filesystem
-	registry := lexicon.NewRegistry()
-	lexiconDir := cfg.LexiconDir
-	if lexiconDir == "" {
-		lexiconDir = "testdata/lexicons"
-	}
-
-	if _, err := os.Stat(lexiconDir); err == nil {
-		if err := loadLexiconsFromDir(lexiconDir, registry); err != nil {
-			slog.Warn("Failed to load lexicons from directory", "dir", lexiconDir, "error", err)
-		} else {
-			slog.Info("Loaded lexicons from directory", "count", registry.Count(), "dir", lexiconDir)
-		}
-	}
-
-	// Load lexicons from database (uploaded via admin UI)
+// setupGraphQL creates the reloadable public GraphQL schema manager, registers
+// HTTP and WebSocket handlers, wires admin schema reload, and returns the resolved
+// collection list for Jetstream configuration.
+func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscription.PubSub, adminHandler *admin.Handler) []string {
 	ctx := context.Background()
-	dbLexicons, err := svc.lexicons.GetAll(ctx)
-	if err != nil {
-		slog.Warn("Failed to load lexicons from database", "error", err)
-	} else if len(dbLexicons) > 0 {
-		dbLoaded := 0
-		for _, dbLex := range dbLexicons {
-			if _, err := registry.ParseAndRegister(dbLex.JSON); err != nil {
-				slog.Warn("Failed to parse database lexicon", "id", dbLex.ID, "error", err)
-			} else {
-				dbLoaded++
-			}
-		}
-		slog.Info("Loaded lexicons from database", "count", dbLoaded, "total", len(dbLexicons))
-	}
-
-	slog.Info("Total lexicons registered", "count", registry.Count())
-
-	// Create GraphQL handler
 	repos := &resolver.Repositories{
 		Records:  svc.records,
 		Actors:   svc.actors,
 		Lexicons: svc.lexicons,
 	}
 
-	graphqlHandler, err := hgraphql.NewHandler(registry, repos)
+	schemaManager := hgraphql.NewPublicSchemaManager(hgraphql.PublicSchemaManagerConfig{LexiconDir: cfg.LexiconDir}, repos)
+	if result, err := schemaManager.Reload(ctx); err != nil {
+		slog.Error("Failed to initialize public GraphQL schema manager", "error", err)
+	} else if !result.Success {
+		slog.Error("Initial public GraphQL schema reload failed; /graphql will return 503 until reload succeeds", "error", result.Error, "active_lexicon_count", result.LexiconCount)
+	} else {
+		slog.Info("Initial public GraphQL schema loaded", "lexicon_count", result.LexiconCount, "reloaded_at", result.ReloadedAt)
+	}
+
+	if adminHandler != nil {
+		adminHandler.Resolver().SetSchemaReloadCallback(schemaManager.Reload)
+		slog.Info("Admin schema reload callback configured")
+	}
+
+	graphqlHandler, err := hgraphql.NewHandlerWithSchemaProvider(schemaManager, repos)
 	if err != nil {
 		slog.Error("Failed to create GraphQL handler", "error", err)
 	} else {
@@ -637,7 +616,6 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 		r.Handle("/graphql/", graphqlHandler)
 		slog.Info("GraphQL endpoint enabled", "path", "/graphql")
 
-		// WebSocket subscription endpoint
 		var allowedOrigins []string
 		if cfg.AllowedOrigins != "" {
 			allowedOrigins = strings.Split(cfg.AllowedOrigins, ",")
@@ -645,18 +623,24 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 				allowedOrigins[i] = strings.TrimSpace(allowedOrigins[i])
 			}
 		}
-		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema(), pubsub, allowedOrigins)
+		subscriptionHandler := subscription.NewHandlerWithSchemaProvider(schemaManager, pubsub, allowedOrigins)
 		r.Handle("/graphql/ws", subscriptionHandler)
 		slog.Info("GraphQL subscriptions enabled", "path", "/graphql/ws")
 	}
 
-	// Resolve collections for Jetstream
+	// Resolve collections for Jetstream. This remains separate from schema reload
+	// so manual public schema reload does not alter ingestion filters.
 	var collections []string
 	if cfg.JetstreamCollections != "" {
 		collections = atproto.ParseCollections(cfg.JetstreamCollections)
 	} else {
-		for _, lex := range dbLexicons {
-			collections = append(collections, lex.ID)
+		dbLexicons, err := svc.lexicons.GetAll(ctx)
+		if err != nil {
+			slog.Warn("Failed to load lexicons for Jetstream collection configuration", "error", err)
+		} else {
+			for _, lex := range dbLexicons {
+				collections = append(collections, lex.ID)
+			}
 		}
 	}
 
@@ -890,18 +874,6 @@ func serve(r *chi.Mux, cfg *config.Config, bg *backgroundServices) error {
 	}
 
 	slog.Info("Server stopped gracefully")
-	return nil
-}
-
-// loadLexiconsFromDir loads all lexicon JSON files from a directory tree.
-func loadLexiconsFromDir(dir string, registry *lexicon.Registry) error {
-	lexicons, err := hgraphql.LoadLexiconsFromDirStrict(dir)
-	if err != nil {
-		return err
-	}
-	for _, lex := range lexicons {
-		registry.Register(lex)
-	}
 	return nil
 }
 
