@@ -1,0 +1,4 @@
+kind: added
+body: Add an opt-in API smoke check for Tap audit record events so operators can verify append-only audit history after deployment.
+custom:
+  Affects: operator

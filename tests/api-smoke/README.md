@@ -33,6 +33,15 @@ HYPERINDEX_SMOKE_URL=https://api.example.com \
   make smoke-api
 ```
 
+Set `HYPERINDEX_SMOKE_AUDIT=1` to opt into the Tap audit smoke check. The audit smoke queries `auditRecordEvents` and requires at least 5 events by default. Override the required count with `HYPERINDEX_SMOKE_AUDIT_MIN_EVENTS` when an environment should prove more audit history is present.
+
+```bash
+HYPERINDEX_SMOKE_URL=https://api.example.com \
+  HYPERINDEX_SMOKE_AUDIT=1 \
+  HYPERINDEX_SMOKE_AUDIT_MIN_EVENTS=10 \
+  make smoke-api
+```
+
 Developers who want Go test and subtest names can manually add `-v` to direct `go test` runs:
 
 ```bash
@@ -58,6 +67,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - Search
 - Strict pagination
 - Typed `ByUri` roundtrip
+- Optional `auditRecordEvents` shape and minimum row count when `HYPERINDEX_SMOKE_AUDIT=1`
 
 ## Public-only limitation
 
@@ -79,3 +89,5 @@ The target deployment must have enough public data for read-path checks. These c
 
 - `org.hypercerts.claim.activity`
 - `app.certified.actor.profile`
+
+When `HYPERINDEX_SMOKE_AUDIT=1`, the target deployment must also run with `TAP_ENABLED=true` and `AUDIT_ENABLED=true`, and it must have at least `HYPERINDEX_SMOKE_AUDIT_MIN_EVENTS` audit rows. If the minimum is unset, the smoke suite requires 5 audit events.

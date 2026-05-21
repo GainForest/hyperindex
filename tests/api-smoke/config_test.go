@@ -8,15 +8,19 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
 const (
-	smokeURLEnv          = "HYPERINDEX_SMOKE_URL"
-	smokeExpectationsEnv = "HYPERINDEX_SMOKE_EXPECTATIONS"
-	smokeDebugEnv        = "HYPERINDEX_SMOKE_DEBUG"
+	smokeURLEnv                = "HYPERINDEX_SMOKE_URL"
+	smokeExpectationsEnv       = "HYPERINDEX_SMOKE_EXPECTATIONS"
+	smokeDebugEnv              = "HYPERINDEX_SMOKE_DEBUG"
+	smokeAuditEnv              = "HYPERINDEX_SMOKE_AUDIT"
+	smokeAuditMinEventsEnv     = "HYPERINDEX_SMOKE_AUDIT_MIN_EVENTS"
+	defaultSmokeAuditMinEvents = 5
 )
 
 type smokeConfig struct {
@@ -24,6 +28,12 @@ type smokeConfig struct {
 	expectations expectations
 	httpClient   *http.Client
 	debug        bool
+	audit        auditSmokeConfig
+}
+
+type auditSmokeConfig struct {
+	enabled   bool
+	minEvents int
 }
 
 type expectations struct {
@@ -68,11 +78,27 @@ func loadSmokeConfig(t testing.TB) smokeConfig {
 		t.Fatalf("load smoke config: %v", err)
 	}
 
+	auditEnabled, err := parseSmokeBoolEnv(smokeAuditEnv)
+	if err != nil {
+		t.Fatalf("load smoke config: %v", err)
+	}
+	auditMinEvents := defaultSmokeAuditMinEvents
+	if auditEnabled {
+		auditMinEvents, err = parseSmokePositiveIntEnv(smokeAuditMinEventsEnv, defaultSmokeAuditMinEvents)
+		if err != nil {
+			t.Fatalf("load smoke config: %v", err)
+		}
+	}
+
 	return smokeConfig{
 		baseURL:      baseURL,
 		expectations: loadedExpectations,
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
 		debug:        os.Getenv(smokeDebugEnv) == "1",
+		audit: auditSmokeConfig{
+			enabled:   auditEnabled,
+			minEvents: auditMinEvents,
+		},
 	}
 }
 
@@ -93,6 +119,36 @@ func parseSmokeBaseURL(rawURL string) (string, error) {
 	}
 
 	return strings.TrimRight(parsedURL.String(), "/"), nil
+}
+
+func parseSmokeBoolEnv(name string) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return false, nil
+	}
+
+	switch strings.ToLower(raw) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true, nil
+	case "0", "false", "f", "no", "n", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be a boolean value such as 1, true, yes, 0, false, or no; got %q; set it to a supported boolean or unset it", name, raw)
+	}
+}
+
+func parseSmokePositiveIntEnv(name string, defaultValue int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return defaultValue, nil
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return 0, fmt.Errorf("%s must be a positive integer; got %q; set it to a value like 5 or unset it", name, raw)
+	}
+
+	return value, nil
 }
 
 func defaultExpectationsPath(t testing.TB) string {
@@ -200,6 +256,8 @@ func makeSet(values []string) map[string]bool {
 func TestConfig(t *testing.T) {
 	t.Setenv(smokeURLEnv, "http://127.0.0.1:1/")
 	t.Setenv(smokeExpectationsEnv, "")
+	t.Setenv(smokeAuditEnv, "")
+	t.Setenv(smokeAuditMinEventsEnv, "")
 
 	config := loadSmokeConfig(t)
 	if config.baseURL != "http://127.0.0.1:1" {
@@ -208,8 +266,77 @@ func TestConfig(t *testing.T) {
 	if config.httpClient == nil || config.httpClient.Timeout != 10*time.Second {
 		t.Fatalf("httpClient timeout = %v, want 10s", config.httpClient)
 	}
+	if config.audit.enabled {
+		t.Fatal("audit.enabled = true, want false by default")
+	}
+	if config.audit.minEvents != defaultSmokeAuditMinEvents {
+		t.Fatalf("audit.minEvents = %d, want default %d", config.audit.minEvents, defaultSmokeAuditMinEvents)
+	}
 	if len(config.expectations.RequiredNSIDs) != 20 {
 		t.Fatalf("required NSID count = %d, want 20", len(config.expectations.RequiredNSIDs))
+	}
+}
+
+func TestConfigEnablesAuditSmokeWithDefaultMinimum(t *testing.T) {
+	t.Setenv(smokeURLEnv, "http://127.0.0.1:1/")
+	t.Setenv(smokeExpectationsEnv, "")
+	t.Setenv(smokeAuditEnv, "1")
+	t.Setenv(smokeAuditMinEventsEnv, "")
+
+	config := loadSmokeConfig(t)
+	if !config.audit.enabled {
+		t.Fatal("audit.enabled = false, want true")
+	}
+	if config.audit.minEvents != defaultSmokeAuditMinEvents {
+		t.Fatalf("audit.minEvents = %d, want default %d", config.audit.minEvents, defaultSmokeAuditMinEvents)
+	}
+}
+
+func TestConfigOverridesAuditSmokeMinimum(t *testing.T) {
+	t.Setenv(smokeURLEnv, "http://127.0.0.1:1/")
+	t.Setenv(smokeExpectationsEnv, "")
+	t.Setenv(smokeAuditEnv, "true")
+	t.Setenv(smokeAuditMinEventsEnv, "7")
+
+	config := loadSmokeConfig(t)
+	if !config.audit.enabled {
+		t.Fatal("audit.enabled = false, want true")
+	}
+	if config.audit.minEvents != 7 {
+		t.Fatalf("audit.minEvents = %d, want 7", config.audit.minEvents)
+	}
+}
+
+func TestConfigIgnoresAuditMinimumWhenAuditSmokeIsDisabled(t *testing.T) {
+	t.Setenv(smokeURLEnv, "http://127.0.0.1:1/")
+	t.Setenv(smokeExpectationsEnv, "")
+	t.Setenv(smokeAuditEnv, "")
+	t.Setenv(smokeAuditMinEventsEnv, "invalid-but-disabled")
+
+	config := loadSmokeConfig(t)
+	if config.audit.enabled {
+		t.Fatal("audit.enabled = true, want false")
+	}
+	if config.audit.minEvents != defaultSmokeAuditMinEvents {
+		t.Fatalf("audit.minEvents = %d, want default %d", config.audit.minEvents, defaultSmokeAuditMinEvents)
+	}
+}
+
+func TestParseSmokeBoolEnvRejectsUnknownValue(t *testing.T) {
+	t.Setenv("TEST_SMOKE_BOOL", "definitely")
+
+	_, err := parseSmokeBoolEnv("TEST_SMOKE_BOOL")
+	if err == nil || !strings.Contains(err.Error(), "TEST_SMOKE_BOOL must be a boolean value") {
+		t.Fatalf("parseSmokeBoolEnv() error = %v, want boolean validation error", err)
+	}
+}
+
+func TestParseSmokePositiveIntEnvRejectsNonPositiveValue(t *testing.T) {
+	t.Setenv("TEST_SMOKE_INT", "0")
+
+	_, err := parseSmokePositiveIntEnv("TEST_SMOKE_INT", defaultSmokeAuditMinEvents)
+	if err == nil || !strings.Contains(err.Error(), "TEST_SMOKE_INT must be a positive integer") {
+		t.Fatalf("parseSmokePositiveIntEnv() error = %v, want positive integer validation error", err)
 	}
 }
 
