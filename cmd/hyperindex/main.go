@@ -38,6 +38,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/jetstream"
 	"github.com/GainForest/hyperindex/internal/labeler"
 	"github.com/GainForest/hyperindex/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/logsafe"
 	"github.com/GainForest/hyperindex/internal/oauth"
 	"github.com/GainForest/hyperindex/internal/server"
 	"github.com/GainForest/hyperindex/internal/tap"
@@ -702,7 +703,7 @@ func startLabelerSubscribers(cfg *config.Config, svc *services, bg *backgroundSe
 	})
 	subscriber.Start(labelerCtx)
 
-	slog.Info("Labeler subscriptions started", "urls", urls)
+	slog.Info("Labeler subscriptions started", "urls", logsafe.URLs(urls))
 }
 
 // startJetstream creates and starts the Jetstream consumer for real-time AT Protocol

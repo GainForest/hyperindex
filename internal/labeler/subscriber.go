@@ -18,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/logsafe"
 )
 
 const (
@@ -70,12 +71,12 @@ func (s *Subscriber) runSubscription(ctx context.Context, subscriptionURL string
 		}
 
 		if err != nil {
-			slog.Error("Labeler subscription disconnected", "url", subscriptionURL, "error", err, "backoff", backoff)
+			slog.Error("Labeler subscription disconnected", "url", logsafe.URL(subscriptionURL), "error", err, "backoff", backoff)
 			if updateErr := s.repo.UpdateError(ctx, subscriptionURL, err.Error()); updateErr != nil {
-				slog.Warn("Failed to record labeler subscription error", "url", subscriptionURL, "error", updateErr)
+				slog.Warn("Failed to record labeler subscription error", "url", logsafe.URL(subscriptionURL), "error", updateErr)
 			}
 		} else {
-			slog.Warn("Labeler subscription closed unexpectedly", "url", subscriptionURL, "backoff", backoff)
+			slog.Warn("Labeler subscription closed unexpectedly", "url", logsafe.URL(subscriptionURL), "backoff", backoff)
 		}
 
 		timer := time.NewTimer(backoff)
@@ -109,7 +110,7 @@ func (s *Subscriber) runOnce(ctx context.Context, subscriptionURL string) error 
 		return fmt.Errorf("build labeler subscription URL: %w", err)
 	}
 
-	slog.Info("Connecting to labeler subscription", "url", subscriptionURL, "cursor", state.LastSeq)
+	slog.Info("Connecting to labeler subscription", "url", logsafe.URL(subscriptionURL), "cursor", state.LastSeq)
 	conn, resp, err := s.dialer.DialContext(ctx, streamURL, nil)
 	if err != nil {
 		if resp != nil && resp.Body != nil {
@@ -125,7 +126,7 @@ func (s *Subscriber) runOnce(ctx context.Context, subscriptionURL string) error 
 		return fmt.Errorf("record labeler connection: %w", err)
 	}
 
-	callbacks := s.callbacks(subscriptionURL)
+	callbacks := s.callbacks(ctx, subscriptionURL)
 	sched := sequential.NewScheduler("labeler:"+subscriptionURL, callbacks.EventHandler)
 	if err := events.HandleRepoStream(ctx, conn, sched, nil); err != nil {
 		return fmt.Errorf("handle labeler stream: %w", err)
@@ -133,30 +134,30 @@ func (s *Subscriber) runOnce(ctx context.Context, subscriptionURL string) error 
 	return nil
 }
 
-func (s *Subscriber) callbacks(subscriptionURL string) *events.RepoStreamCallbacks {
+func (s *Subscriber) callbacks(ctx context.Context, subscriptionURL string) *events.RepoStreamCallbacks {
 	return &events.RepoStreamCallbacks{
 		LabelLabels: func(evt *comatproto.LabelSubscribeLabels_Labels) error {
 			inputs, err := ConvertLabels(evt.Labels)
 			if err != nil {
-				return s.recordAndReturnError(context.Background(), subscriptionURL, fmt.Errorf("convert labeler labels seq=%d: %w", evt.Seq, err))
+				return s.recordAndReturnError(ctx, subscriptionURL, fmt.Errorf("convert labeler labels seq=%d: %w", evt.Seq, err))
 			}
-			if err := s.repo.PersistEvent(context.Background(), subscriptionURL, evt.Seq, inputs); err != nil {
-				return s.recordAndReturnError(context.Background(), subscriptionURL, fmt.Errorf("persist labeler labels seq=%d: %w", evt.Seq, err))
+			if err := s.repo.PersistEvent(ctx, subscriptionURL, evt.Seq, inputs); err != nil {
+				return s.recordAndReturnError(ctx, subscriptionURL, fmt.Errorf("persist labeler labels seq=%d: %w", evt.Seq, err))
 			}
 			return nil
 		},
 		RepoInfo: func(evt *comatproto.SyncSubscribeRepos_Info) error {
-			return s.handleInfo(context.Background(), subscriptionURL, evt.Name, evt.Message)
+			return s.handleInfo(ctx, subscriptionURL, evt.Name, evt.Message)
 		},
 		LabelInfo: func(evt *comatproto.LabelSubscribeLabels_Info) error {
-			return s.handleInfo(context.Background(), subscriptionURL, evt.Name, evt.Message)
+			return s.handleInfo(ctx, subscriptionURL, evt.Name, evt.Message)
 		},
 		Error: func(evt *events.ErrorFrame) error {
 			errText := evt.Error
 			if evt.Message != "" {
 				errText += ": " + evt.Message
 			}
-			return s.recordAndReturnError(context.Background(), subscriptionURL, fmt.Errorf("labeler stream error: %s", errText))
+			return s.recordAndReturnError(ctx, subscriptionURL, fmt.Errorf("labeler stream error: %s", errText))
 		},
 	}
 }
@@ -175,13 +176,13 @@ func (s *Subscriber) handleInfo(ctx context.Context, subscriptionURL, name strin
 		return s.recordAndReturnError(ctx, subscriptionURL, fmt.Errorf("%s", errText))
 	}
 
-	slog.Info("Labeler stream info", "url", subscriptionURL, "name", name, "message", messageText)
+	slog.Info("Labeler stream info", "url", logsafe.URL(subscriptionURL), "name", name, "message", messageText)
 	return nil
 }
 
 func (s *Subscriber) recordAndReturnError(ctx context.Context, subscriptionURL string, err error) error {
 	if updateErr := s.repo.UpdateError(ctx, subscriptionURL, err.Error()); updateErr != nil {
-		slog.Warn("Failed to record labeler subscription error", "url", subscriptionURL, "error", updateErr)
+		slog.Warn("Failed to record labeler subscription error", "url", logsafe.URL(subscriptionURL), "error", updateErr)
 	}
 	return err
 }

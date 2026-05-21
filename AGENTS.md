@@ -14,7 +14,7 @@
 - Backend database schema source of truth: `internal/database/migrations/`
 - Frontend app: `client/`
 - Tap ingestion support is available and should be preferred for new record ingestion work when applicable; Jetstream + backfill is the legacy record path.
-- External ATProto labeler ingestion lives in `internal/labeler/` and stores raw label events in dedicated external label tables; it does not expose labels in public GraphQL yet.
+- External ATProto labeler ingestion lives in `internal/labeler/` and stores raw label events in dedicated external label tables; labels are exposed through public GraphQL query and record fields.
 
 ## Commands agents should prefer
 

@@ -1,5 +1,5 @@
 kind: changed
 body: >-
-  Add first-class external ATProto labeler support across ingestion and public GraphQL. Hyperindex can now subscribe to configured com.atproto.label.subscribeLabels streams, persist raw external label events with resumable cursors, expose active labels through subject lookups and record-level externalLabels fields, and filter generated record queries by external labels before pagination so clients can page through labeled records reliably. This also adds database indexes and documentation for running the labeler pipeline with Tap.
+  Add first-class external ATProto labeler support across ingestion and public GraphQL. Hyperindex can now subscribe to configured com.atproto.label.subscribeLabels streams, persist raw external label events with resumable cursors, expose active labels through subject lookups and record-level externalLabels fields, and filter generated record queries by external labels before pagination so clients can page through labeled records reliably. This also adds database indexes, safer subscription URL validation and log redaction, and documentation for running the labeler pipeline with Tap.
 custom:
   Affects: user

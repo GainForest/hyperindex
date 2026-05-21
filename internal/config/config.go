@@ -190,6 +190,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("PORT must be between 1 and 65535")
 	}
 
+	if c.LabelerSubscribeEnabled && len(c.LabelerSubscribeURLList()) == 0 {
+		return fmt.Errorf("LABELER_SUBSCRIBE_URLS must contain at least one URL when LABELER_SUBSCRIBE_ENABLED is true")
+	}
+
 	if c.LabelerSubscribeEnabled || c.LabelerSubscribeReconnectMin != 0 || c.LabelerSubscribeReconnectMax != 0 {
 		if c.LabelerSubscribeReconnectMin <= 0 {
 			return fmt.Errorf("LABELER_SUBSCRIBE_RECONNECT_MIN must be greater than zero")
@@ -205,6 +209,8 @@ func (c *Config) Validate() error {
 
 // LogConfig logs the configuration (with sensitive values redacted).
 func (c *Config) LogConfig() {
+	labelerSubscribeURLCount := len(c.LabelerSubscribeURLList())
+
 	slog.Info("Configuration loaded",
 		"host", c.Host,
 		"port", c.Port,
@@ -225,7 +231,7 @@ func (c *Config) LogConfig() {
 		"tap_admin_password_set", c.TapAdminPassword != "",
 		"tap_disable_acks", c.TapDisableAcks,
 		"labeler_subscribe_enabled", c.LabelerSubscribeEnabled,
-		"labeler_subscribe_urls", c.LabelerSubscribeURLs,
+		"labeler_subscribe_url_count", labelerSubscribeURLCount,
 		"labeler_subscribe_reconnect_min", c.LabelerSubscribeReconnectMin.String(),
 		"labeler_subscribe_reconnect_max", c.LabelerSubscribeReconnectMax.String(),
 	)

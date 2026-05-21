@@ -359,6 +359,32 @@ func TestExternalLabelsRepositoryGetBySubjectsCIDApplicability(t *testing.T) {
 	assertExternalLabelVals(t, labelsBySubject[uriOnlySubject.Key()], []string{"high-quality"})
 }
 
+func TestExternalLabelsRepositoryGetBySubjectsActiveSupersessionScopedByCID(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	repo := db.ExternalLabels
+	ctx := context.Background()
+	uri := "at://did:plc:repo/app.example.record/cid-supersession"
+	cidOne := "bafyone"
+	cidTwo := "bafytwo"
+
+	persistExternalLabelEvent(t, repo, 1, []repositories.ExternalLabelInput{
+		{LabelIndex: 0, Src: "did:plc:labeler", URI: uri, CID: &cidOne, Val: "high-quality", Cts: "2025-01-02T03:04:05Z", RawJSON: `{}`},
+	})
+	persistExternalLabelEvent(t, repo, 2, []repositories.ExternalLabelInput{
+		{LabelIndex: 0, Src: "did:plc:labeler", URI: uri, CID: &cidTwo, Val: "high-quality", Neg: true, Cts: "2025-01-02T03:05:05Z", RawJSON: `{}`},
+	})
+
+	cidOneSubject := repositories.LabelSubject{URI: uri, CID: cidOne}
+	cidTwoSubject := repositories.LabelSubject{URI: uri, CID: cidTwo}
+	active, err := repo.GetBySubjects(ctx, []repositories.LabelSubject{cidOneSubject, cidTwoSubject}, repositories.ExternalLabelFilter{ActiveOnly: true})
+	if err != nil {
+		t.Fatalf("GetBySubjects(active) error = %v", err)
+	}
+
+	assertExternalLabelVals(t, active[cidOneSubject.Key()], []string{"high-quality"})
+	assertExternalLabelVals(t, active[cidTwoSubject.Key()], nil)
+}
+
 func TestExternalLabelsRepositoryGetBySubjectsActiveTieBreaksByID(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	repo := db.ExternalLabels

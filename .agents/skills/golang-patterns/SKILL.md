@@ -366,9 +366,9 @@ func WriteAndFlush(w io.Writer, data []byte) error {
 ### Standard Project Layout
 
 ```text
-myproject/
+hyperindex/
 ├── cmd/
-│   └── myapp/
+│   └── hyperindex/
 │       └── main.go           # Entry point
 ├── internal/
 │   ├── handler/              # HTTP handlers
@@ -574,7 +574,7 @@ func join(parts []string) string {
 ```bash
 # Build and run
 go build ./...
-go run ./cmd/myapp
+go run ./cmd/hyperindex
 
 # Testing
 go test ./...

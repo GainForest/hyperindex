@@ -525,6 +525,10 @@ func externalLabelActivePredicate(exec database.Executor, alias string) string {
 					AND newer.uri = %s.uri
 					AND newer.val = %s.val
 					AND (
+						(newer.cid IS NULL AND %s.cid IS NULL)
+						OR newer.cid = %s.cid
+					)
+					AND (
 						%s > %s
 						OR (%s = %s AND newer.id > %s.id)
 					)
@@ -534,6 +538,8 @@ func externalLabelActivePredicate(exec database.Executor, alias string) string {
 		negFalse,
 		alias,
 		expiryPredicate,
+		alias,
+		alias,
 		alias,
 		alias,
 		alias,

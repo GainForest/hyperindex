@@ -18,6 +18,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/database/sqlite"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 // loadLexiconsFromDir loads all lexicon JSON files from a directory tree.
@@ -1554,19 +1555,10 @@ func buildExternalLabelsTestSchema(t *testing.T) *graphql.Schema {
 func setupExternalLabelsGraphQLTestDB(t *testing.T) context.Context {
 	t.Helper()
 
-	exec, err := sqlite.NewExecutor("sqlite::memory:")
-	if err != nil {
-		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to create SQLite executor: %v", err)
-	}
-	t.Cleanup(func() { exec.Close() })
-
+	db := testutil.SetupTestDB(t)
 	ctx := context.Background()
-	if err := migrations.Run(ctx, exec); err != nil {
-		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to run migrations: %v", err)
-	}
-
-	records := repositories.NewRecordsRepository(exec)
-	externalLabels := repositories.NewExternalLabelsRepository(exec)
+	records := db.Records
+	externalLabels := db.ExternalLabels
 	const recordURI = "at://did:plc:test/com.example.label.record/rkey1"
 	const recordCID = "bafyrecordcid"
 	if err := records.BatchInsert(ctx, []*repositories.Record{{
@@ -1728,19 +1720,10 @@ func TestExternalLabelsGraphQLWhereNoneAndSourceFilter(t *testing.T) {
 func setupExternalLabelsWhereTestDB(t *testing.T) (context.Context, map[string]string) {
 	t.Helper()
 
-	exec, err := sqlite.NewExecutor("sqlite::memory:")
-	if err != nil {
-		t.Fatalf("setupExternalLabelsWhereTestDB: failed to create SQLite executor: %v", err)
-	}
-	t.Cleanup(func() { exec.Close() })
-
+	db := testutil.SetupTestDB(t)
 	ctx := context.Background()
-	if err := migrations.Run(ctx, exec); err != nil {
-		t.Fatalf("setupExternalLabelsWhereTestDB: failed to run migrations: %v", err)
-	}
-
-	records := repositories.NewRecordsRepository(exec)
-	externalLabels := repositories.NewExternalLabelsRepository(exec)
+	records := db.Records
+	externalLabels := db.ExternalLabels
 	uris := map[string]string{}
 	for i, rkey := range []string{"one", "two", "three", "four", "five"} {
 		uri := "at://did:plc:test/com.example.label.record/" + rkey
@@ -1750,7 +1733,7 @@ func setupExternalLabelsWhereTestDB(t *testing.T) (context.Context, map[string]s
 			t.Fatalf("setupExternalLabelsWhereTestDB: insert %s: %v", rkey, err)
 		}
 		indexedAt := fmt.Sprintf("2025-01-02T03:04:%02dZ", i+1)
-		if _, err := exec.DB().ExecContext(ctx, "UPDATE record SET indexed_at = ? WHERE uri = ?", indexedAt, uri); err != nil {
+		if _, err := db.Executor.DB().ExecContext(ctx, "UPDATE record SET indexed_at = ? WHERE uri = ?", indexedAt, uri); err != nil {
 			t.Fatalf("setupExternalLabelsWhereTestDB: set indexed_at %s: %v", rkey, err)
 		}
 	}

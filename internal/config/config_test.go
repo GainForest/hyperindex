@@ -372,7 +372,12 @@ func TestConfigLogConfigRedactsAdminAPIKey(t *testing.T) {
 	slog.SetDefault(logger)
 	t.Cleanup(func() { slog.SetDefault(original) })
 
-	cfg := Config{AdminAPIKey: "super-secret", TapAdminPassword: "tap-secret"}
+	cfg := Config{
+		AdminAPIKey:             "super-secret",
+		TapAdminPassword:        "tap-secret",
+		LabelerSubscribeURLs:    "wss://log-user:log-pass@labeler.example/labels?token=secret-token",
+		LabelerSubscribeEnabled: true,
+	}
 	cfg.LogConfig()
 
 	output := buf.String()
@@ -384,6 +389,14 @@ func TestConfigLogConfigRedactsAdminAPIKey(t *testing.T) {
 	}
 	if strings.Contains(output, "tap-secret") {
 		t.Fatalf("LogConfig() leaked tap admin password: %s", output)
+	}
+	if !strings.Contains(output, "labeler_subscribe_url_count=1") {
+		t.Fatalf("LogConfig() output missing labeler URL count: %s", output)
+	}
+	for _, leaked := range []string{"log-user", "log-pass", "secret-token", "labeler_subscribe_urls"} {
+		if strings.Contains(output, leaked) {
+			t.Fatalf("LogConfig() leaked labeler URL detail %q: %s", leaked, output)
+		}
 	}
 }
 
@@ -550,6 +563,65 @@ func TestLabelerSubscribeConfigEnvVars(t *testing.T) {
 	}
 	if cfg.LabelerSubscribeReconnectMax != 30*time.Second {
 		t.Fatalf("LabelerSubscribeReconnectMax = %v, want 30s", cfg.LabelerSubscribeReconnectMax)
+	}
+}
+
+func TestLabelerSubscribeConfigValidateNegativePaths(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "reconnect min must be positive",
+			env: map[string]string{
+				"LABELER_SUBSCRIBE_ENABLED":       "true",
+				"LABELER_SUBSCRIBE_URLS":          "wss://labeler.example/labels",
+				"LABELER_SUBSCRIBE_RECONNECT_MIN": "0s",
+				"LABELER_SUBSCRIBE_RECONNECT_MAX": "1s",
+			},
+			want: "LABELER_SUBSCRIBE_RECONNECT_MIN",
+		},
+		{
+			name: "reconnect max must be at least min",
+			env: map[string]string{
+				"LABELER_SUBSCRIBE_ENABLED":       "true",
+				"LABELER_SUBSCRIBE_URLS":          "wss://labeler.example/labels",
+				"LABELER_SUBSCRIBE_RECONNECT_MIN": "5s",
+				"LABELER_SUBSCRIBE_RECONNECT_MAX": "1s",
+			},
+			want: "LABELER_SUBSCRIBE_RECONNECT_MAX",
+		},
+		{
+			name: "enabled requires at least one URL",
+			env: map[string]string{
+				"LABELER_SUBSCRIBE_ENABLED":       "true",
+				"LABELER_SUBSCRIBE_URLS":          " , ",
+				"LABELER_SUBSCRIBE_RECONNECT_MIN": "1s",
+				"LABELER_SUBSCRIBE_RECONNECT_MAX": "60s",
+			},
+			want: "LABELER_SUBSCRIBE_URLS",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ADMIN_API_KEY", "admin-secret-123")
+			t.Setenv("SECRET_KEY_BASE", "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing")
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			err = cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Validate() error = %v, want substring %q", err, tt.want)
+			}
+		})
 	}
 }
 
