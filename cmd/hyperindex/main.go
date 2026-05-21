@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -896,28 +895,14 @@ func serve(r *chi.Mux, cfg *config.Config, bg *backgroundServices) error {
 
 // loadLexiconsFromDir loads all lexicon JSON files from a directory tree.
 func loadLexiconsFromDir(dir string, registry *lexicon.Registry) error {
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() || !strings.HasSuffix(path, ".json") {
-			return nil
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		lex, parseErr := lexicon.ParseBytes(data)
-		if parseErr != nil {
-			// Skip non-lexicon JSON files
-			return nil //nolint:nilerr // intentionally skip parse errors
-		}
-
+	lexicons, err := hgraphql.LoadLexiconsFromDirStrict(dir)
+	if err != nil {
+		return err
+	}
+	for _, lex := range lexicons {
 		registry.Register(lex)
-		return nil
-	})
+	}
+	return nil
 }
 
 // populateActivityFromRecords creates activity entries from existing records.
