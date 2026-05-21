@@ -79,7 +79,7 @@ Optional timing settings:
 - `HYPERINDEX_SMOKE_WRITE_POLL_TIMEOUT` — per-step indexing timeout, default `60s`
 - `HYPERINDEX_SMOKE_WRITE_POLL_INTERVAL` — polling interval, default `2s`
 
-Use a dedicated disposable account. If `app.certified.actor.profile/self` already exists, the test temporarily deletes it so it can exercise create semantics and restores the original record during cleanup.
+Use a dedicated disposable account. If `app.certified.actor.profile/self` already exists, the test temporarily deletes it so it can exercise create semantics and restores the original record during cleanup. The exception is stale smoke data: if the existing record already looks like a previous smoke run, the test removes it and does not restore it. A record is treated as stale smoke data when its `displayName`, `description`, `title`, or `shortDescription` contains `Hyperindex write-through smoke test`, when its `displayName` starts with `Hyperindex Smoke Profile`, or when its `title` starts with `Hyperindex smoke activity`.
 
 ## Public API limitation
 

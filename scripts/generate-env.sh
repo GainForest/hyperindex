@@ -22,6 +22,14 @@ prompt_value() {
   trim "$value"
 }
 
+prompt_secret_value() {
+  local prompt="$1"
+  local value
+  read -r -s -p "$prompt" value
+  printf '\n' >&2
+  trim "$value"
+}
+
 confirm_yes() {
   local prompt="$1"
   local answer
@@ -33,6 +41,7 @@ confirm_yes() {
 }
 
 generate_secret() {
+  command -v openssl >/dev/null 2>&1 || fail "openssl is required when generating secrets. Install openssl or enter all secret values manually."
   openssl rand -hex 32
 }
 
@@ -41,8 +50,6 @@ write_env_value() {
   local value="$2"
   printf '%s=%s\n' "$key" "$value" >>"$temp_path"
 }
-
-command -v openssl >/dev/null 2>&1 || fail "openssl is required to generate secrets. Install openssl or provide SECRET_KEY_BASE, ADMIN_API_KEY, and TAP_ADMIN_PASSWORD manually."
 
 if [[ -e "$output_path" ]]; then
   if ! confirm_yes "${output_path} already exists. Overwrite it? Type yes to continue: "; then
@@ -63,21 +70,21 @@ if [[ -z "$admin_dids" ]]; then
   fi
 fi
 
-secret_key_base="$(prompt_value 'SECRET_KEY_BASE (blank to generate): ')"
+secret_key_base="$(prompt_secret_value 'SECRET_KEY_BASE (blank to generate): ')"
 if [[ -z "$secret_key_base" ]]; then
   secret_key_base="$(generate_secret)"
 elif (( ${#secret_key_base} < 64 )); then
   fail "SECRET_KEY_BASE must be at least 64 characters, or blank to generate a secure value."
 fi
 
-admin_api_key="$(prompt_value 'ADMIN_API_KEY (blank to generate): ')"
+admin_api_key="$(prompt_secret_value 'ADMIN_API_KEY (blank to generate): ')"
 if [[ -z "$admin_api_key" ]]; then
   admin_api_key="$(generate_secret)"
 elif (( ${#admin_api_key} < 16 )); then
   fail "ADMIN_API_KEY must be at least 16 characters, or blank to generate a secure value."
 fi
 
-tap_admin_password="$(prompt_value 'TAP_ADMIN_PASSWORD (blank to generate): ')"
+tap_admin_password="$(prompt_secret_value 'TAP_ADMIN_PASSWORD (blank to generate): ')"
 if [[ -z "$tap_admin_password" ]]; then
   tap_admin_password="$(generate_secret)"
 fi
