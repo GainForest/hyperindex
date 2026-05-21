@@ -1,4 +1,0 @@
-kind: changed
-body: Add an active-label lookup index for external ATProto labels so locally ingested label data can be queried efficiently.
-custom:
-  Affects: operator

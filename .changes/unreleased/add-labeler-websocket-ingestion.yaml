@@ -1,4 +1,0 @@
-kind: added
-body: Add configurable ATProto labeler websocket ingestion that stores external label events locally and resumes from saved cursors without exposing those labels in public GraphQL responses yet.
-custom:
-  Affects: operator
