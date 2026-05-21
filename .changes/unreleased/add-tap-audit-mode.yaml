@@ -1,0 +1,4 @@
+kind: added
+body: Add Tap audit mode with append-only record and identity history, raw delivery storage, and a GraphQL audit query for record changes.
+custom:
+  Affects: user

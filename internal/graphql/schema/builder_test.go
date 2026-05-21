@@ -920,6 +920,278 @@ func setupSchemaRecordTestDB(t *testing.T, rec *repositories.Record) context.Con
 	return resolver.WithRepositories(ctx, repos)
 }
 
+func buildAuditRecordEventsSchema(t *testing.T) *graphql.Schema {
+	t.Helper()
+
+	schema, err := NewBuilder(lexicon.NewRegistry()).Build()
+	if err != nil {
+		t.Fatalf("buildAuditRecordEventsSchema: failed to build schema: %v", err)
+	}
+	return schema
+}
+
+func setupAuditRecordEventsTestDB(t *testing.T) context.Context {
+	t.Helper()
+
+	exec, err := sqlite.NewExecutor("sqlite::memory:")
+	if err != nil {
+		t.Fatalf("setupAuditRecordEventsTestDB: failed to create SQLite executor: %v", err)
+	}
+	t.Cleanup(func() { exec.Close() })
+
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("setupAuditRecordEventsTestDB: failed to run migrations: %v", err)
+	}
+
+	for id := 1; id <= 4; id++ {
+		if _, err := exec.DB().ExecContext(ctx, `INSERT INTO raw_tap_events (id, tap_delivery_id, type, received_at, payload)
+			VALUES (?, ?, 'record', ?, ?)`, id, 1000+id, fmt.Sprintf("2026-01-01T00:00:0%dZ", id), fmt.Sprintf(`{"id":%d,"type":"record"}`, 1000+id)); err != nil {
+			t.Fatalf("setupAuditRecordEventsTestDB: insert raw event %d: %v", id, err)
+		}
+	}
+
+	auditRows := []struct {
+		id         int
+		deliveryID int
+		receivedAt string
+		live       int
+		rev        string
+		did        string
+		collection string
+		rkey       string
+		action     string
+		cid        interface{}
+		record     interface{}
+	}{
+		{1, 1001, "2026-01-01T00:00:01Z", 1, "rev1", "did:plc:alice", "app.example.record", "one", "create", "cid1", `{"text":"one","version":1}`},
+		{2, 1002, "2026-01-01T00:00:02Z", 1, "rev2", "did:plc:alice", "app.example.record", "one", "update", "cid2", `{"text":"two","version":2}`},
+		{3, 1003, "2026-01-01T00:00:03Z", 1, "rev3", "did:plc:alice", "app.example.record", "two", "delete", nil, nil},
+		{4, 1004, "2026-01-01T00:00:04Z", 0, "rev4", "did:plc:bob", "app.other.record", "three", "create", "cid3", `{"text":"bob"}`},
+	}
+	for _, row := range auditRows {
+		uri := fmt.Sprintf("at://%s/%s/%s", row.did, row.collection, row.rkey)
+		if _, err := exec.DB().ExecContext(ctx, `INSERT INTO record_events (
+				id, event_key, tap_delivery_id, raw_event_id, received_at, live, rev, did, collection, rkey, uri, action, cid, record
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			row.id, fmt.Sprintf("event-%d", row.id), row.deliveryID, row.id, row.receivedAt, row.live, row.rev, row.did, row.collection, row.rkey, uri, row.action, row.cid, row.record); err != nil {
+			t.Fatalf("setupAuditRecordEventsTestDB: insert record event %d: %v", row.id, err)
+		}
+	}
+
+	repos := &resolver.Repositories{Audit: repositories.NewAuditRepository(exec)}
+	return resolver.WithRepositories(ctx, repos)
+}
+
+func TestAuditRecordEventsQueryFilters(t *testing.T) {
+	schema := buildAuditRecordEventsSchema(t)
+	ctx := setupAuditRecordEventsTestDB(t)
+
+	result := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `{
+			uriTrail: auditRecordEvents(
+				first: 10
+				where: { uri: { eq: "at://did:plc:alice/app.example.record/one" } }
+				orderBy: { field: ID, direction: ASC }
+			) {
+				edges { node { id action uri cid record } }
+				pageInfo { hasNextPage hasPreviousPage }
+			}
+			didTrail: auditRecordEvents(
+				first: 10
+				where: { did: { eq: "did:plc:alice" } }
+				orderBy: { field: ID, direction: ASC }
+			) {
+				edges { node { id did action } }
+			}
+			deletes: auditRecordEvents(
+				first: 10
+				where: { collection: { eq: "app.example.record" }, action: { eq: DELETE } }
+				orderBy: { field: ID, direction: DESC }
+			) {
+				edges { node { id action uri record } }
+			}
+		}`,
+		Context: ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("TestAuditRecordEventsQueryFilters: unexpected GraphQL errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+
+	uriNodes := auditConnectionNodes(t, data["uriTrail"], "uriTrail")
+	if got := auditNodeIDs(uriNodes); strings.Join(got, ",") != "1,2" {
+		t.Fatalf("uriTrail ids = %v, want [1 2]", got)
+	}
+	if uriNodes[0]["action"] != "CREATE" || uriNodes[1]["action"] != "UPDATE" {
+		t.Fatalf("uriTrail actions = %v, %v; want CREATE, UPDATE", uriNodes[0]["action"], uriNodes[1]["action"])
+	}
+	if uriNodes[0]["cid"] != "cid1" {
+		t.Fatalf("uriTrail first cid = %v, want cid1", uriNodes[0]["cid"])
+	}
+	record, ok := uriNodes[0]["record"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("uriTrail first record is %T, want JSON object", uriNodes[0]["record"])
+	}
+	if record["text"] != "one" {
+		t.Fatalf("uriTrail first record.text = %v, want one", record["text"])
+	}
+
+	didNodes := auditConnectionNodes(t, data["didTrail"], "didTrail")
+	if got := auditNodeIDs(didNodes); strings.Join(got, ",") != "1,2,3" {
+		t.Fatalf("didTrail ids = %v, want [1 2 3]", got)
+	}
+
+	deleteNodes := auditConnectionNodes(t, data["deletes"], "deletes")
+	if got := auditNodeIDs(deleteNodes); strings.Join(got, ",") != "3" {
+		t.Fatalf("deletes ids = %v, want [3]", got)
+	}
+	if deleteNodes[0]["action"] != "DELETE" {
+		t.Fatalf("delete action = %v, want DELETE", deleteNodes[0]["action"])
+	}
+	if deleteNodes[0]["record"] != nil {
+		t.Fatalf("delete record = %v, want nil", deleteNodes[0]["record"])
+	}
+}
+
+func TestAuditRecordEventsQueryCursorPagination(t *testing.T) {
+	schema := buildAuditRecordEventsSchema(t)
+	ctx := setupAuditRecordEventsTestDB(t)
+
+	firstPageResult := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `{
+			auditRecordEvents(first: 2, orderBy: { field: ID, direction: ASC }) {
+				edges { cursor node { id } }
+				pageInfo { hasNextPage hasPreviousPage endCursor }
+			}
+		}`,
+		Context: ctx,
+	})
+	if len(firstPageResult.Errors) > 0 {
+		t.Fatalf("first page GraphQL errors: %v", firstPageResult.Errors)
+	}
+	firstConnection := firstPageResult.Data.(map[string]interface{})["auditRecordEvents"].(map[string]interface{})
+	firstNodes := auditConnectionNodes(t, firstConnection, "first page")
+	if got := auditNodeIDs(firstNodes); strings.Join(got, ",") != "1,2" {
+		t.Fatalf("first page ids = %v, want [1 2]", got)
+	}
+	firstPageInfo := firstConnection["pageInfo"].(map[string]interface{})
+	if firstPageInfo["hasNextPage"] != true || firstPageInfo["hasPreviousPage"] != false {
+		t.Fatalf("first pageInfo = %v, want hasNextPage true and hasPreviousPage false", firstPageInfo)
+	}
+	endCursor, ok := firstPageInfo["endCursor"].(string)
+	if !ok || endCursor == "" {
+		t.Fatalf("first page endCursor = %v, want non-empty string", firstPageInfo["endCursor"])
+	}
+
+	secondPageResult := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `query($after: String!) {
+			auditRecordEvents(first: 2, after: $after, orderBy: { field: ID, direction: ASC }) {
+				edges { node { id } }
+				pageInfo { hasNextPage hasPreviousPage }
+			}
+		}`,
+		VariableValues: map[string]interface{}{"after": endCursor},
+		Context:        ctx,
+	})
+	if len(secondPageResult.Errors) > 0 {
+		t.Fatalf("second page GraphQL errors: %v", secondPageResult.Errors)
+	}
+	secondConnection := secondPageResult.Data.(map[string]interface{})["auditRecordEvents"].(map[string]interface{})
+	secondNodes := auditConnectionNodes(t, secondConnection, "second page")
+	if got := auditNodeIDs(secondNodes); strings.Join(got, ",") != "3,4" {
+		t.Fatalf("second page ids = %v, want [3 4]", got)
+	}
+	secondPageInfo := secondConnection["pageInfo"].(map[string]interface{})
+	if secondPageInfo["hasNextPage"] != false || secondPageInfo["hasPreviousPage"] != true {
+		t.Fatalf("second pageInfo = %v, want hasNextPage false and hasPreviousPage true", secondPageInfo)
+	}
+
+	descResult := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `{
+			auditRecordEvents(first: 2, orderBy: { field: ID, direction: DESC }) {
+				edges { node { id } }
+			}
+		}`,
+		Context: ctx,
+	})
+	if len(descResult.Errors) > 0 {
+		t.Fatalf("desc page GraphQL errors: %v", descResult.Errors)
+	}
+	descNodes := auditConnectionNodes(t, descResult.Data.(map[string]interface{})["auditRecordEvents"], "desc page")
+	if got := auditNodeIDs(descNodes); strings.Join(got, ",") != "4,3" {
+		t.Fatalf("desc page ids = %v, want [4 3]", got)
+	}
+}
+
+func TestAuditRecordEventsQueryWithoutRepositoryReturnsEmptyConnection(t *testing.T) {
+	schema := buildAuditRecordEventsSchema(t)
+
+	result := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `{
+			auditRecordEvents(first: 10) {
+				edges { node { id } }
+				pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+				totalCount
+			}
+		}`,
+		Context: context.Background(),
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("empty audit repository GraphQL errors: %v", result.Errors)
+	}
+	connection := result.Data.(map[string]interface{})["auditRecordEvents"].(map[string]interface{})
+	if edges := connection["edges"].([]interface{}); len(edges) != 0 {
+		t.Fatalf("empty repository edges = %v, want empty", edges)
+	}
+	pageInfo := connection["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false || pageInfo["hasPreviousPage"] != false || pageInfo["startCursor"] != nil || pageInfo["endCursor"] != nil {
+		t.Fatalf("empty repository pageInfo = %v, want empty page info", pageInfo)
+	}
+	if connection["totalCount"] != 0 {
+		t.Fatalf("empty repository totalCount = %v, want 0", connection["totalCount"])
+	}
+}
+
+func auditConnectionNodes(t *testing.T, connectionValue interface{}, fieldName string) []map[string]interface{} {
+	t.Helper()
+
+	connection, ok := connectionValue.(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s is %T, want map[string]interface{}", fieldName, connectionValue)
+	}
+	edges, ok := connection["edges"].([]interface{})
+	if !ok {
+		t.Fatalf("%s edges is %T, want []interface{}", fieldName, connection["edges"])
+	}
+	nodes := make([]map[string]interface{}, 0, len(edges))
+	for i, edgeValue := range edges {
+		edge, ok := edgeValue.(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s edge %d is %T, want map[string]interface{}", fieldName, i, edgeValue)
+		}
+		node, ok := edge["node"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s edge %d node is %T, want map[string]interface{}", fieldName, i, edge["node"])
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes
+}
+
+func auditNodeIDs(nodes []map[string]interface{}) []string {
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		ids = append(ids, fmt.Sprint(node["id"]))
+	}
+	return ids
+}
+
 func buildCIDLinkRegressionSchema(t *testing.T) *graphql.Schema {
 	t.Helper()
 

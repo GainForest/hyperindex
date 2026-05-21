@@ -49,10 +49,13 @@ type ConsumerConfig struct {
 	DisableAcks bool
 }
 
-// EventHandler processes Tap events. Return nil to ack, error to nack.
+// EventHandler processes Tap websocket deliveries.
+//
+// rawPayload is the exact text message received from Tap. event is the parsed
+// top-level Tap envelope, including the delivery ID used for acknowledgements.
+// Return nil to ack the delivery, or an error to leave it unacked.
 type EventHandler interface {
-	HandleRecord(ctx context.Context, event *RecordEvent) error
-	HandleIdentity(ctx context.Context, event *IdentityEvent) error
+	HandleEvent(ctx context.Context, rawPayload []byte, event *Event) error
 }
 
 // Stats tracks consumer statistics.
@@ -248,7 +251,7 @@ func (c *Consumer) runOnce(ctx context.Context) (bool, bool, error) {
 			continue
 		}
 
-		if err := c.dispatch(ctx, conn, event); err != nil {
+		if err := c.dispatch(ctx, conn, data, event); err != nil {
 			atomic.AddInt64(&c.errors, 1)
 			// If the error came from a write (ack failure), the connection is dead.
 			// Return immediately to reconnect rather than continuing to read and
@@ -266,31 +269,29 @@ func (c *Consumer) runOnce(ctx context.Context) (bool, bool, error) {
 	}
 }
 
-// dispatch routes an event to the appropriate handler and sends an ack on success.
-func (c *Consumer) dispatch(ctx context.Context, conn *websocket.Conn, event *Event) error {
-	var handlerErr error
-
+// dispatch routes a parsed Tap delivery to the handler and sends an ack on success.
+func (c *Consumer) dispatch(ctx context.Context, conn *websocket.Conn, rawPayload []byte, event *Event) error {
 	switch {
-	case event.IsRecord():
-		handlerErr = c.handler.HandleRecord(ctx, event.Record)
-		if handlerErr == nil {
-			c.incrementRecordStat(event.Record.Action)
-		}
-
-	case event.IsIdentity():
-		handlerErr = c.handler.HandleIdentity(ctx, event.Identity)
-		if handlerErr == nil {
-			atomic.AddInt64(&c.identityEvents, 1)
-		}
-
-	default:
-		// Unknown event type — log and skip without acking.
+	case event.IsRecord(), event.IsIdentity():
+		// Supported events are passed to the handler as the full Tap envelope so
+		// handlers can use the top-level delivery ID and raw payload when needed.
+	case event.Type != "":
+		// Unknown event type — preserve the existing behavior of logging and
+		// skipping without acking.
 		slog.Warn("Unknown Tap event type", "type", event.Type, "id", event.ID)
+		return nil
+	default:
 		return nil
 	}
 
-	if handlerErr != nil {
-		return handlerErr
+	if err := c.handler.HandleEvent(ctx, rawPayload, event); err != nil {
+		return err
+	}
+
+	if event.IsRecord() {
+		c.incrementRecordStat(event.Record.Action)
+	} else if event.IsIdentity() {
+		atomic.AddInt64(&c.identityEvents, 1)
 	}
 
 	// Send ack unless disabled.

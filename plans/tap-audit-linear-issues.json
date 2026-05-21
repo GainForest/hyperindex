@@ -1,0 +1,121 @@
+{
+  "issues": [
+    {
+      "draftId": "TAA-001",
+      "title": "TAA-001 — Add AUDIT_ENABLED config and Tap-only startup validation",
+      "priority": "high",
+      "estimate": 2,
+      "labels": ["Feature"],
+      "dependsOn": [],
+      "description": "## Context\n\nAdd the explicit audit-mode gate described in `docs/tap-append-only-audit.md`. Audit history is Tap-only for the first implementation.\n\n## Scope\n\n- Add `AUDIT_ENABLED` env/config parsing.\n- Keep default behavior unchanged when unset/false.\n- If `AUDIT_ENABLED=true` and `TAP_ENABLED=false`, fail startup with a clear error explaining that audit storage currently requires Tap.\n- Surface the flag in config docs/examples where config is defined.\n\n## Acceptance criteria\n\n- `AUDIT_ENABLED=false` does not alter ingestion wiring.\n- `AUDIT_ENABLED=true` with Tap enabled is accepted.\n- `AUDIT_ENABLED=true` without Tap fails startup with an actionable error.\n- Unit/config tests cover the validation behavior if this repo already has config tests.\n\n## Dependency graph\n\n- Blocked by: none.\n- Blocks: TAA-006, TAA-012."
+    },
+    {
+      "draftId": "TAA-002",
+      "title": "TAA-002 — Add audit event migrations for SQLite and Postgres",
+      "priority": "high",
+      "estimate": 3,
+      "labels": ["Feature"],
+      "dependsOn": [],
+      "description": "## Context\n\nCreate append-only audit storage for valid Tap record/identity deliveries without changing existing current-state `record` and `actor` table semantics.\n\n## Scope\n\nAdd both up/down migrations under the embedded migration paths:\n\n- `internal/database/migrations/sqlite/007_add_audit_events.up.sql`\n- `internal/database/migrations/sqlite/007_add_audit_events.down.sql`\n- `internal/database/migrations/postgres/007_add_audit_events.up.sql`\n- `internal/database/migrations/postgres/007_add_audit_events.down.sql`\n\nTables:\n\n- `raw_tap_events`: every successfully parsed record/identity Tap delivery, including duplicates.\n- `record_events`: deduped append-only decoded record ledger.\n- `identity_events`: append-only decoded identity ledger.\n\n## Acceptance criteria\n\n- SQLite and Postgres migrations define the fields, constraints, unique keys, foreign keys, and indexes from the plan.\n- `record_events.event_key` and `identity_events.event_key` are unique.\n- Down migrations remove only the audit tables/indexes added here.\n- Existing current-state schema remains unchanged.\n\n## Dependency graph\n\n- Blocked by: none.\n- Blocks: TAA-004, TAA-005, TAA-007, TAA-009."
+    },
+    {
+      "draftId": "TAA-003",
+      "title": "TAA-003 — Pass raw Tap payload and full event through HandleEvent",
+      "priority": "high",
+      "estimate": 3,
+      "labels": ["Feature"],
+      "dependsOn": [],
+      "description": "## Context\n\nAudit ingest needs the raw websocket message bytes and the top-level Tap delivery id. The current Tap dispatch path only passes decoded record/identity payloads.\n\n## Scope\n\n- Change the Tap event handler interface to `HandleEvent(ctx context.Context, rawPayload []byte, event *tap.Event) error`.\n- Make the consumer read raw websocket bytes, parse `tap.Event`, call the handler, then ack only after handler success.\n- Preserve existing non-audit current-state behavior by adapting the existing handler implementation.\n- Keep unsupported/malformed frame behavior intentionally simple for the first implementation.\n\n## Acceptance criteria\n\n- Handler receives the original raw payload bytes and full top-level `tap.Event`.\n- Tap ack uses the top-level delivery `event.ID`.\n- Existing Tap mode still works when audit is disabled.\n- No Jetstream/backfill behavior is pulled into this change.\n\n## Dependency graph\n\n- Blocked by: none.\n- Blocks: TAA-006, TAA-010."
+    },
+    {
+      "draftId": "TAA-004",
+      "title": "TAA-004 — Implement record audit ingest with dedupe and current-state transaction",
+      "priority": "high",
+      "estimate": 5,
+      "labels": ["Feature"],
+      "dependsOn": ["TAA-002"],
+      "description": "## Context\n\nIn audit mode, record Tap deliveries must append raw/audit rows and update the current `record` projection in one transaction. Duplicate semantic events should be safe no-ops for current state.\n\n## Scope\n\n- Add `internal/database/repositories/audit.go` with `AuditRepository`.\n- Implement record ingestion transaction:\n  - insert one `raw_tap_events` row for each valid record delivery;\n  - compute semantic event key: `record:{did}:{rev}:{collection}:{rkey}:{action}:{cid-or-empty}`;\n  - if `rev` is missing, use fallback key from delivery id plus normalized payload hash;\n  - insert `record_events` with conflict-do-nothing semantics;\n  - only when the decoded event row is newly inserted, apply current projection change;\n  - create/update upserts current `record` when record body is present;\n  - create/update with missing body is audited but skips projection update;\n  - delete removes current `record`.\n- Use transaction-local SQL rather than tx-aware repository wrappers unless direct SQL becomes harder to maintain.\n\n## Acceptance criteria\n\n- `IngestTapEvent` commits raw audit and current-state writes atomically for record events.\n- Duplicate decoded record event inserts another raw row, skips duplicate `record_events`, skips current-state mutation, commits, and returns success.\n- Missing CID and missing rev behavior matches the plan.\n- Caller can distinguish inserted vs duplicate via `AuditIngestResult.Inserted`.\n\n## Dependency graph\n\n- Blocked by: TAA-002.\n- Blocks: TAA-006, TAA-009."
+    },
+    {
+      "draftId": "TAA-005",
+      "title": "TAA-005 — Implement identity audit ingest and current actor behavior",
+      "priority": "high",
+      "estimate": 3,
+      "labels": ["Feature"],
+      "dependsOn": ["TAA-002"],
+      "description": "## Context\n\nIdentity Tap deliveries need their own append-only ledger while preserving existing current actor/identity behavior, including record purges.\n\n## Scope\n\n- Extend `AuditRepository.IngestTapEvent` for identity events.\n- Insert one `raw_tap_events` row for each valid identity delivery.\n- Compute best-effort event key: `identity:{tap_delivery_id}:{did}:{handle}:{is_active}:{status}`.\n- Insert `identity_events` with conflict-do-nothing semantics.\n- If inserted, apply existing Tap identity behavior for current `actor` state and record purging.\n- Do not create synthetic per-record delete audit rows for identity purges.\n\n## Acceptance criteria\n\n- Identity event appends raw and identity audit rows.\n- Current actor behavior remains equivalent to current Tap ingestion.\n- Identity purges remove current records without adding synthetic `record_events` deletes.\n- Duplicate identity event conflicts on `identity_events.event_key` and is treated as successful.\n\n## Dependency graph\n\n- Blocked by: TAA-002.\n- Blocks: TAA-006, TAA-009."
+    },
+    {
+      "draftId": "TAA-006",
+      "title": "TAA-006 — Wire audit mode into Tap handler and ack-after-commit flow",
+      "priority": "high",
+      "estimate": 3,
+      "labels": ["Feature"],
+      "dependsOn": ["TAA-001", "TAA-003", "TAA-004", "TAA-005"],
+      "description": "## Context\n\nWhen audit mode is enabled, the Tap index handler should delegate database writes to `AuditRepository` so audit inserts and current-state projection changes share one transaction.\n\n## Scope\n\n- Wire `AuditRepository` into service/container/repository setup.\n- In Tap audit mode, route `IndexHandler.HandleEvent` to `AuditRepository.IngestTapEvent`.\n- Avoid separate `RecordsRepository` / `ActorsRepository` writes in audit mode.\n- Publish GraphQL subscriptions only after the ingest transaction succeeds.\n- Treat duplicate decoded events as successful no-ops for current-state updates.\n- Keep legacy activity logging best-effort after commit if it remains enabled.\n\n## Acceptance criteria\n\n- `AUDIT_ENABLED=false` preserves current Tap handler behavior.\n- `AUDIT_ENABLED=true` writes audit rows and current-state updates in one transaction.\n- Tap ack is sent only after repository commit succeeds.\n- Duplicate decoded event still commits and acks.\n\n## Dependency graph\n\n- Blocked by: TAA-001, TAA-003, TAA-004, TAA-005.\n- Blocks: TAA-010, TAA-012, TAA-013."
+    },
+    {
+      "draftId": "TAA-007",
+      "title": "TAA-007 — Add audit record event query repository with filters and cursors",
+      "priority": "medium",
+      "estimate": 4,
+      "labels": ["Feature"],
+      "dependsOn": ["TAA-002"],
+      "description": "## Context\n\nGraphQL audit queries need a repository method that reads from `record_events` with stable opaque cursor pagination.\n\n## Scope\n\n- Add `FindRecordEvents(ctx, opts RecordEventFindOptions) (*RecordEventPage, error)` or equivalent.\n- Support first-version filters: `id`, `uri`, `did`, `collection`, `rkey`, `action`, `live`, `rev`, `cid`, `receivedAt`.\n- Support order by `record_events.id` ascending/descending initially, matching the plan examples.\n- Encode opaque cursors around `record_events.id`.\n- Keep query behavior dialect-compatible for SQLite and Postgres.\n\n## Acceptance criteria\n\n- Repository returns stable pages and `pageInfo` data needed by GraphQL.\n- Filters compose safely with parameterized SQL.\n- Cursor decoding errors are actionable.\n- No existing current-state query path changes.\n\n## Dependency graph\n\n- Blocked by: TAA-002.\n- Blocks: TAA-008."
+    },
+    {
+      "draftId": "TAA-008",
+      "title": "TAA-008 — Add GraphQL auditRecordEvents API",
+      "priority": "medium",
+      "estimate": 4,
+      "labels": ["Feature"],
+      "dependsOn": ["TAA-007"],
+      "description": "## Context\n\nExpose append-only record history through a separate audit query alongside existing current-state queries. Avoid the name `RecordEvent` because subscriptions already use it.\n\n## Scope\n\n- Add GraphQL types for `AuditRecordEvent`, `AuditRecordAction`, filters, ordering, connection, edge, and page info integration.\n- Add `Query.auditRecordEvents(first, after, where, orderBy)`.\n- Wire `AuditRepository` through resolver repository context/service container.\n- Map database action strings to enum values `CREATE`, `UPDATE`, `DELETE`.\n- Return JSON record payloads.\n\n## Acceptance criteria\n\n- Existing GraphQL current-state APIs remain unchanged.\n- `auditRecordEvents` supports plan examples for record URI trail, collection deletes, DID changes, and cursor continuation.\n- Type naming avoids collision with subscription `RecordEvent`.\n- Resolver errors explain invalid filters/cursors clearly.\n\n## Dependency graph\n\n- Blocked by: TAA-007.\n- Blocks: TAA-011, TAA-012, TAA-013."
+    },
+    {
+      "draftId": "TAA-009",
+      "title": "TAA-009 — Add repository ingest tests for records, dedupe, identity, and purges",
+      "priority": "medium",
+      "estimate": 5,
+      "labels": ["Improvement"],
+      "dependsOn": ["TAA-002", "TAA-004", "TAA-005"],
+      "description": "## Context\n\nThe audit repository owns the most important correctness rules: append-only rows, dedupe behavior, one-transaction current-state updates, missing-field tolerance, and identity purge behavior.\n\n## Scope\n\nAdd DB-backed tests, preferably using existing shared test helpers. Cover:\n\n1. create inserts raw, audit, and current-state rows;\n2. duplicate delivery inserts multiple raw rows but one `record_events` row;\n3. update appends a second audit row and updates current state;\n4. delete appends history and removes current state;\n5. create/update with missing body is audited and succeeds without projection update;\n6. missing CID is audited using empty/null CID event-key slot;\n7. missing rev uses fallback key and succeeds;\n8. identity event appends audit history and updates actor state;\n9. identity purge removes current records without synthetic record deletes.\n\n## Acceptance criteria\n\n- Tests pass against SQLite memory DB.\n- Tests are structured so Postgres verification can exercise the same behavior where possible.\n- Failure messages make it clear whether raw append, dedupe, or current projection failed.\n\n## Dependency graph\n\n- Blocked by: TAA-002, TAA-004, TAA-005.\n- Blocks: TAA-013."
+    },
+    {
+      "draftId": "TAA-010",
+      "title": "TAA-010 — Add Tap consumer and audit handler ack-flow tests",
+      "priority": "medium",
+      "estimate": 3,
+      "labels": ["Improvement"],
+      "dependsOn": ["TAA-003", "TAA-006"],
+      "description": "## Context\n\nTap is at-least-once. The consumer must acknowledge only after the audit/current-state transaction succeeds, while duplicates should still ack after a successful no-op transaction.\n\n## Scope\n\n- Test that raw payload and full event reach the handler.\n- Test successful handler call emits `ack` with top-level Tap delivery id.\n- Test handler error prevents ack.\n- Test duplicate decoded event path returns success and acks.\n- Test audit disabled path still uses existing current-state behavior.\n\n## Acceptance criteria\n\n- Ack behavior is covered without requiring a live Tap service.\n- Tests clearly distinguish parse failure, handler failure, and duplicate no-op success.\n- No Jetstream/backfill tests are added for this audit feature.\n\n## Dependency graph\n\n- Blocked by: TAA-003, TAA-006.\n- Blocks: TAA-013."
+    },
+    {
+      "draftId": "TAA-011",
+      "title": "TAA-011 — Add GraphQL audit filter and cursor pagination tests",
+      "priority": "medium",
+      "estimate": 3,
+      "labels": ["Improvement"],
+      "dependsOn": ["TAA-008"],
+      "description": "## Context\n\nThe user-facing audit API needs regression coverage for filtering and stable cursor behavior.\n\n## Scope\n\n- Test `auditRecordEvents` filters by `uri`, `did`, `collection`, and `action`.\n- Test cursor pagination uses stable `record_events.id` cursors.\n- Test ascending/descending ordering if both are supported in the resolver.\n- Test invalid cursor/filter errors are actionable.\n\n## Acceptance criteria\n\n- GraphQL tests demonstrate the example query shapes from the plan.\n- Pagination does not skip or duplicate rows across pages.\n- Tests do not depend on wall-clock timing for row order.\n\n## Dependency graph\n\n- Blocked by: TAA-008.\n- Blocks: TAA-013."
+    },
+    {
+      "draftId": "TAA-012",
+      "title": "TAA-012 — Document Tap audit mode, limitations, examples, and config",
+      "priority": "medium",
+      "estimate": 2,
+      "labels": ["Improvement"],
+      "dependsOn": ["TAA-001", "TAA-006", "TAA-008"],
+      "description": "## Context\n\nOperators need to understand what audit mode stores, what it does not reconstruct, how duplicates behave, and how to query the audit trail.\n\n## Scope\n\n- Document `AUDIT_ENABLED=true` with `TAP_ENABLED=true`.\n- Explain that audit history starts when Tap audit ingestion starts and does not reconstruct older repo edits.\n- Explain `live=true/false` semantics.\n- Explain delete audit behavior vs current `record` removal.\n- Explain duplicate Tap deliveries and `raw_tap_events`.\n- Explain identity purges are represented by `identity_events`, not synthetic record deletes.\n- Include the example GraphQL queries from the plan or equivalent.\n\n## Acceptance criteria\n\n- README or Tap deployment docs include config and limitations.\n- Docs include at least one record audit trail query and one delete query.\n- Docs match the implemented schema and names exactly.\n\n## Dependency graph\n\n- Blocked by: TAA-001, TAA-006, TAA-008.\n- Blocks: TAA-013."
+    },
+    {
+      "draftId": "TAA-013",
+      "title": "TAA-013 — Final SQLite/Postgres verification and release-note fragment",
+      "priority": "medium",
+      "estimate": 2,
+      "labels": ["Improvement"],
+      "dependsOn": ["TAA-006", "TAA-008", "TAA-009", "TAA-010", "TAA-011", "TAA-012"],
+      "description": "## Context\n\nClose the feature by running the repo-required verification for Go/database/API changes and adding a Changie fragment because this is externally meaningful for operators and API users.\n\n## Scope\n\n- Run SQLite verification first.\n- Run Postgres verification if local Postgres is available.\n- Run relevant GraphQL/API tests.\n- Add a Changie fragment using the repository workflow.\n- Fix dialect-specific issues found during verification.\n\n## Acceptance criteria\n\n- `go build -v ./...` passes.\n- `make lint` passes or has documented unrelated blockers.\n- `DATABASE_URL=sqlite::memory: go test -v -race ./...` passes.\n- Postgres DB-backed tests pass when the local test database is available.\n- `.changes/unreleased/*.yaml` includes the audit feature note.\n\n## Dependency graph\n\n- Blocked by: TAA-006, TAA-008, TAA-009, TAA-010, TAA-011, TAA-012.\n- Blocks: none."
+    }
+  ]
+}

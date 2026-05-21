@@ -66,7 +66,7 @@ After registering by NSID or uploading a ZIP file, restart/redeploy the backend 
 
 - **Cryptographic verification** — verifies repo structure, MST integrity, and identity signatures
 - **Ordering guarantees** — strict per-repo event ordering, no backfill/live race conditions
-- **At-least-once delivery** — ack-based protocol ensures no events are lost on crash
+- **At-least-once delivery** — the default ack-based protocol ensures no events are lost on crash
 - **Identity tracking** — handle changes and account status updates are handled automatically
 - **Simplified architecture** — Tap manages backfill automatically; no separate backfill worker needed
 
@@ -75,7 +75,7 @@ After registering by NSID or uploading a ZIP file, restart/redeploy the backend 
 ```bash
 # Copy and configure environment
 cp .env.example .env
-# Set TAP_ADMIN_PASSWORD and other vars in .env
+# Set TAP_ADMIN_PASSWORD, SECRET_KEY_BASE, ADMIN_API_KEY, and other vars in .env
 
 # Start Tap + Hyperindex together
 docker compose -f docker-compose.tap.yml up --build
@@ -104,10 +104,17 @@ TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.ym
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TAP_ENABLED` | Enable Tap consumer (disables Jetstream+Backfill) | `false` |
+| `AUDIT_ENABLED` | Store append-only audit history for Tap events; requires `TAP_ENABLED=true` | `false` |
 | `TAP_URL` | WebSocket URL of the Tap sidecar | `ws://localhost:2480` |
-| `TAP_ADMIN_PASSWORD` | Password for Tap's admin HTTP API | *(required for docker-compose.tap.yml)* |
+| `TAP_ADMIN_PASSWORD` | Password for Tap's admin/channel Basic auth, used for `/repos/add` and `/channel` | *(required for docker-compose.tap.yml)* |
 | `TAP_DISABLE_ACKS` | Disable ack-based delivery (useful for debugging) | `false` |
 | `TAP_SIGNAL_COLLECTION` | Collection NSID for auto-discovery of repos | *(empty)* |
+
+**Append-only audit history:**
+
+Set `AUDIT_ENABLED=true` with `TAP_ENABLED=true` to store immutable Tap record and identity history before current-state rows are updated. Current GraphQL queries keep reading from `record` and `actor`; record audit history is available through `auditRecordEvents`, while raw and identity audit rows are stored in the database for operators.
+
+See [Tap audit mode](docs/tap-audit-mode.md) for schema details, GraphQL examples, duplicate-delivery behavior, and limitations.
 
 #### Legacy Mode: Jetstream + Backfill
 

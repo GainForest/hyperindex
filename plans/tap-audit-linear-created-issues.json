@@ -1,0 +1,84 @@
+{
+  "issues": {
+    "TAA-001": {
+      "id": "a0d1e9e3-5264-4115-9e74-45321b448b26",
+      "identifier": "GON-45",
+      "url": "https://linear.app/gongphel-labs/issue/GON-45/taa-001-add-audit-enabled-config-and-tap-only-startup-validation",
+      "title": "TAA-001 — Add AUDIT_ENABLED config and Tap-only startup validation"
+    },
+    "TAA-002": {
+      "id": "bf3dcbb5-0f07-4d56-8652-ae988a3d0a81",
+      "identifier": "GON-46",
+      "url": "https://linear.app/gongphel-labs/issue/GON-46/taa-002-add-audit-event-migrations-for-sqlite-and-postgres",
+      "title": "TAA-002 — Add audit event migrations for SQLite and Postgres"
+    },
+    "TAA-003": {
+      "id": "aac80ee6-ae99-4819-9164-b25eb7fe0355",
+      "identifier": "GON-47",
+      "url": "https://linear.app/gongphel-labs/issue/GON-47/taa-003-pass-raw-tap-payload-and-full-event-through-handleevent",
+      "title": "TAA-003 — Pass raw Tap payload and full event through HandleEvent"
+    },
+    "TAA-004": {
+      "id": "888d7b14-c081-4dd4-abd1-41967d55c865",
+      "identifier": "GON-48",
+      "url": "https://linear.app/gongphel-labs/issue/GON-48/taa-004-implement-record-audit-ingest-with-dedupe-and-current-state",
+      "title": "TAA-004 — Implement record audit ingest with dedupe and current-state transaction"
+    },
+    "TAA-005": {
+      "id": "0347799f-585f-4047-bc9b-8e7b00fc3acd",
+      "identifier": "GON-49",
+      "url": "https://linear.app/gongphel-labs/issue/GON-49/taa-005-implement-identity-audit-ingest-and-current-actor-behavior",
+      "title": "TAA-005 — Implement identity audit ingest and current actor behavior"
+    },
+    "TAA-006": {
+      "id": "06ad31c1-7f1c-4eb2-81b7-179fa32ba82d",
+      "identifier": "GON-50",
+      "url": "https://linear.app/gongphel-labs/issue/GON-50/taa-006-wire-audit-mode-into-tap-handler-and-ack-after-commit-flow",
+      "title": "TAA-006 — Wire audit mode into Tap handler and ack-after-commit flow"
+    },
+    "TAA-007": {
+      "id": "e25c9899-5a4e-4292-abdb-ce98ac36baf0",
+      "identifier": "GON-51",
+      "url": "https://linear.app/gongphel-labs/issue/GON-51/taa-007-add-audit-record-event-query-repository-with-filters-and",
+      "title": "TAA-007 — Add audit record event query repository with filters and cursors"
+    },
+    "TAA-008": {
+      "id": "7ae8f3b6-3432-42bc-a822-ccf1ec7bb466",
+      "identifier": "GON-52",
+      "url": "https://linear.app/gongphel-labs/issue/GON-52/taa-008-add-graphql-auditrecordevents-api",
+      "title": "TAA-008 — Add GraphQL auditRecordEvents API"
+    },
+    "TAA-009": {
+      "id": "3f2c61bf-a3db-49e8-b774-fc841bb2ce95",
+      "identifier": "GON-53",
+      "url": "https://linear.app/gongphel-labs/issue/GON-53/taa-009-add-repository-ingest-tests-for-records-dedupe-identity-and",
+      "title": "TAA-009 — Add repository ingest tests for records, dedupe, identity, and purges"
+    },
+    "TAA-010": {
+      "id": "87b639fe-d887-414b-8bad-8c72f84d3ffc",
+      "identifier": "GON-54",
+      "url": "https://linear.app/gongphel-labs/issue/GON-54/taa-010-add-tap-consumer-and-audit-handler-ack-flow-tests",
+      "title": "TAA-010 — Add Tap consumer and audit handler ack-flow tests"
+    },
+    "TAA-011": {
+      "id": "73f9fa9c-63a0-47ea-a0e5-5620f3bf9666",
+      "identifier": "GON-55",
+      "url": "https://linear.app/gongphel-labs/issue/GON-55/taa-011-add-graphql-audit-filter-and-cursor-pagination-tests",
+      "title": "TAA-011 — Add GraphQL audit filter and cursor pagination tests"
+    },
+    "TAA-012": {
+      "id": "9f71f902-d503-4f95-8445-588747fdb9b3",
+      "identifier": "GON-56",
+      "url": "https://linear.app/gongphel-labs/issue/GON-56/taa-012-document-tap-audit-mode-limitations-examples-and-config",
+      "title": "TAA-012 — Document Tap audit mode, limitations, examples, and config"
+    },
+    "TAA-013": {
+      "id": "5ad5f935-1720-4078-81c6-3151c6ebc657",
+      "identifier": "GON-57",
+      "url": "https://linear.app/gongphel-labs/issue/GON-57/taa-013-final-sqlitepostgres-verification-and-release-note-fragment",
+      "title": "TAA-013 — Final SQLite/Postgres verification and release-note fragment"
+    }
+  },
+  "source": "/home/kzoeps/Projects/gainforest/append-only-indexer/plans/tap-audit-linear-issues.json",
+  "updatedAt": "2026-05-21T14:29:40.159Z"
+}

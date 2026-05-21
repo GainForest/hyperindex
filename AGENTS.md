@@ -84,6 +84,7 @@ Run verification based on what changed.
 - `ADMIN_API_KEY` is required at startup.
 - `SECRET_KEY_BASE` must be at least 64 characters.
 - `TAP_ENABLED=true` switches ingestion to Tap mode.
+- `AUDIT_ENABLED=true` currently requires `TAP_ENABLED=true`; audit storage is Tap-only.
 - Migrations run automatically on startup.
 - Be careful with `ALLOWED_ORIGINS`: current code allows all origins when unset, even if older prose suggests stricter defaults.
 

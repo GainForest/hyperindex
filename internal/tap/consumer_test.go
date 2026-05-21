@@ -15,6 +15,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 // upgrader is used by the mock WebSocket server.
@@ -25,6 +29,8 @@ var upgrader = websocket.Upgrader{
 // mockHandler is a test implementation of EventHandler.
 type mockHandler struct {
 	mu             sync.Mutex
+	events         []*Event
+	rawPayloads    [][]byte
 	recordEvents   []*RecordEvent
 	identityEvents []*IdentityEvent
 	recordErr      error
@@ -32,21 +38,28 @@ type mockHandler struct {
 	recordDelay    time.Duration
 }
 
-func (m *mockHandler) HandleRecord(_ context.Context, event *RecordEvent) error {
-	if m.recordDelay > 0 {
+func (m *mockHandler) HandleEvent(_ context.Context, rawPayload []byte, event *Event) error {
+	if event.IsRecord() && m.recordDelay > 0 {
 		time.Sleep(m.recordDelay)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.recordEvents = append(m.recordEvents, event)
-	return m.recordErr
-}
 
-func (m *mockHandler) HandleIdentity(_ context.Context, event *IdentityEvent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.identityEvents = append(m.identityEvents, event)
-	return m.identityErr
+
+	payloadCopy := append([]byte(nil), rawPayload...)
+	m.rawPayloads = append(m.rawPayloads, payloadCopy)
+	m.events = append(m.events, event)
+
+	switch {
+	case event.IsRecord():
+		m.recordEvents = append(m.recordEvents, event.Record)
+		return m.recordErr
+	case event.IsIdentity():
+		m.identityEvents = append(m.identityEvents, event.Identity)
+		return m.identityErr
+	default:
+		return nil
+	}
 }
 
 func (m *mockHandler) RecordCount() int {
@@ -59,6 +72,24 @@ func (m *mockHandler) IdentityCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.identityEvents)
+}
+
+func (m *mockHandler) FirstRawPayload() []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.rawPayloads) == 0 {
+		return nil
+	}
+	return append([]byte(nil), m.rawPayloads[0]...)
+}
+
+func (m *mockHandler) FirstEvent() *Event {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.events) == 0 {
+		return nil
+	}
+	return m.events[0]
 }
 
 // newTestServer creates a mock WebSocket server that calls serverFn for each connection.
@@ -191,6 +222,58 @@ func TestConsumer_ReceivesAndAcksRecordEvent(t *testing.T) {
 
 	if handler.RecordCount() != 1 {
 		t.Errorf("expected 1 record event, got %d", handler.RecordCount())
+	}
+}
+
+// TestConsumer_PassesRawPayloadAndFullEvent verifies the handler receives the
+// exact websocket payload bytes and the parsed top-level Tap envelope.
+func TestConsumer_PassesRawPayloadAndFullEvent(t *testing.T) {
+	ackReceived := make(chan string, 1)
+	rawPayload := []byte(`{"id":54321,"type":"record","record":{"live":true,"rev":"abc123","did":"did:plc:raw","collection":"app.bsky.feed.post","rkey":"raw1","action":"create","cid":"bafyraw","record":{"text":"raw"}}}`)
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		if err := conn.WriteMessage(websocket.TextMessage, rawPayload); err != nil {
+			t.Logf("write error: %v", err)
+			return
+		}
+		ackReceived <- readAck(t, conn)
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	select {
+	case ack := <-ackReceived:
+		expected := `{"type":"ack","id":54321}`
+		if ack != expected {
+			t.Errorf("expected ack %q, got %q", expected, ack)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not receive ack within timeout")
+	}
+
+	consumer.Stop()
+
+	if got := string(handler.FirstRawPayload()); got != string(rawPayload) {
+		t.Errorf("raw payload mismatch:\nwant %s\n got %s", string(rawPayload), got)
+	}
+	gotEvent := handler.FirstEvent()
+	if gotEvent == nil {
+		t.Fatal("handler did not receive event")
+	}
+	if gotEvent.ID != 54321 {
+		t.Errorf("event ID: want 54321, got %d", gotEvent.ID)
+	}
+	if gotEvent.Record == nil || gotEvent.Record.RKey != "raw1" {
+		t.Fatalf("handler received wrong record event: %#v", gotEvent.Record)
 	}
 }
 
@@ -856,6 +939,53 @@ func TestConsumer_BackoffEscalatesOnPersistentFailure(t *testing.T) {
 	}
 	if attempts == 0 {
 		t.Error("expected at least 1 connection attempt, got 0")
+	}
+}
+
+func TestConsumer_AuditHandlerAcksAfterSuccessfulIngest(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	pubsub := subscription.NewPubSub()
+	handler := NewAuditIndexHandler(nil, nil, repositories.NewAuditRepository(db.Executor), nil, pubsub)
+	ackReceived := make(chan string, 1)
+	rawPayload := []byte(`{"id":6767,"type":"record","record":{"live":true,"rev":"rev-consumer-audit","did":"did:plc:consumer-audit","collection":"app.bsky.feed.post","rkey":"post1","action":"create","cid":"bafyconsumer","record":{"text":"consumer audit"}}}`)
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		if err := conn.WriteMessage(websocket.TextMessage, rawPayload); err != nil {
+			t.Logf("write error: %v", err)
+			return
+		}
+		ackReceived <- readAck(t, conn)
+	})
+	defer srv.Close()
+
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	select {
+	case ack := <-ackReceived:
+		expected := `{"type":"ack","id":6767}`
+		if ack != expected {
+			t.Errorf("expected ack %q, got %q", expected, ack)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not receive ack within timeout")
+	}
+	consumer.Stop()
+
+	var rawCount int64
+	if err := db.Executor.QueryRow(context.Background(), "SELECT COUNT(*) FROM raw_tap_events", nil, &rawCount); err != nil {
+		t.Fatalf("count raw_tap_events: %v", err)
+	}
+	if rawCount != 1 {
+		t.Fatalf("raw_tap_events count = %d, want 1", rawCount)
+	}
+	if _, err := db.Records.GetByURI(context.Background(), "at://did:plc:consumer-audit/app.bsky.feed.post/post1"); err != nil {
+		t.Fatalf("current record not committed before ack: %v", err)
 	}
 }
 

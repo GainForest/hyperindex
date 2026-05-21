@@ -331,6 +331,29 @@ func TestConfigValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "audit enabled requires tap enabled",
+			config: Config{
+				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
+				Port:          8080,
+				AdminAPIKey:   "admin-secret-123",
+				AuditEnabled:  true,
+				TapEnabled:    false,
+			},
+			wantErr:         true,
+			wantErrContains: "AUDIT_ENABLED requires TAP_ENABLED=true",
+		},
+		{
+			name: "audit enabled with tap enabled",
+			config: Config{
+				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
+				Port:          8080,
+				AdminAPIKey:   "admin-secret-123",
+				AuditEnabled:  true,
+				TapEnabled:    true,
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -361,6 +384,24 @@ func TestLoadAdminAPIKey(t *testing.T) {
 
 	if cfg.AdminAPIKey != "admin-secret" {
 		t.Fatalf("AdminAPIKey = %q, want %q", cfg.AdminAPIKey, "admin-secret")
+	}
+}
+
+func TestLoadAuditEnabled(t *testing.T) {
+	t.Setenv("SECRET_KEY_BASE", "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing")
+	t.Setenv("TAP_ENABLED", "true")
+	t.Setenv("AUDIT_ENABLED", "true")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.TapEnabled {
+		t.Fatalf("TapEnabled = %v, want true", cfg.TapEnabled)
+	}
+	if !cfg.AuditEnabled {
+		t.Fatalf("AuditEnabled = %v, want true", cfg.AuditEnabled)
 	}
 }
 
@@ -421,7 +462,7 @@ func TestConfigAddress(t *testing.T) {
 
 func TestTapConfigDefaults(t *testing.T) {
 	// Ensure TAP env vars are unset before testing defaults
-	for _, key := range []string{"TAP_URL", "TAP_ADMIN_PASSWORD", "TAP_DISABLE_ACKS", "TAP_ENABLED"} {
+	for _, key := range []string{"TAP_URL", "TAP_ADMIN_PASSWORD", "TAP_DISABLE_ACKS", "TAP_ENABLED", "AUDIT_ENABLED"} {
 		os.Unsetenv(key)
 	}
 
@@ -444,6 +485,11 @@ func TestTapConfigDefaults(t *testing.T) {
 	if tapEnabled != false {
 		t.Errorf("TAP_ENABLED default = %v, want false", tapEnabled)
 	}
+
+	auditEnabled := getEnvBool("AUDIT_ENABLED", false)
+	if auditEnabled != false {
+		t.Errorf("AUDIT_ENABLED default = %v, want false", auditEnabled)
+	}
 }
 
 func TestTapConfigEnvVars(t *testing.T) {
@@ -451,11 +497,13 @@ func TestTapConfigEnvVars(t *testing.T) {
 	os.Setenv("TAP_ADMIN_PASSWORD", "secret")
 	os.Setenv("TAP_DISABLE_ACKS", "true")
 	os.Setenv("TAP_ENABLED", "true")
+	os.Setenv("AUDIT_ENABLED", "true")
 	defer func() {
 		os.Unsetenv("TAP_URL")
 		os.Unsetenv("TAP_ADMIN_PASSWORD")
 		os.Unsetenv("TAP_DISABLE_ACKS")
 		os.Unsetenv("TAP_ENABLED")
+		os.Unsetenv("AUDIT_ENABLED")
 	}()
 
 	tapURL := getEnv("TAP_URL", "ws://localhost:2480")
@@ -477,6 +525,11 @@ func TestTapConfigEnvVars(t *testing.T) {
 	if !tapEnabled {
 		t.Errorf("TAP_ENABLED = %v, want true", tapEnabled)
 	}
+
+	auditEnabled := getEnvBool("AUDIT_ENABLED", false)
+	if !auditEnabled {
+		t.Errorf("AUDIT_ENABLED = %v, want true", auditEnabled)
+	}
 }
 
 func TestTapConfigFields(t *testing.T) {
@@ -485,6 +538,7 @@ func TestTapConfigFields(t *testing.T) {
 		TapAdminPassword: "mypassword",
 		TapDisableAcks:   false,
 		TapEnabled:       true,
+		AuditEnabled:     true,
 	}
 
 	if cfg.TapURL != "ws://localhost:2480" {
@@ -498,6 +552,9 @@ func TestTapConfigFields(t *testing.T) {
 	}
 	if cfg.TapEnabled != true {
 		t.Errorf("TapEnabled = %v, want true", cfg.TapEnabled)
+	}
+	if cfg.AuditEnabled != true {
+		t.Errorf("AuditEnabled = %v, want true", cfg.AuditEnabled)
 	}
 
 	// Verify password is not directly logged (tap_admin_password_set pattern)

@@ -13,13 +13,16 @@ import (
 
 // IndexHandler implements EventHandler and stores events in the database.
 type IndexHandler struct {
-	records  *repositories.RecordsRepository
-	actors   *repositories.ActorsRepository
-	activity *repositories.JetstreamActivityRepository // reuse existing activity repo
-	pubsub   *subscription.PubSub
+	records      *repositories.RecordsRepository
+	actors       *repositories.ActorsRepository
+	audit        *repositories.AuditRepository
+	auditEnabled bool
+	activity     *repositories.JetstreamActivityRepository // reuse existing activity repo
+	pubsub       *subscription.PubSub
 }
 
-// NewIndexHandler creates a new IndexHandler.
+// NewIndexHandler creates an IndexHandler that applies Tap events directly to
+// the current-state repositories without storing append-only audit history.
 func NewIndexHandler(
 	records *repositories.RecordsRepository,
 	actors *repositories.ActorsRepository,
@@ -31,6 +34,116 @@ func NewIndexHandler(
 		actors:   actors,
 		activity: activity,
 		pubsub:   pubsub,
+	}
+}
+
+// NewAuditIndexHandler creates an IndexHandler that stores Tap deliveries through
+// AuditRepository before publishing subscriptions. In this mode, HandleEvent does
+// not call RecordsRepository or ActorsRepository directly; the audit repository
+// owns the transaction that writes audit rows and current-state projections.
+func NewAuditIndexHandler(
+	records *repositories.RecordsRepository,
+	actors *repositories.ActorsRepository,
+	audit *repositories.AuditRepository,
+	activity *repositories.JetstreamActivityRepository,
+	pubsub *subscription.PubSub,
+) *IndexHandler {
+	return &IndexHandler{
+		records:      records,
+		actors:       actors,
+		audit:        audit,
+		auditEnabled: true,
+		activity:     activity,
+		pubsub:       pubsub,
+	}
+}
+
+// HandleEvent processes a parsed Tap delivery. In audit mode it writes through
+// AuditRepository first and publishes record subscriptions only after the audit
+// transaction commits. Otherwise it preserves the existing current-state path.
+func (h *IndexHandler) HandleEvent(ctx context.Context, rawPayload []byte, event *Event) error {
+	if event == nil {
+		return fmt.Errorf("tap index handler requires a parsed event; got nil")
+	}
+	if h.auditEnabled {
+		return h.handleAuditEvent(ctx, rawPayload, event)
+	}
+
+	switch {
+	case event.IsRecord():
+		return h.HandleRecord(ctx, event.Record)
+	case event.IsIdentity():
+		return h.HandleIdentity(ctx, event.Identity)
+	default:
+		return nil
+	}
+}
+
+func (h *IndexHandler) handleAuditEvent(ctx context.Context, rawPayload []byte, event *Event) error {
+	if h.audit == nil {
+		return fmt.Errorf("audit Tap handler requires an AuditRepository; got nil")
+	}
+
+	result, err := h.audit.IngestTapEvent(ctx, rawPayload, auditTapEventFromEvent(event))
+	if err != nil {
+		return err
+	}
+	if event.IsRecord() && result.Inserted {
+		h.publishAuditRecordSubscription(event.Record)
+	}
+	return nil
+}
+
+func auditTapEventFromEvent(event *Event) *repositories.AuditTapEvent {
+	auditEvent := &repositories.AuditTapEvent{
+		ID:   event.ID,
+		Type: string(event.Type),
+	}
+	if event.IsRecord() {
+		record := event.Record
+		auditEvent.Record = &repositories.AuditTapRecordEvent{
+			Live:       record.Live,
+			Rev:        record.Rev,
+			DID:        record.DID,
+			Collection: record.Collection,
+			RKey:       record.RKey,
+			Action:     string(record.Action),
+			CID:        record.CID,
+			Record:     append([]byte(nil), record.Record...),
+		}
+	}
+	if event.IsIdentity() {
+		identity := event.Identity
+		auditEvent.Identity = &repositories.AuditTapIdentityEvent{
+			DID:             identity.DID,
+			Handle:          identity.Handle,
+			IsActive:        identity.IsActive,
+			IsActivePresent: identity.IsActivePresent,
+			Status:          identity.Status,
+		}
+	}
+	return auditEvent
+}
+
+func (h *IndexHandler) publishAuditRecordSubscription(event *RecordEvent) {
+	if h.pubsub == nil || event == nil {
+		return
+	}
+
+	uri := event.URI()
+	switch event.Action {
+	case ActionCreate:
+		if len(event.Record) == 0 {
+			return
+		}
+		h.pubsub.PublishRecord(subscription.EventCreate, uri, event.CID, event.DID, event.Collection, event.Record)
+	case ActionUpdate:
+		if len(event.Record) == 0 {
+			return
+		}
+		h.pubsub.PublishRecord(subscription.EventUpdate, uri, event.CID, event.DID, event.Collection, event.Record)
+	case ActionDelete:
+		h.pubsub.PublishRecord(subscription.EventDelete, uri, "", event.DID, event.Collection, nil)
 	}
 }
 

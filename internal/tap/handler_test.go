@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/tap"
 	"github.com/GainForest/hyperindex/internal/testutil"
@@ -19,6 +21,169 @@ func setupHandler(t *testing.T) (*tap.IndexHandler, *testutil.TestDB, *subscript
 	pubsub := subscription.NewPubSub()
 	handler := tap.NewIndexHandler(db.Records, db.Actors, db.Activity, pubsub)
 	return handler, db, pubsub
+}
+
+func setupAuditHandler(t *testing.T) (*tap.IndexHandler, *testutil.TestDB, *subscription.PubSub) {
+	t.Helper()
+	db := testutil.SetupTestDB(t)
+	pubsub := subscription.NewPubSub()
+	audit := repositories.NewAuditRepository(db.Executor)
+	handler := tap.NewAuditIndexHandler(nil, nil, audit, nil, pubsub)
+	return handler, db, pubsub
+}
+
+func assertTableRowCount(t *testing.T, db *testutil.TestDB, table string, want int64) {
+	t.Helper()
+	var got int64
+	if err := db.Executor.QueryRow(context.Background(), "SELECT COUNT(*) FROM "+table, nil, &got); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	if got != want {
+		t.Fatalf("count %s = %d, want %d", table, got, want)
+	}
+}
+
+func TestIndexHandler_HandleEvent_AuditModePublishesOnlyAfterInsertedRecord(t *testing.T) {
+	handler, db, pubsub := setupAuditHandler(t)
+	ctx := context.Background()
+	sub := pubsub.Subscribe("app.bsky.feed.post")
+	defer pubsub.Unsubscribe(sub)
+
+	rawPayload := []byte(`{"id":601,"type":"record","record":{"live":true,"rev":"rev1","did":"did:plc:audit","collection":"app.bsky.feed.post","rkey":"post1","action":"create","cid":"bafyreiaudit","record":{"text":"audit"}}}`)
+	event, err := tap.ParseEvent(rawPayload)
+	if err != nil {
+		t.Fatalf("ParseEvent returned error: %v", err)
+	}
+
+	if err := handler.HandleEvent(ctx, rawPayload, event); err != nil {
+		t.Fatalf("HandleEvent(audit create) returned error: %v", err)
+	}
+
+	assertTableRowCount(t, db, "raw_tap_events", 1)
+	assertTableRowCount(t, db, "record_events", 1)
+
+	var storedPayload string
+	if err := db.Executor.QueryRow(ctx, "SELECT payload FROM raw_tap_events WHERE tap_delivery_id = 601", nil, &storedPayload); err != nil {
+		t.Fatalf("raw payload not stored: %v", err)
+	}
+	if storedPayload != string(rawPayload) {
+		t.Fatalf("stored raw payload = %q, want exact websocket payload %q", storedPayload, string(rawPayload))
+	}
+
+	uri := "at://did:plc:audit/app.bsky.feed.post/post1"
+	rec, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("current record not found after audit ingest: %v", err)
+	}
+	if rec.CID != "bafyreiaudit" {
+		t.Fatalf("current record CID = %q, want bafyreiaudit", rec.CID)
+	}
+
+	select {
+	case pubEvent := <-sub.Events:
+		if pubEvent.Type != subscription.EventCreate {
+			t.Fatalf("subscription type = %q, want %q", pubEvent.Type, subscription.EventCreate)
+		}
+		if pubEvent.URI != uri {
+			t.Fatalf("subscription URI = %q, want %q", pubEvent.URI, uri)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected audit create subscription after successful ingest")
+	}
+}
+
+func TestIndexHandler_HandleEvent_AuditModeDuplicateDoesNotPublishAgain(t *testing.T) {
+	handler, db, pubsub := setupAuditHandler(t)
+	ctx := context.Background()
+	sub := pubsub.Subscribe("app.bsky.feed.post")
+	defer pubsub.Unsubscribe(sub)
+
+	rawPayload := []byte(`{"id":602,"type":"record","record":{"live":true,"rev":"rev1","did":"did:plc:auditdup","collection":"app.bsky.feed.post","rkey":"post1","action":"create","cid":"bafyreidup","record":{"text":"dup"}}}`)
+	event, err := tap.ParseEvent(rawPayload)
+	if err != nil {
+		t.Fatalf("ParseEvent returned error: %v", err)
+	}
+
+	if err := handler.HandleEvent(ctx, rawPayload, event); err != nil {
+		t.Fatalf("first HandleEvent(audit duplicate fixture) returned error: %v", err)
+	}
+	select {
+	case <-sub.Events:
+	case <-time.After(time.Second):
+		t.Fatal("expected first audit delivery to publish")
+	}
+
+	if err := handler.HandleEvent(ctx, rawPayload, event); err != nil {
+		t.Fatalf("duplicate HandleEvent returned error: %v", err)
+	}
+
+	assertTableRowCount(t, db, "raw_tap_events", 2)
+	assertTableRowCount(t, db, "record_events", 1)
+	select {
+	case pubEvent := <-sub.Events:
+		t.Fatalf("duplicate audit event published unexpected subscription: %+v", pubEvent)
+	default:
+	}
+}
+
+func TestIndexHandler_HandleEvent_AuditModeMissingBodyAuditsWithoutPublishing(t *testing.T) {
+	handler, db, pubsub := setupAuditHandler(t)
+	ctx := context.Background()
+	sub := pubsub.Subscribe("app.bsky.feed.post")
+	defer pubsub.Unsubscribe(sub)
+
+	rawPayload := []byte(`{"id":603,"type":"record","record":{"live":true,"rev":"rev-missing-body","did":"did:plc:auditmissing","collection":"app.bsky.feed.post","rkey":"post1","action":"create","cid":"bafyreibody"}}`)
+	event, err := tap.ParseEvent(rawPayload)
+	if err != nil {
+		t.Fatalf("ParseEvent returned error: %v", err)
+	}
+
+	if err := handler.HandleEvent(ctx, rawPayload, event); err != nil {
+		t.Fatalf("HandleEvent(audit missing body) returned error: %v", err)
+	}
+
+	assertTableRowCount(t, db, "raw_tap_events", 1)
+	assertTableRowCount(t, db, "record_events", 1)
+	if _, err := db.Records.GetByURI(ctx, "at://did:plc:auditmissing/app.bsky.feed.post/post1"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("current record error = %v, want sql.ErrNoRows", err)
+	}
+	select {
+	case pubEvent := <-sub.Events:
+		t.Fatalf("missing-body audit event published unexpected subscription: %+v", pubEvent)
+	default:
+	}
+}
+
+func TestIndexHandler_HandleEvent_AuditModeIdentityUpdatesActorWithoutSubscription(t *testing.T) {
+	handler, db, pubsub := setupAuditHandler(t)
+	ctx := context.Background()
+	sub := pubsub.Subscribe("")
+	defer pubsub.Unsubscribe(sub)
+
+	rawPayload := []byte(`{"id":604,"type":"identity","identity":{"did":"did:plc:auditidentity","handle":"alice.example.com","is_active":true,"status":"active"}}`)
+	event, err := tap.ParseEvent(rawPayload)
+	if err != nil {
+		t.Fatalf("ParseEvent returned error: %v", err)
+	}
+
+	if err := handler.HandleEvent(ctx, rawPayload, event); err != nil {
+		t.Fatalf("HandleEvent(audit identity) returned error: %v", err)
+	}
+
+	assertTableRowCount(t, db, "raw_tap_events", 1)
+	assertTableRowCount(t, db, "identity_events", 1)
+	actor, err := db.Actors.GetByDID(ctx, "did:plc:auditidentity")
+	if err != nil {
+		t.Fatalf("actor not found after audit identity ingest: %v", err)
+	}
+	if actor.Handle != "alice.example.com" {
+		t.Fatalf("actor handle = %q, want alice.example.com", actor.Handle)
+	}
+	select {
+	case pubEvent := <-sub.Events:
+		t.Fatalf("identity audit event published unexpected record subscription: %+v", pubEvent)
+	default:
+	}
 }
 
 func TestIndexHandler_HandleRecord_Create(t *testing.T) {

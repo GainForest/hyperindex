@@ -20,6 +20,7 @@ type Repositories struct {
 	Records  *repositories.RecordsRepository
 	Actors   *repositories.ActorsRepository
 	Lexicons *repositories.LexiconsRepository
+	Audit    *repositories.AuditRepository
 }
 
 // NewRepositories creates a new Repositories from a database executor.
@@ -28,6 +29,7 @@ func NewRepositories(db database.Executor) *Repositories {
 		Records:  repositories.NewRecordsRepository(db),
 		Actors:   repositories.NewActorsRepository(db),
 		Lexicons: repositories.NewLexiconsRepository(db),
+		Audit:    repositories.NewAuditRepository(db),
 	}
 }
 

@@ -61,6 +61,7 @@ type Config struct {
 	TapAdminPassword string // Tap admin API password for Basic auth
 	TapDisableAcks   bool   // Fire-and-forget mode (default: false)
 	TapEnabled       bool   // Use Tap instead of Jetstream+Backfill (default: false)
+	AuditEnabled     bool   // Store append-only audit history for Tap events (default: false; requires TapEnabled)
 
 	// PLC Directory
 	PLCDirectoryURL string // PLC directory URL for DID resolution
@@ -119,6 +120,7 @@ func Load() (*Config, error) {
 		TapAdminPassword: getEnv("TAP_ADMIN_PASSWORD", ""),
 		TapDisableAcks:   getEnvBool("TAP_DISABLE_ACKS", false),
 		TapEnabled:       getEnvBool("TAP_ENABLED", false),
+		AuditEnabled:     getEnvBool("AUDIT_ENABLED", false),
 
 		// PLC Directory
 		PLCDirectoryURL: getEnv("PLC_DIRECTORY_URL", ""),
@@ -177,6 +179,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("PORT must be between 1 and 65535")
 	}
 
+	if c.AuditEnabled && !c.TapEnabled {
+		return fmt.Errorf("AUDIT_ENABLED requires TAP_ENABLED=true because audit storage is currently supported only for Tap ingestion; set TAP_ENABLED=true or unset AUDIT_ENABLED")
+	}
+
 	return nil
 }
 
@@ -198,6 +204,7 @@ func (c *Config) LogConfig() {
 		"backfill_on_start", c.BackfillOnStart,
 		"allowed_origins", c.AllowedOrigins,
 		"tap_enabled", c.TapEnabled,
+		"audit_enabled", c.AuditEnabled,
 		"tap_url", c.TapURL,
 		"tap_admin_password_set", c.TapAdminPassword != "",
 		"tap_disable_acks", c.TapDisableAcks,

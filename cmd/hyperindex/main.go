@@ -58,6 +58,7 @@ type services struct {
 	records          *repositories.RecordsRepository
 	actors           *repositories.ActorsRepository
 	lexicons         *repositories.LexiconsRepository
+	audit            *repositories.AuditRepository
 	config           *repositories.ConfigRepository
 	activity         *repositories.JetstreamActivityRepository
 	oauthClients     *repositories.OAuthClientsRepository
@@ -182,6 +183,7 @@ func initServices(cfg *config.Config) (*services, error) {
 		records:          repositories.NewRecordsRepository(db),
 		actors:           repositories.NewActorsRepository(db),
 		lexicons:         repositories.NewLexiconsRepository(db),
+		audit:            repositories.NewAuditRepository(db),
 		config:           repositories.NewConfigRepository(db),
 		activity:         repositories.NewJetstreamActivityRepository(db),
 		oauthClients:     repositories.NewOAuthClientsRepository(db),
@@ -628,6 +630,7 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 		Records:  svc.records,
 		Actors:   svc.actors,
 		Lexicons: svc.lexicons,
+		Audit:    svc.audit,
 	}
 
 	graphqlHandler, err := hgraphql.NewHandler(registry, repos)
@@ -802,6 +805,9 @@ func startTap(
 
 	// Create handler that stores records and publishes to subscriptions.
 	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub)
+	if cfg.AuditEnabled {
+		handler = tap.NewAuditIndexHandler(svc.records, svc.actors, svc.audit, svc.activity, pubsub)
+	}
 
 	// Create consumer.
 	consumer := tap.NewConsumer(tap.ConsumerConfig{
@@ -817,7 +823,7 @@ func startTap(
 	bg.tapCancel = tapCancel
 
 	go func() {
-		slog.Info("Starting Tap consumer", "url", tapURL, "disable_acks", cfg.TapDisableAcks)
+		slog.Info("Starting Tap consumer", "url", tapURL, "disable_acks", cfg.TapDisableAcks, "audit_enabled", cfg.AuditEnabled)
 		if err := consumer.Start(tapCtx); err != nil {
 			slog.Error("Tap consumer error", "error", err)
 		}

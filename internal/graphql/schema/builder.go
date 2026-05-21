@@ -455,6 +455,13 @@ func (b *Builder) buildQueryType() *graphql.Object {
 		Resolve: b.createSearchResolver(),
 	}
 
+	fields["auditRecordEvents"] = &graphql.Field{
+		Type:        graphql.NewNonNull(auditRecordEventConnectionType),
+		Description: "Query immutable append-only audit events captured from Tap record deliveries.",
+		Args:        auditRecordEventArgs(),
+		Resolve:     b.createAuditRecordEventsResolver(),
+	}
+
 	// Add collectionStats query for efficient aggregate counts
 	fields["collectionStats"] = &graphql.Field{
 		Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(collectionStatType))),

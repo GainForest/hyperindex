@@ -69,6 +69,7 @@ A few settings commonly trip people up:
 - `ADMIN_API_KEY` is required at startup
 - `SECRET_KEY_BASE` must be at least 64 characters
 - `TAP_ENABLED=true` switches ingestion to Tap mode
+- `AUDIT_ENABLED=true` currently requires `TAP_ENABLED=true`; audit storage is Tap-only
 - migrations run automatically on startup
 - unset or empty `ALLOWED_ORIGINS` allows all origins; set a comma-separated list to restrict origins, and `*` also allows all origins
 
