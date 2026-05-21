@@ -20,6 +20,7 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/atproto"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
+	publicgraphql "github.com/GainForest/hyperindex/internal/graphql"
 	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/oauth"
 )
@@ -47,6 +48,8 @@ type FullBackfillCallback func(ctx context.Context) error
 // LexiconChangeCallback is called when lexicons are added or removed.
 type LexiconChangeCallback func(collections []string) error
 
+type lexiconResolveFunc func(ctx context.Context, nsid string) (*lexicon.ResolvedLexicon, error)
+
 // Resolver provides methods for resolving admin GraphQL queries and mutations.
 type Resolver struct {
 	repos                 *Repositories
@@ -56,14 +59,16 @@ type Resolver struct {
 	backfillCallback      BackfillCallback
 	fullBackfillCallback  FullBackfillCallback
 	lexiconChangeCallback LexiconChangeCallback
+	resolveLexicon        lexiconResolveFunc
 }
 
 // NewResolver creates a new admin resolver.
 func NewResolver(repos *Repositories, domainDID string, adminDIDs []string) *Resolver {
 	return &Resolver{
-		repos:     repos,
-		adminDIDs: adminDIDs,
-		domainDID: domainDID,
+		repos:          repos,
+		adminDIDs:      adminDIDs,
+		domainDID:      domainDID,
+		resolveLexicon: lexicon.NewResolver().ResolveLexicon,
 	}
 }
 
@@ -221,6 +226,11 @@ const (
 	maxLexiconFileSize    = 1 * 1024 * 1024  // 1MB max per file
 )
 
+type validatedLexiconDocument struct {
+	id   string
+	json string
+}
+
 // UploadLexicons extracts lexicons from a base64-encoded ZIP file.
 func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, error) {
 	// Validate base64 input size before decoding (base64 encodes 3 bytes as 4 chars)
@@ -248,8 +258,7 @@ func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, e
 			len(zipReader.File), maxLexiconFileCount)
 	}
 
-	// Process each file
-	count := 0
+	validated := make([]validatedLexiconDocument, 0)
 	for _, file := range zipReader.File {
 		// Skip directories and non-JSON files
 		if file.FileInfo().IsDir() || !strings.HasSuffix(file.Name, ".json") {
@@ -258,41 +267,38 @@ func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, e
 
 		// Check individual uncompressed file size
 		if file.UncompressedSize64 > maxLexiconFileSize {
-			return count, fmt.Errorf("file %s too large: %d bytes exceeds %d byte limit",
+			return 0, fmt.Errorf("file %s too large: %d bytes exceeds %d byte limit; Hyperindex did not store any lexicons from this ZIP",
 				file.Name, file.UncompressedSize64, maxLexiconFileSize)
 		}
 
 		// Open and read file with size limit
 		rc, err := file.Open()
 		if err != nil {
-			continue
+			return 0, fmt.Errorf("failed to open lexicon file %s from ZIP for validation: %w; Hyperindex did not store any lexicons from this ZIP", file.Name, err)
 		}
 
 		data, err := io.ReadAll(io.LimitReader(rc, maxLexiconFileSize+1))
 		_ = rc.Close()
 		if err != nil {
-			continue
+			return 0, fmt.Errorf("failed to read lexicon file %s from ZIP for validation: %w; Hyperindex did not store any lexicons from this ZIP", file.Name, err)
 		}
 		if len(data) > maxLexiconFileSize {
-			return count, fmt.Errorf("file %s exceeds %d byte limit after decompression",
+			return 0, fmt.Errorf("file %s exceeds %d byte limit after decompression; Hyperindex did not store any lexicons from this ZIP",
 				file.Name, maxLexiconFileSize)
 		}
 
-		// Parse JSON to extract lexicon ID
-		var lexEntry struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(data, &lexEntry); err != nil {
-			continue
+		parsed, err := publicgraphql.ParseAndValidateLexiconDocument(fmt.Sprintf("uploaded lexicon %q", file.Name), string(data), "")
+		if err != nil {
+			return 0, fmt.Errorf("%w. Hyperindex did not store any lexicons from this ZIP; fix or remove %s and upload again", err, file.Name)
 		}
 
-		if lexEntry.ID == "" {
-			continue
-		}
+		validated = append(validated, validatedLexiconDocument{id: parsed.ID, json: string(data)})
+	}
 
-		// Upsert lexicon
-		if err := r.repos.Lexicons.Upsert(ctx, lexEntry.ID, string(data)); err != nil {
-			return count, fmt.Errorf("failed to save lexicon %s: %w", lexEntry.ID, err)
+	count := 0
+	for _, doc := range validated {
+		if err := r.repos.Lexicons.Upsert(ctx, doc.id, doc.json); err != nil {
+			return count, fmt.Errorf("failed to save validated lexicon %s: %w", doc.id, err)
 		}
 		count++
 	}
@@ -515,32 +521,35 @@ func (r *Resolver) PurgeActorPreview(ctx context.Context, did string) (map[strin
 
 // RegisterLexicon resolves an NSID via DNS and registers the lexicon schema.
 func (r *Resolver) RegisterLexicon(ctx context.Context, nsid string) (map[string]interface{}, error) {
-	// Validate NSID format (at least 3 dot-separated segments)
-	parts := strings.Split(nsid, ".")
-	if len(parts) < 3 {
-		return nil, fmt.Errorf("invalid NSID format: must have at least 3 segments (e.g., app.bsky.feed.post)")
+	requestedNSID, err := normalizeRequestedLexiconNSID(nsid)
+	if err != nil {
+		return nil, err
 	}
 
 	// Check if lexicon already exists
-	exists, err := r.repos.Lexicons.Exists(ctx, nsid)
+	exists, err := r.repos.Lexicons.Exists(ctx, requestedNSID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check existing lexicon: %w", err)
 	}
 	if exists {
-		return nil, fmt.Errorf("lexicon %s is already registered", nsid)
+		return nil, fmt.Errorf("lexicon %s is already registered", requestedNSID)
 	}
 
 	// Resolve lexicon via DNS and PDS
-	resolver := lexicon.NewResolver()
-	resolved, err := resolver.ResolveLexicon(ctx, nsid)
+	resolved, err := r.resolveLexiconDocument(ctx, requestedNSID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve lexicon: %w", err)
 	}
 
-	// Store the lexicon schema
 	schemaJSON := string(resolved.Schema)
-	if err := r.repos.Lexicons.Upsert(ctx, nsid, schemaJSON); err != nil {
-		return nil, fmt.Errorf("failed to save lexicon: %w", err)
+	parsed, err := publicgraphql.ParseAndValidateLexiconDocument(fmt.Sprintf("registered lexicon %q", requestedNSID), schemaJSON, requestedNSID)
+	if err != nil {
+		return nil, fmt.Errorf("%w. Hyperindex did not store lexicon %q; fix the published lexicon document and register it again", err, requestedNSID)
+	}
+
+	// Store the validated lexicon schema
+	if err := r.repos.Lexicons.Upsert(ctx, parsed.ID, schemaJSON); err != nil {
+		return nil, fmt.Errorf("failed to save validated lexicon %s: %w", parsed.ID, err)
 	}
 
 	// Notify Jetstream consumer of collection changes
@@ -564,12 +573,33 @@ func (r *Resolver) RegisterLexicon(ctx context.Context, nsid string) (map[string
 	}
 
 	return map[string]interface{}{
-		"id":          nsid,
+		"id":          parsed.ID,
 		"json":        schemaJSON,
 		"createdAt":   time.Now().Format(time.RFC3339),
 		"did":         resolved.DID,
 		"description": description,
 	}, nil
+}
+
+func normalizeRequestedLexiconNSID(nsid string) (string, error) {
+	normalized := strings.TrimSpace(nsid)
+	parts := strings.Split(normalized, ".")
+	if normalized == "" || len(parts) < 3 {
+		return "", fmt.Errorf("invalid NSID format: must be a dotted identifier with at least 3 segments and no empty segments (e.g., app.bsky.feed.post)")
+	}
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" {
+			return "", fmt.Errorf("invalid NSID format: must be a dotted identifier with at least 3 segments and no empty segments (e.g., app.bsky.feed.post)")
+		}
+	}
+	return normalized, nil
+}
+
+func (r *Resolver) resolveLexiconDocument(ctx context.Context, nsid string) (*lexicon.ResolvedLexicon, error) {
+	if r.resolveLexicon != nil {
+		return r.resolveLexicon(ctx, nsid)
+	}
+	return lexicon.NewResolver().ResolveLexicon(ctx, nsid)
 }
 
 // DeleteLexicon removes a registered lexicon by NSID.
