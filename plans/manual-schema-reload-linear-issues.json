@@ -1,0 +1,58 @@
+{
+  "issues": [
+    {
+      "draftId": "MSR-000",
+      "title": "Manual public GraphQL schema reload",
+      "description": "Parent issue for implementing manual public GraphQL schema reload in Hyperindex.\n\nPlan: `docs/manual-schema-reload-plan.md`\nOracle review: `oracle/manual-schema-reload-plan-review.md`\n\n## Goal\nAllow operators to reload the live public `/graphql` schema in-process after registering, uploading, deleting, or re-adding lexicons, without restarting the backend.\n\n## Scope\n- Add a reloadable public schema manager with safe fallback to the previous working schema.\n- Reject malformed uploaded/registered lexicons before persistence.\n- Expose an admin `reloadSchema` mutation.\n- Make public HTTP and subscription handlers use the current schema provider.\n- Add Lexicons page UI, docs, and an operator-facing Changie fragment.\n\n## Non-goals\n- No automatic reload after every lexicon mutation in the first pass.\n- No Tap or Jetstream ingestion filter changes.\n- No backend process restart.\n- No record migration or reprocessing.\n\n## Child issues\n- MSR-001: Add public schema manager and fallback snapshots.\n- MSR-002: Validate admin lexicon writes before persistence.\n- MSR-003: Add admin `reloadSchema` mutation and resolver callback.\n- MSR-004: Make HTTP and subscription handlers schema-provider aware.\n- MSR-005: Add frontend reload UI, docs, and Changie.\n\n## Done when\nAn operator can change lexicons, run the admin reload action, and immediately query the new typed public GraphQL schema. If reload fails, Hyperindex keeps serving the previous working schema and reports an actionable failure.",
+      "priority": "high",
+      "estimate": 0,
+      "labels": [],
+      "dependsOn": []
+    },
+    {
+      "draftId": "MSR-001",
+      "title": "Add public schema manager and fallback snapshots",
+      "description": "Parent: MSR-000\nPlan: `docs/manual-schema-reload-plan.md`\n\n## Goal\nExtract public GraphQL schema loading into a reusable manager that can rebuild a fresh schema and atomically swap it only after success.\n\n## Requirements\n- Add a `PublicSchemaManager` under `internal/graphql` or `internal/graphql/schema`.\n- Load lexicons from the configured filesystem path and the `lexicon` database table.\n- Treat malformed filesystem lexicons as reload failures.\n- Treat malformed database lexicons as reload failures.\n- Build a fresh `lexicon.Registry` and `graphql.Schema` off to the side for every reload.\n- Store live state as one immutable snapshot: schema pointer, active lexicon count, last successful reload time, and any useful source counts for logs.\n- Use a reload mutex so concurrent reloads cannot interleave.\n- Use `atomic.Value` or an `RWMutex` for fast safe reads of the current snapshot.\n- Preserve the previous working snapshot if loading, parsing, validation, or schema building fails.\n- Allow the manager to exist even when initial schema loading fails; no loaded schema should be representable.\n- Move or wrap current `loadLexiconsFromDir` behavior so startup and reload use the same strict loading path.\n\n## Acceptance criteria\n- Initial schema can be loaded from DB lexicons through the manager.\n- Adding/upserting a lexicon in the DB does not affect the live schema until reload.\n- Successful `Reload(ctx)` makes new typed fields available without reconstructing the whole server.\n- Malformed filesystem lexicon reload fails and keeps the previous schema active.\n- Malformed database lexicon reload fails and keeps the previous schema active.\n- Failed reload returns `success: false`, an actionable error, and `lexiconCount` for the currently active schema.\n- If no schema is active, the manager reports no schema and active lexicon count `0`.\n\n## Validation\n- Add focused Go tests for successful reload, failed reload fallback, active count semantics, and initial no-schema state.\n- Run targeted package tests first, then include this in the full backend verification before merge.",
+      "priority": "high",
+      "estimate": 5,
+      "labels": [],
+      "dependsOn": ["MSR-000"]
+    },
+    {
+      "draftId": "MSR-002",
+      "title": "Validate admin lexicon writes before persistence",
+      "description": "Parent: MSR-000\nPlan: `docs/manual-schema-reload-plan.md`\nDepends on: MSR-001 if the validation helper/parser path is introduced there.\n\n## Goal\nPrevent newly uploaded or registered malformed lexicons from being stored in the database.\n\n## Requirements\n- Validate the full lexicon document before register/upload writes to the `lexicon` table.\n- Use the same parser/validation path used by schema reload so admin write validation and reload validation do not drift.\n- Reject malformed JSON.\n- Reject lexicon documents that the registry cannot parse/register.\n- If an admin request supplies a lexicon ID separately from the JSON body, reject mismatches instead of storing ambiguous data.\n- Return actionable admin errors that identify which lexicon failed and why.\n- Keep the existing database state unchanged when validation fails.\n\n## Acceptance criteria\n- Invalid upload/register requests fail before DB persistence.\n- ID mismatch requests fail before DB persistence.\n- Valid lexicons still store successfully.\n- Existing malformed DB rows, if any, still cause reload failure rather than being silently skipped.\n\n## Validation\n- Add backend tests for malformed JSON, registry parse failure, ID mismatch, DB unchanged on failure, and valid write success.",
+      "priority": "high",
+      "estimate": 3,
+      "labels": [],
+      "dependsOn": ["MSR-001"]
+    },
+    {
+      "draftId": "MSR-003",
+      "title": "Add admin reloadSchema mutation and resolver callback",
+      "description": "Parent: MSR-000\nPlan: `docs/manual-schema-reload-plan.md`\nDepends on: MSR-001\n\n## Goal\nExpose an admin-gated GraphQL mutation that triggers public schema reload and returns clear success/failure payloads.\n\n## API\n```graphql\nmutation ReloadSchema {\n  reloadSchema {\n    success\n    lexiconCount\n    reloadedAt\n    error\n  }\n}\n```\n\nSuggested result type:\n```graphql\ntype ReloadSchemaResult {\n  success: Boolean!\n  lexiconCount: Int!\n  reloadedAt: String\n  error: String\n}\n```\n\n## Requirements\n- Add a schema reload callback separate from the existing `LexiconChangeCallback`.\n- Keep `LexiconChangeCallback` focused on ingestion collection updates for legacy Jetstream mode.\n- Add `SetSchemaReloadCallback(...)`.\n- Add `ReloadSchema(ctx)` resolver support.\n- Add `ReloadSchemaResult` and `reloadSchema` to the admin schema.\n- Require the same admin authorization as other mutating admin operations.\n- Return reload build/validation failures as `{ success: false, error }`, not as GraphQL execution errors.\n- Reserve GraphQL resolver errors for authorization, missing callback wiring, and unexpected infrastructure failures.\n- On reload failure, `lexiconCount` must report the currently active schema count, or `0` if no schema is active.\n\n## Acceptance criteria\n- Authorized admins can call `reloadSchema`.\n- Unauthorized callers are rejected through the existing admin auth path.\n- Missing callback returns a helpful resolver error.\n- Build/validation failures return a payload with `success: false` and do not replace the previous schema.\n- Successful reload returns `success: true`, active `lexiconCount`, and `reloadedAt`.\n\n## Validation\n- Add resolver/schema tests for success, build failure payload, unauthorized access, and missing callback.",
+      "priority": "high",
+      "estimate": 3,
+      "labels": [],
+      "dependsOn": ["MSR-001"]
+    },
+    {
+      "draftId": "MSR-004",
+      "title": "Make HTTP and subscription handlers schema-provider aware",
+      "description": "Parent: MSR-000\nPlan: `docs/manual-schema-reload-plan.md`\nDepends on: MSR-001\n\n## Goal\nMake public GraphQL request handling use the currently active schema snapshot instead of a startup-only schema pointer.\n\n## Requirements\n- Change the public HTTP GraphQL handler to ask a schema provider for the current schema per request.\n- If no schema is loaded, return a clear 503-style GraphQL-shaped JSON response explaining that the public schema is unavailable and should be reloaded or backend logs checked.\n- Change the subscription WebSocket handler to accept a schema provider.\n- Snapshot the current schema when a client starts a subscription operation, not only when the WebSocket connection is created.\n- New subscription operations on an already-open WebSocket should use the current schema after reload.\n- Existing active subscription operations may keep using the schema they were validated with.\n- Do not change subscription event delivery behavior.\n\n## Acceptance criteria\n- Public HTTP requests use the latest schema after a successful reload.\n- Public HTTP requests return a clear 503-style GraphQL response if no schema is active.\n- New subscription operations use the latest schema after a successful reload, including on existing WebSocket connections.\n- Active subscriptions are not forcefully dropped only because schema reload happened.\n\n## Validation\n- Add backend tests for current-schema HTTP behavior, no-schema 503 behavior, and subscription operation schema snapshot timing.",
+      "priority": "high",
+      "estimate": 3,
+      "labels": [],
+      "dependsOn": ["MSR-001"]
+    },
+    {
+      "draftId": "MSR-005",
+      "title": "Add frontend reload UI, docs, and Changie",
+      "description": "Parent: MSR-000\nPlan: `docs/manual-schema-reload-plan.md`\nDepends on: MSR-003, MSR-004\n\n## Goal\nGive operators a clear UI and documentation path for manually reloading the public GraphQL schema.\n\n## Requirements\n- Add `RELOAD_SCHEMA` mutation in `client/src/lib/graphql/mutations.ts`.\n- Add a Lexicons page section near register/upload controls.\n- Section title: `Public GraphQL schema`.\n- Explain that registering/uploading lexicons stores them in the database, and reload updates the live public `/graphql` schema without restarting the backend.\n- Warn that schema reload does not change Tap/Jetstream ingestion filters.\n- Add a `Reload schema` button with loading state.\n- On success, show a message like `Reloaded public schema with 42 lexicons.`\n- On failure, show the backend error and explain that the previous public schema is still active. If `lexiconCount` is non-zero, make clear it is the active schema count, not the failed attempt count.\n- Update user-facing docs that currently say backend restart is required. At minimum check `README.md`, `client/README.md`, and Lexicons page copy.\n- Add an operator-facing Changie fragment.\n\n## Acceptance criteria\n- Admin UI can trigger reload and render loading, success, and failure states.\n- Docs tell operators to use `reloadSchema` or the Lexicons page reload button after lexicon changes.\n- Docs explain failed reload fallback and ingestion-filter non-goal.\n- Changie fragment uses `Affects: operator`.\n\n## Validation\n- If practical with existing frontend test setup, add tests for the mutation document and Lexicons page success/failure behavior.\n- Run `npm --prefix client run lint`, `npm --prefix client run test`, and `npm --prefix client run build` before merge.\n- Include backend full verification from `AGENTS.md` before closing the parent issue.",
+      "priority": "medium",
+      "estimate": 2,
+      "labels": [],
+      "dependsOn": ["MSR-003", "MSR-004"]
+    }
+  ]
+}
