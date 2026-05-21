@@ -73,13 +73,14 @@ After registering by NSID or uploading a ZIP file, restart/redeploy the backend 
 **Run with Tap sidecar:**
 
 ```bash
-# Copy and configure environment
-cp .env.example .env
-# Set TAP_ADMIN_PASSWORD and other vars in .env
+# Generate the minimal environment needed for Tap Docker
+./scripts/generate-env.sh
 
 # Start Tap + Hyperindex together
 docker compose -f docker-compose.tap.yml up --build
 ```
+
+The generator prompts for the Tap Docker values needed by `docker-compose.tap.yml`. Blank secret prompts auto-generate secure values with `openssl`, and rerunning it against an existing `.env` requires confirmation before overwriting. If you prefer to configure all environment variables manually, you can still copy `.env.example` to `.env` and edit it directly.
 
 **Add repos to track via Tap admin API:**
 
@@ -108,6 +109,9 @@ TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.ym
 | `TAP_ADMIN_PASSWORD` | Password for Tap's admin HTTP API | *(required for docker-compose.tap.yml)* |
 | `TAP_DISABLE_ACKS` | Disable ack-based delivery (useful for debugging) | `false` |
 | `TAP_SIGNAL_COLLECTION` | Collection NSID for auto-discovery of repos | *(empty)* |
+| `TAP_COLLECTION_FILTERS` | Comma-separated collection NSIDs for Tap sidecar record filtering; set independently from legacy `JETSTREAM_COLLECTIONS` | *(empty)* |
+
+Tap Docker deployments also require `ADMIN_API_KEY` in `.env` because Hyperindex requires admin authentication at startup. `TAP_COLLECTION_FILTERS` is read by the Tap sidecar only; legacy `JETSTREAM_COLLECTIONS` remains part of Jetstream mode and is not used as a Tap filtering fallback.
 
 #### Optional: External Labeler Streams
 
