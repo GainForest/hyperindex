@@ -247,6 +247,7 @@ func TestObjectTypes(t *testing.T) {
 		{"ActivityBucketType", ActivityBucketType},
 		{"ActivityEntryType", ActivityEntryType},
 		{"LexiconType", LexiconType},
+		{"ReloadSchemaResultType", ReloadSchemaResultType},
 		{"OAuthClientType", OAuthClientType},
 		{"LabelDefinitionType", LabelDefinitionType},
 		{"LabelPreferenceType", LabelPreferenceType},

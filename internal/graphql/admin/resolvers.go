@@ -48,6 +48,12 @@ type FullBackfillCallback func(ctx context.Context) error
 // LexiconChangeCallback is called when lexicons are added or removed.
 type LexiconChangeCallback func(collections []string) error
 
+// SchemaReloadCallback rebuilds the live public GraphQL schema on operator request.
+// Expected reload validation failures should be returned as a result with
+// Success=false and nil error so GraphQL can return a normal payload. Return a
+// non-nil error only for missing infrastructure or unexpected failures.
+type SchemaReloadCallback func(ctx context.Context) (*publicgraphql.ReloadSchemaResult, error)
+
 type lexiconResolveFunc func(ctx context.Context, nsid string) (*lexicon.ResolvedLexicon, error)
 
 // Resolver provides methods for resolving admin GraphQL queries and mutations.
@@ -59,6 +65,7 @@ type Resolver struct {
 	backfillCallback      BackfillCallback
 	fullBackfillCallback  FullBackfillCallback
 	lexiconChangeCallback LexiconChangeCallback
+	schemaReloadCallback  SchemaReloadCallback
 	resolveLexicon        lexiconResolveFunc
 }
 
@@ -85,6 +92,11 @@ func (r *Resolver) SetFullBackfillCallback(cb FullBackfillCallback) {
 // SetLexiconChangeCallback sets the callback for lexicon changes.
 func (r *Resolver) SetLexiconChangeCallback(cb LexiconChangeCallback) {
 	r.lexiconChangeCallback = cb
+}
+
+// SetSchemaReloadCallback sets the callback used by the reloadSchema admin mutation.
+func (r *Resolver) SetSchemaReloadCallback(cb SchemaReloadCallback) {
+	r.schemaReloadCallback = cb
 }
 
 // notifyLexiconChange calls the lexicon change callback with current collections.
@@ -229,6 +241,41 @@ const (
 type validatedLexiconDocument struct {
 	id   string
 	json string
+}
+
+// ReloadSchema triggers a manual reload of the public GraphQL schema.
+// Reload build or validation failures are returned as a normal payload with
+// success=false. Missing callback wiring and unexpected callback errors are
+// returned as resolver errors so operators know the admin API is misconfigured.
+func (r *Resolver) ReloadSchema(ctx context.Context) (map[string]interface{}, error) {
+	if r.schemaReloadCallback == nil {
+		return nil, fmt.Errorf("schema reload callback not configured: wire the public schema manager with SetSchemaReloadCallback before using reloadSchema")
+	}
+
+	result, err := r.schemaReloadCallback(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reload public GraphQL schema: %w", err)
+	}
+	if result == nil {
+		return nil, fmt.Errorf("reload public GraphQL schema: callback returned nil result; return reload status or an error")
+	}
+
+	var reloadedAt interface{}
+	if result.ReloadedAt != nil {
+		reloadedAt = result.ReloadedAt.Format(time.RFC3339)
+	}
+
+	var resultError interface{}
+	if result.Error != "" {
+		resultError = result.Error
+	}
+
+	return map[string]interface{}{
+		"success":      result.Success,
+		"lexiconCount": result.LexiconCount,
+		"reloadedAt":   reloadedAt,
+		"error":        resultError,
+	}, nil
 }
 
 // UploadLexicons extracts lexicons from a base64-encoded ZIP file.

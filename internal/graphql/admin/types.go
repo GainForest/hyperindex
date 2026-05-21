@@ -345,6 +345,30 @@ var LexiconType = graphql.NewObject(graphql.ObjectConfig{
 	},
 })
 
+// ReloadSchemaResultType represents the result of reloading the public GraphQL schema.
+var ReloadSchemaResultType = graphql.NewObject(graphql.ObjectConfig{
+	Name:        "ReloadSchemaResult",
+	Description: "Result of a manual public GraphQL schema reload attempt",
+	Fields: graphql.Fields{
+		"success": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Boolean),
+			Description: "Whether the live public GraphQL schema was replaced by this reload attempt",
+		},
+		"lexiconCount": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Int),
+			Description: "Number of lexicons in the currently active public schema; on failure this is the previous active schema count",
+		},
+		"reloadedAt": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Timestamp for the active schema after a successful reload, formatted as RFC3339",
+		},
+		"error": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Actionable reload failure message; null when reload succeeds",
+		},
+	},
+})
+
 // OAuthClientType represents an OAuth client registration.
 var OAuthClientType = graphql.NewObject(graphql.ObjectConfig{
 	Name:        "OAuthClient",
