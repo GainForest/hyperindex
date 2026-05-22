@@ -304,6 +304,12 @@ query AuditSince($after: String!) {
 }
 ```
 
+## Pagination and counts
+
+`auditRecordEvents` uses cursor pagination. Use the `endCursor` from one page as the next query's `after` value, and keep the same `where` and `orderBy` arguments between pages.
+
+`totalCount` is opt-in. Hyperindex only runs the count query when `totalCount` appears in the selection set, and the value is the total number of events matching `where`, not just the current page and not just the rows after the cursor.
+
 ## Filtering and ordering
 
 `auditRecordEvents` supports exact filters for:

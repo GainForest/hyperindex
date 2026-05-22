@@ -1128,6 +1128,55 @@ func TestAuditRecordEventsQueryCursorPagination(t *testing.T) {
 	}
 }
 
+func TestAuditRecordEventsQueryTotalCount(t *testing.T) {
+	schema := buildAuditRecordEventsSchema(t)
+	ctx := setupAuditRecordEventsTestDB(t)
+
+	result := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `{
+			auditRecordEvents(
+				first: 1
+				where: { did: { eq: "did:plc:alice" } }
+				orderBy: { field: ID, direction: ASC }
+			) {
+				edges { node { id } }
+				totalCount
+			}
+			missing: auditRecordEvents(
+				first: 1
+				where: { collection: { eq: "app.missing.record" } }
+			) {
+				edges { node { id } }
+				totalCount
+			}
+		}`,
+		Context: ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("totalCount GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	aliceConnection := data["auditRecordEvents"].(map[string]interface{})
+	aliceNodes := auditConnectionNodes(t, aliceConnection, "alice totalCount")
+	if got := auditNodeIDs(aliceNodes); strings.Join(got, ",") != "1" {
+		t.Fatalf("alice page ids = %v, want [1]", got)
+	}
+	if aliceConnection["totalCount"] != 3 {
+		t.Fatalf("alice totalCount = %v, want 3", aliceConnection["totalCount"])
+	}
+
+	missingConnection := data["missing"].(map[string]interface{})
+	missingEdges := missingConnection["edges"].([]interface{})
+	if len(missingEdges) != 0 {
+		t.Fatalf("missing edges = %v, want empty", missingEdges)
+	}
+	if missingConnection["totalCount"] != 0 {
+		t.Fatalf("missing totalCount = %v, want 0", missingConnection["totalCount"])
+	}
+}
+
 func TestAuditRecordEventsQueryWithoutRepositoryReturnsEmptyConnection(t *testing.T) {
 	schema := buildAuditRecordEventsSchema(t)
 

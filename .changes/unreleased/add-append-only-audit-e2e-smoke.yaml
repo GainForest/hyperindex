@@ -1,0 +1,4 @@
+kind: added
+body: Add append-only audit E2E smoke checks for auditRecordEvents fields, totalCount, pagination, filters, decoded records, and sampled lifecycle behavior.
+custom:
+  Affects: operator

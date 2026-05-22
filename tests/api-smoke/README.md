@@ -33,7 +33,7 @@ HYPERINDEX_SMOKE_URL=https://api.example.com \
   make smoke-api
 ```
 
-Set `HYPERINDEX_SMOKE_AUDIT=1` to opt into the Tap audit smoke check. The audit smoke queries `auditRecordEvents` and requires at least 5 events by default. Override the required count with `HYPERINDEX_SMOKE_AUDIT_MIN_EVENTS` when an environment should prove more audit history is present.
+Set `HYPERINDEX_SMOKE_AUDIT=1` to opt into the Tap append-only audit smoke checks. The audit smoke queries `auditRecordEvents`, requires at least 5 events by default, verifies total counts, cursor pagination, supported filters, decoded record bodies, and optional lifecycle behavior when update/delete rows are present. Override the required count with `HYPERINDEX_SMOKE_AUDIT_MIN_EVENTS` when an environment should prove more audit history is present.
 
 ```bash
 HYPERINDEX_SMOKE_URL=https://api.example.com \
@@ -67,7 +67,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - Search
 - Strict pagination
 - Typed `ByUri` roundtrip
-- Optional `auditRecordEvents` shape and minimum row count when `HYPERINDEX_SMOKE_AUDIT=1`
+- Optional append-only `auditRecordEvents` shape, `totalCount`, cursor pagination, filters, decoded records, and sampled lifecycle behavior when `HYPERINDEX_SMOKE_AUDIT=1`
 
 ## Public-only limitation
 
@@ -90,4 +90,4 @@ The target deployment must have enough public data for read-path checks. These c
 - `org.hypercerts.claim.activity`
 - `app.certified.actor.profile`
 
-When `HYPERINDEX_SMOKE_AUDIT=1`, the target deployment must also run with `TAP_ENABLED=true` and `AUDIT_ENABLED=true`, and it must have at least `HYPERINDEX_SMOKE_AUDIT_MIN_EVENTS` audit rows. If the minimum is unset, the smoke suite requires 5 audit events.
+When `HYPERINDEX_SMOKE_AUDIT=1`, the target deployment must also run with `TAP_ENABLED=true` and `AUDIT_ENABLED=true`, and it must have at least `HYPERINDEX_SMOKE_AUDIT_MIN_EVENTS` audit rows. If the minimum is unset, the smoke suite requires 5 audit events. The append-only E2E checks need at least 2 audit rows so cursor pagination can be exercised.

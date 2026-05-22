@@ -226,6 +226,30 @@ func (r *AuditRepository) IngestTapEvent(ctx context.Context, rawPayload []byte,
 	return result, nil
 }
 
+// CountRecordEvents returns the total number of append-only record audit
+// events matching the provided filters. Pagination cursors are intentionally not
+// applied so callers can expose Relay-style totalCount separately from page
+// slicing.
+func (r *AuditRepository) CountRecordEvents(ctx context.Context, filters AuditRecordEventFilters) (int64, error) {
+	conditions, params, err := r.buildAuditRecordEventConditions(filters)
+	if err != nil {
+		return 0, err
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = " WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	sqlStr := fmt.Sprintf("SELECT COUNT(*) FROM record_events%s", whereClause)
+	var count int64
+	if err := r.db.DB().QueryRowContext(ctx, sqlStr, r.db.ConvertParams(params)...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count audit record events: %w", err)
+	}
+
+	return count, nil
+}
+
 // FindRecordEvents returns a stable id-cursor page of decoded record audit
 // events matching the provided filters.
 func (r *AuditRepository) FindRecordEvents(ctx context.Context, opts RecordEventFindOptions) (*AuditRecordEventPage, error) {

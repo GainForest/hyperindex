@@ -153,6 +153,8 @@ var auditRecordEventType = graphql.NewObject(graphql.ObjectConfig{
 
 var auditRecordEventConnectionType = query.BuildConnectionType(auditRecordEventType)
 
+const maxGraphQLInt = int64(1<<31 - 1)
+
 func auditRecordEventArgs() graphql.FieldConfigArgument {
 	return graphql.FieldConfigArgument{
 		"first": &graphql.ArgumentConfig{
@@ -192,7 +194,23 @@ func (b *Builder) createAuditRecordEventsResolver() graphql.FieldResolveFn {
 			return nil, fmt.Errorf("failed to query audit record events: %w", err)
 		}
 
-		return auditRecordEventConnection(page)
+		connection, err := auditRecordEventConnection(page)
+		if err != nil {
+			return nil, err
+		}
+
+		if isTotalCountRequested(p) {
+			count, err := repos.Audit.CountRecordEvents(p.Context, opts.Where)
+			if err != nil {
+				return nil, fmt.Errorf("failed to count audit record events: %w", err)
+			}
+			if count > maxGraphQLInt {
+				return nil, fmt.Errorf("auditRecordEvents totalCount %d exceeds GraphQL Int maximum %d; add filters or omit totalCount", count, maxGraphQLInt)
+			}
+			connection["totalCount"] = int(count)
+		}
+
+		return connection, nil
 	}
 }
 

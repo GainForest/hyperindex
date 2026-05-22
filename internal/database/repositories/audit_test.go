@@ -327,6 +327,17 @@ func TestAuditRepository_FindRecordEventsFiltersAndCursorPagination(t *testing.T
 
 	did := "did:plc:alice"
 	collection := "app.example.record"
+	total, err := env.audit.CountRecordEvents(ctx, repositories.AuditRecordEventFilters{
+		DID:        &did,
+		Collection: &collection,
+	})
+	if err != nil {
+		t.Fatalf("CountRecordEvents(did+collection) error = %v", err)
+	}
+	if total != 3 {
+		t.Fatalf("CountRecordEvents(did+collection) = %d, want 3", total)
+	}
+
 	firstPage, err := env.audit.FindRecordEvents(ctx, repositories.RecordEventFindOptions{
 		First: 1,
 		Where: repositories.AuditRecordEventFilters{

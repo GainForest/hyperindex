@@ -1,0 +1,4 @@
+kind: fixed
+body: Return totalCount for auditRecordEvents when requested so clients can count matching append-only audit events without paginating every page.
+custom:
+  Affects: user
