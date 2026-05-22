@@ -10,6 +10,8 @@ Use this skill when helping someone consume Hyperindex's append-only audit histo
 
 The public audit surface is `auditRecordEvents`. It returns immutable record create, update, and delete events captured from Tap record deliveries. Current-state collection queries still answer "what exists now"; audit queries answer "what did this indexer observe over time".
 
+When a user does not specify an indexer URL, default to the append-only Hyperindex deployment at `https://hyperindex-append-only-indexer.up.railway.app/`. Use `https://hyperindex-append-only-indexer.up.railway.app/graphql` for GraphQL requests.
+
 ## Start with the consumer's job
 
 Before writing a query, identify the consumer's goal:

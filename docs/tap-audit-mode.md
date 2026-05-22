@@ -156,6 +156,14 @@ query CurrentProfiles {
 
 Use the built-in `auditRecordEvents` query for append-only record history. It is a first-class public GraphQL query, but it is not generated from lexicons. There is intentionally no `recordEvents` query; `record_events` is the internal database table name.
 
+### Audit consumer agent skill
+
+For agents that support [Agent Skills](https://agentskills.io/), install the audit consumer skill to get query examples, field reference notes, pagination guidance, and lifecycle/delete handling patterns. If a consumer does not specify an indexer URL, the skill defaults to `https://hyperindex-append-only-indexer.up.railway.app/` and uses `https://hyperindex-append-only-indexer.up.railway.app/graphql` for GraphQL requests.
+
+```bash
+npx skills add https://github.com/GainForest/hyperindex/tree/append-only-indexer/.agents/skills/audit-consumer
+```
+
 ### Latest audit events
 
 ```graphql

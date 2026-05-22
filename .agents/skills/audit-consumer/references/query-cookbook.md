@@ -14,7 +14,11 @@ curl -fsS "$HYPERINDEX_GRAPHQL_URL" \
 JSON
 ```
 
-Use the deployment's GraphQL endpoint, usually `https://<api-host>/graphql`.
+Use the deployment's GraphQL endpoint, usually `https://<api-host>/graphql`. If the user does not provide an indexer URL, use the default append-only deployment:
+
+```bash
+export HYPERINDEX_GRAPHQL_URL=https://hyperindex-append-only-indexer.up.railway.app/graphql
+```
 
 ## Latest audit events
 
