@@ -198,7 +198,7 @@ func TestResolverRegisterLexiconTrimsRequestedNSIDBeforeResolving(t *testing.T) 
 func TestResolverRegisterLexiconRejectsMalformedNSIDBeforeResolving(t *testing.T) {
 	ctx := context.Background()
 
-	for _, nsid := range []string{"app..test", ".bad.test", "bad.test.", "app.test"} {
+	for _, nsid := range []string{"app..test", ".bad.test", "bad.test.", "app.test", "app. test.foo", "app.te\tst.foo", "app.test\n.foo"} {
 		t.Run(nsid, func(t *testing.T) {
 			db := testutil.SetupTestDB(t)
 			resolver := newLexiconTestResolver(db)

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/GainForest/hyperindex/internal/atproto"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
@@ -238,9 +239,9 @@ const (
 	maxLexiconFileSize    = 1 * 1024 * 1024  // 1MB max per file
 )
 
-type validatedLexiconDocument struct {
+type validatedLexiconFile struct {
 	id   string
-	json string
+	file *zip.File
 }
 
 // ReloadSchema triggers a manual reload of the public GraphQL schema.
@@ -305,33 +306,16 @@ func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, e
 			len(zipReader.File), maxLexiconFileCount)
 	}
 
-	validated := make([]validatedLexiconDocument, 0)
+	validated := make([]validatedLexiconFile, 0)
 	for _, file := range zipReader.File {
 		// Skip directories and non-JSON files
 		if file.FileInfo().IsDir() || !strings.HasSuffix(file.Name, ".json") {
 			continue
 		}
 
-		// Check individual uncompressed file size
-		if file.UncompressedSize64 > maxLexiconFileSize {
-			return 0, fmt.Errorf("file %s too large: %d bytes exceeds %d byte limit; Hyperindex did not store any lexicons from this ZIP",
-				file.Name, file.UncompressedSize64, maxLexiconFileSize)
-		}
-
-		// Open and read file with size limit
-		rc, err := file.Open()
+		data, err := readUploadedLexiconZipFile(file)
 		if err != nil {
-			return 0, fmt.Errorf("failed to open lexicon file %s from ZIP for validation: %w; Hyperindex did not store any lexicons from this ZIP", file.Name, err)
-		}
-
-		data, err := io.ReadAll(io.LimitReader(rc, maxLexiconFileSize+1))
-		_ = rc.Close()
-		if err != nil {
-			return 0, fmt.Errorf("failed to read lexicon file %s from ZIP for validation: %w; Hyperindex did not store any lexicons from this ZIP", file.Name, err)
-		}
-		if len(data) > maxLexiconFileSize {
-			return 0, fmt.Errorf("file %s exceeds %d byte limit after decompression; Hyperindex did not store any lexicons from this ZIP",
-				file.Name, maxLexiconFileSize)
+			return 0, fmt.Errorf("%w; Hyperindex did not store any lexicons from this ZIP", err)
 		}
 
 		parsed, err := publicgraphql.ParseAndValidateLexiconDocument(fmt.Sprintf("uploaded lexicon %q", file.Name), string(data), "")
@@ -339,12 +323,16 @@ func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, e
 			return 0, fmt.Errorf("%w. Hyperindex did not store any lexicons from this ZIP; fix or remove %s and upload again", err, file.Name)
 		}
 
-		validated = append(validated, validatedLexiconDocument{id: parsed.ID, json: string(data)})
+		validated = append(validated, validatedLexiconFile{id: parsed.ID, file: file})
 	}
 
 	count := 0
 	for _, doc := range validated {
-		if err := r.repos.Lexicons.Upsert(ctx, doc.id, doc.json); err != nil {
+		data, err := readUploadedLexiconZipFile(doc.file)
+		if err != nil {
+			return count, fmt.Errorf("%w; upload stopped while saving validated lexicons", err)
+		}
+		if err := r.repos.Lexicons.Upsert(ctx, doc.id, string(data)); err != nil {
 			return count, fmt.Errorf("failed to save validated lexicon %s: %w", doc.id, err)
 		}
 		count++
@@ -628,6 +616,28 @@ func (r *Resolver) RegisterLexicon(ctx context.Context, nsid string) (map[string
 	}, nil
 }
 
+func readUploadedLexiconZipFile(file *zip.File) ([]byte, error) {
+	if file.UncompressedSize64 > maxLexiconFileSize {
+		return nil, fmt.Errorf("file %s too large: %d bytes exceeds %d byte limit", file.Name, file.UncompressedSize64, maxLexiconFileSize)
+	}
+
+	rc, err := file.Open()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open lexicon file %s from ZIP: %w", file.Name, err)
+	}
+	defer rc.Close()
+
+	data, err := io.ReadAll(io.LimitReader(rc, maxLexiconFileSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read lexicon file %s from ZIP: %w", file.Name, err)
+	}
+	if len(data) > maxLexiconFileSize {
+		return nil, fmt.Errorf("file %s exceeds %d byte limit after decompression", file.Name, maxLexiconFileSize)
+	}
+
+	return data, nil
+}
+
 func normalizeRequestedLexiconNSID(nsid string) (string, error) {
 	normalized := strings.TrimSpace(nsid)
 	parts := strings.Split(normalized, ".")
@@ -635,7 +645,7 @@ func normalizeRequestedLexiconNSID(nsid string) (string, error) {
 		return "", fmt.Errorf("invalid NSID format: must be a dotted identifier with at least 3 segments and no empty segments (e.g., app.bsky.feed.post)")
 	}
 	for _, part := range parts {
-		if strings.TrimSpace(part) == "" {
+		if strings.TrimSpace(part) == "" || strings.IndexFunc(part, unicode.IsSpace) >= 0 {
 			return "", fmt.Errorf("invalid NSID format: must be a dotted identifier with at least 3 segments and no empty segments (e.g., app.bsky.feed.post)")
 		}
 	}
