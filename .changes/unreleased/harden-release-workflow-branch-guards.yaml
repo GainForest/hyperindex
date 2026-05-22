@@ -1,0 +1,5 @@
+kind: security
+body: Harden manual release workflows so release PR and publishing jobs only run from main without shell-based branch validation.
+time: 2026-05-22T11:24:57.471877938+06:00
+custom:
+    Affects: developer

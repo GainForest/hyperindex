@@ -18,6 +18,7 @@ concurrency: prepare-release-${{ github.ref }}
 
 jobs:
   prepare-release-pr:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -29,13 +30,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Validate branch
-        run: |
-          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
-            echo "::error::Prepare release notes PR can only be run from the 'main' branch."
-            exit 1
-          fi
 
       - name: Check for unreleased fragments
         shell: bash
