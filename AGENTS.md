@@ -12,7 +12,8 @@
 - Backend entrypoint: `cmd/hyperindex/`
 - Backend database schema source of truth: `internal/database/migrations/`
 - Frontend app: `client/`
-- Tap ingestion support is available and should be preferred for new ingestion work when applicable; Jetstream + backfill is the legacy path.
+- Tap ingestion support is available and should be preferred for new record ingestion work when applicable; Jetstream + backfill is the legacy record path.
+- External ATProto labeler ingestion lives in `internal/labeler/` and stores raw label events in dedicated external label tables; labels are exposed through public GraphQL query and record fields.
 
 ## Commands agents should prefer
 
@@ -82,7 +83,8 @@ Run verification based on what changed.
 
 - `ADMIN_API_KEY` is required at startup.
 - `SECRET_KEY_BASE` must be at least 64 characters.
-- `TAP_ENABLED=true` switches ingestion to Tap mode.
+- `TAP_ENABLED=true` switches record ingestion to Tap mode.
+- `LABELER_SUBSCRIBE_ENABLED=true` with `LABELER_SUBSCRIBE_URLS` starts optional external `com.atproto.label.subscribeLabels` ingestion.
 - Migrations run automatically on startup.
 - Be careful with `ALLOWED_ORIGINS`: current code allows all origins when unset, even if older prose suggests stricter defaults.
 

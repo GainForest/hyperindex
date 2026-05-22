@@ -17,17 +17,19 @@ const (
 
 // Repositories holds all database repositories needed by resolvers.
 type Repositories struct {
-	Records  *repositories.RecordsRepository
-	Actors   *repositories.ActorsRepository
-	Lexicons *repositories.LexiconsRepository
+	Records        *repositories.RecordsRepository
+	Actors         *repositories.ActorsRepository
+	Lexicons       *repositories.LexiconsRepository
+	ExternalLabels *repositories.ExternalLabelsRepository
 }
 
 // NewRepositories creates a new Repositories from a database executor.
 func NewRepositories(db database.Executor) *Repositories {
 	return &Repositories{
-		Records:  repositories.NewRecordsRepository(db),
-		Actors:   repositories.NewActorsRepository(db),
-		Lexicons: repositories.NewLexiconsRepository(db),
+		Records:        repositories.NewRecordsRepository(db),
+		Actors:         repositories.NewActorsRepository(db),
+		Lexicons:       repositories.NewLexiconsRepository(db),
+		ExternalLabels: repositories.NewExternalLabelsRepository(db),
 	}
 }
 

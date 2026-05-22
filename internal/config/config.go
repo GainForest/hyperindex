@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -61,6 +62,12 @@ type Config struct {
 	TapAdminPassword string // Tap admin API password for Basic auth
 	TapDisableAcks   bool   // Fire-and-forget mode (default: false)
 	TapEnabled       bool   // Use Tap instead of Jetstream+Backfill (default: false)
+
+	// Labeler subscriptions
+	LabelerSubscribeEnabled      bool
+	LabelerSubscribeURLs         string // Comma-separated com.atproto.label.subscribeLabels websocket URLs
+	LabelerSubscribeReconnectMin time.Duration
+	LabelerSubscribeReconnectMax time.Duration
 
 	// PLC Directory
 	PLCDirectoryURL string // PLC directory URL for DID resolution
@@ -120,6 +127,12 @@ func Load() (*Config, error) {
 		TapDisableAcks:   getEnvBool("TAP_DISABLE_ACKS", false),
 		TapEnabled:       getEnvBool("TAP_ENABLED", false),
 
+		// Labeler subscriptions
+		LabelerSubscribeEnabled:      getEnvBool("LABELER_SUBSCRIBE_ENABLED", false),
+		LabelerSubscribeURLs:         getEnv("LABELER_SUBSCRIBE_URLS", ""),
+		LabelerSubscribeReconnectMin: getEnvDuration("LABELER_SUBSCRIBE_RECONNECT_MIN", time.Second),
+		LabelerSubscribeReconnectMax: getEnvDuration("LABELER_SUBSCRIBE_RECONNECT_MAX", 60*time.Second),
+
 		// PLC Directory
 		PLCDirectoryURL: getEnv("PLC_DIRECTORY_URL", ""),
 	}
@@ -177,11 +190,27 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("PORT must be between 1 and 65535")
 	}
 
+	if c.LabelerSubscribeEnabled && len(c.LabelerSubscribeURLList()) == 0 {
+		return fmt.Errorf("LABELER_SUBSCRIBE_URLS must contain at least one URL when LABELER_SUBSCRIBE_ENABLED is true")
+	}
+
+	if c.LabelerSubscribeEnabled || c.LabelerSubscribeReconnectMin != 0 || c.LabelerSubscribeReconnectMax != 0 {
+		if c.LabelerSubscribeReconnectMin <= 0 {
+			return fmt.Errorf("LABELER_SUBSCRIBE_RECONNECT_MIN must be greater than zero")
+		}
+
+		if c.LabelerSubscribeReconnectMax < c.LabelerSubscribeReconnectMin {
+			return fmt.Errorf("LABELER_SUBSCRIBE_RECONNECT_MAX must be greater than or equal to LABELER_SUBSCRIBE_RECONNECT_MIN")
+		}
+	}
+
 	return nil
 }
 
 // LogConfig logs the configuration (with sensitive values redacted).
 func (c *Config) LogConfig() {
+	labelerSubscribeURLCount := len(c.LabelerSubscribeURLList())
+
 	slog.Info("Configuration loaded",
 		"host", c.Host,
 		"port", c.Port,
@@ -201,7 +230,35 @@ func (c *Config) LogConfig() {
 		"tap_url", c.TapURL,
 		"tap_admin_password_set", c.TapAdminPassword != "",
 		"tap_disable_acks", c.TapDisableAcks,
+		"labeler_subscribe_enabled", c.LabelerSubscribeEnabled,
+		"labeler_subscribe_url_count", labelerSubscribeURLCount,
+		"labeler_subscribe_reconnect_min", c.LabelerSubscribeReconnectMin.String(),
+		"labeler_subscribe_reconnect_max", c.LabelerSubscribeReconnectMax.String(),
 	)
+}
+
+// LabelerSubscribeURLList returns trimmed labeler subscription URLs.
+func (c *Config) LabelerSubscribeURLList() []string {
+	return ParseLabelerSubscribeURLs(c.LabelerSubscribeURLs)
+}
+
+// ParseLabelerSubscribeURLs parses comma-separated labeler websocket URLs.
+func ParseLabelerSubscribeURLs(raw string) []string {
+	parts := strings.Split(raw, ",")
+	urls := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		urls = append(urls, trimmed)
+	}
+	return urls
 }
 
 // Address returns the server address in host:port format.
@@ -231,6 +288,16 @@ func getEnvBool(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {
 		lower := strings.ToLower(value)
 		return lower == "true" || lower == "1" || lower == "yes"
+	}
+	return defaultValue
+}
+
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err == nil {
+			return parsed
+		}
 	}
 	return defaultValue
 }
