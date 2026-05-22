@@ -12,6 +12,45 @@ Hyperindex (hi) connects to the AT Protocol network, indexes records matching yo
 
 > **Rename note:** this project was renamed from Hypergoat to Hyperindex.
 
+## Recommended: append-only indexing with Tap
+
+For production and serious local testing, run Hyperindex as a **Tap-backed append-only indexer**. Tap verifies and orders AT Protocol repo events; Hyperindex stores every valid Tap delivery in append-only audit tables before updating the fast current-state `record` and `actor` projections used by normal GraphQL queries.
+
+Minimal Hyperindex env:
+
+```env
+TAP_ENABLED=true
+AUDIT_ENABLED=true
+TAP_URL=ws://localhost:2480
+TAP_ADMIN_PASSWORD=replace-with-your-tap-admin-password
+```
+
+Minimal Tap sidecar env:
+
+```env
+TAP_SIGNAL_COLLECTION=app.certified.actor.profile
+TAP_COLLECTION_FILTERS=app.certified.*,org.hypercerts.*
+```
+
+What this gives you:
+
+- current-state GraphQL queries keep working through `records`, typed collection queries, search, and `collectionStats`
+- append-only record history is available through the built-in `auditRecordEvents` GraphQL query
+- raw Tap deliveries and identity events are preserved in database audit tables for operators
+- the post-deploy smoke suite can verify audit history with `HYPERINDEX_SMOKE_AUDIT=1`
+
+```graphql
+query LatestAuditEvents {
+  auditRecordEvents(first: 5) {
+    edges {
+      node { id receivedAt action did collection uri live }
+    }
+  }
+}
+```
+
+Read the full guide in [`docs/tap-audit-mode.md`](docs/tap-audit-mode.md).
+
 ## Quick Start
 
 ```bash
@@ -60,15 +99,17 @@ After registering by NSID or uploading a ZIP file, restart/redeploy the backend 
 
 ### 2. Start Indexing
 
-#### Using Tap (Recommended)
+#### Using Tap for append-only indexing (Recommended)
 
-[Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) is Bluesky's official sidecar utility for consuming AT Protocol events. It is the recommended way to run Hyperindex because it provides:
+[Tap](https://github.com/bluesky-social/indigo/tree/main/cmd/tap) is Bluesky's official sidecar utility for consuming AT Protocol events. It is the recommended way to run Hyperindex, and it is required for append-only audit history, because it provides:
 
 - **Cryptographic verification** — verifies repo structure, MST integrity, and identity signatures
 - **Ordering guarantees** — strict per-repo event ordering, no backfill/live race conditions
 - **At-least-once delivery** — the default ack-based protocol ensures no events are lost on crash
 - **Identity tracking** — handle changes and account status updates are handled automatically
 - **Simplified architecture** — Tap manages backfill automatically; no separate backfill worker needed
+
+Set `AUDIT_ENABLED=true` with `TAP_ENABLED=true` when you want Hyperindex to behave as an append-only indexer. Hyperindex appends Tap deliveries to audit tables first, updates the current-state projection second, and acknowledges Tap only after the database commit succeeds.
 
 **Run with Tap sidecar:**
 
@@ -99,6 +140,8 @@ Set `TAP_SIGNAL_COLLECTION` to a collection NSID (e.g. `app.bsky.feed.post`) and
 TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.yml up
 ```
 
+When using `docker-compose.tap.yml`, set `JETSTREAM_COLLECTIONS` to the same comma-separated value you would otherwise put in Tap's `TAP_COLLECTION_FILTERS`; the compose file forwards that value to the Tap sidecar. When running Tap directly, set `TAP_COLLECTION_FILTERS` on the Tap process.
+
 **Tap environment variables:**
 
 | Variable | Description | Default |
@@ -108,13 +151,24 @@ TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.ym
 | `TAP_URL` | WebSocket URL of the Tap sidecar | `ws://localhost:2480` |
 | `TAP_ADMIN_PASSWORD` | Password for Tap's admin/channel Basic auth, used for `/repos/add` and `/channel` | *(required for docker-compose.tap.yml)* |
 | `TAP_DISABLE_ACKS` | Disable ack-based delivery (useful for debugging) | `false` |
-| `TAP_SIGNAL_COLLECTION` | Collection NSID for auto-discovery of repos | *(empty)* |
+| `TAP_SIGNAL_COLLECTION` | Collection NSID for Tap auto-discovery of repos | *(empty)* |
+| `TAP_COLLECTION_FILTERS` | Comma-separated Tap collection filters; wildcards such as `app.certified.*` are supported | *(empty)* |
 
-**Append-only audit history:**
+**Append-only indexing and audit history:**
 
 Set `AUDIT_ENABLED=true` with `TAP_ENABLED=true` to store immutable Tap record and identity history before current-state rows are updated. Current GraphQL queries keep reading from `record` and `actor`; record audit history is available through `auditRecordEvents`, while raw and identity audit rows are stored in the database for operators.
 
-See [Tap audit mode](docs/tap-audit-mode.md) for schema details, GraphQL examples, duplicate-delivery behavior, and limitations.
+```graphql
+query {
+  auditRecordEvents(first: 20) {
+    edges {
+      node { id receivedAt action did collection uri record }
+    }
+  }
+}
+```
+
+See [Append-only indexing with Tap](docs/tap-audit-mode.md) for local setup, schema details, GraphQL examples, smoke tests, duplicate-delivery behavior, and limitations.
 
 #### Legacy Mode: Jetstream + Backfill
 
@@ -191,6 +245,24 @@ query {
   search(query: "climate", collection: "app.bsky.feed.post", first: 20) {
     edges {
       node { uri did collection value }
+    }
+  }
+}
+
+# Append-only audit history — available when TAP_ENABLED=true and AUDIT_ENABLED=true
+query {
+  auditRecordEvents(first: 20) {
+    edges {
+      node {
+        id
+        receivedAt
+        action
+        did
+        collection
+        uri
+        live
+        record
+      }
     }
   }
 }
@@ -282,12 +354,21 @@ ADMIN_API_KEY=replace-with-a-random-secret
 # Unset or empty allows all origins. Set a comma-separated list to restrict origins; "*" also allows all origins.
 # ALLOWED_ORIGINS=https://your-frontend.vercel.app
 
-# Jetstream (real-time indexing)
+# Tap append-only indexing (recommended)
+TAP_ENABLED=true
+AUDIT_ENABLED=true
+TAP_URL=ws://localhost:2480
+TAP_ADMIN_PASSWORD=replace-with-your-tap-admin-password
+# Configure these on the Tap sidecar:
+# TAP_SIGNAL_COLLECTION=app.certified.actor.profile
+# TAP_COLLECTION_FILTERS=app.certified.*,org.hypercerts.*
+
+# Jetstream (legacy real-time indexing)
 # Collections are auto-discovered from registered lexicons
 # Or specify manually:
 # JETSTREAM_COLLECTIONS=app.bsky.feed.post,app.bsky.feed.like
 
-# Backfill
+# Backfill (legacy mode)
 BACKFILL_RELAY_URL=https://relay1.us-west.bsky.network
 ```
 
@@ -326,24 +407,28 @@ The admin API at `/admin/graphql` provides:
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   Hyperindex (hi) Server                  │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  Jetstream ──→ Consumer ──→ Records DB ──→ GraphQL API │
-│                    │                                    │
-│              Activity Log ──→ Admin Dashboard           │
-│                                                         │
-│  Backfill Worker ──→ AT Protocol Relay ──→ Records DB  │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                         Hyperindex (hi) Server                       │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  Tap sidecar ──→ Tap consumer ──→ append-only audit tables           │
+│                                  │                                   │
+│                                  ├──→ current record/actor tables    │
+│                                  │                                   │
+│                                  └──→ GraphQL API                    │
+│                                       ├── current-state queries       │
+│                                       └── auditRecordEvents           │
+│                                                                      │
+│  Legacy mode: Jetstream + Backfill can still populate current state. │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 **Key Components:**
-- **Jetstream Consumer** - Subscribes to real-time AT Protocol events
-- **Backfill Worker** - Imports historical data from relays
-- **GraphQL Schema Builder** - Generates schema from Lexicons
-- **Activity Tracker** - Logs all indexing activity for monitoring
+- **Tap Consumer** - Consumes verified Tap deliveries and writes append-only audit history before updating current state
+- **Audit Repository** - Stores raw Tap deliveries, record events, and identity events for operator-grade history
+- **GraphQL Schema Builder** - Generates current-state typed queries from Lexicons and exposes `auditRecordEvents`
+- **Jetstream Consumer / Backfill Worker** - Legacy ingestion path for deployments that have not moved to Tap
 
 ## Development
 
