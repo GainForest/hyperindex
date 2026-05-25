@@ -12,6 +12,16 @@ Hyperindex (hi) connects to the AT Protocol network, indexes records matching yo
 
 > **Rename note:** this project was renamed from Hypergoat to Hyperindex.
 
+## Agent skill
+
+This repository includes a `hyperindex-consumer` Agent Skill for querying the hosted Hypercerts indexer, including common GraphQL workflows, filters, pagination, attachments, certified profiles, and external label filtering notes.
+
+Install it with the [`skills`](https://www.skills.sh/) CLI:
+
+```bash
+npx skills add https://github.com/GainForest/hyperindex --skill hyperindex-consumer
+```
+
 ## Quick Start
 
 ```bash
