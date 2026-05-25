@@ -12,6 +12,14 @@ Deploy this as its own Railway service with these Railway settings:
 
 The included `railway.toml` sets the healthcheck path to `/-/healthy`.
 
+Attach a Railway volume to the Prometheus service at:
+
+```txt
+/prometheus
+```
+
+Prometheus stores its time-series database there.
+
 If build logs still say `load build definition from prometheus/Dockerfile`, the service is still building from the repository root instead of `/prometheus`.
 
 Required variables:

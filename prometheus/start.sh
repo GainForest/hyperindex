@@ -5,7 +5,7 @@ set -eu
 : "${PORT:=9090}"
 : "${SCRAPE_INTERVAL:=15s}"
 
-mkdir -p /tmp/prometheus-data
+mkdir -p /prometheus
 
 cat > /tmp/prometheus.yml <<EOF
 global:
@@ -24,5 +24,5 @@ echo "Starting Prometheus. Scraping Tap target: ${TAP_METRICS_TARGET}"
 
 exec /bin/prometheus \
   --config.file=/tmp/prometheus.yml \
-  --storage.tsdb.path=/tmp/prometheus-data \
+  --storage.tsdb.path=/prometheus \
   --web.listen-address=0.0.0.0:${PORT}
