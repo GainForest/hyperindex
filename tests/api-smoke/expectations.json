@@ -6,6 +6,7 @@
     "app.certified.badge.definition",
     "app.certified.badge.response",
     "app.certified.defs",
+    "app.certified.graph.follow",
     "app.certified.location",
     "org.hypercerts.claim.activity",
     "org.hypercerts.claim.contribution",
@@ -27,6 +28,7 @@
     "app.certified.badge.award": "appCertifiedBadgeAward",
     "app.certified.badge.definition": "appCertifiedBadgeDefinition",
     "app.certified.badge.response": "appCertifiedBadgeResponse",
+    "app.certified.graph.follow": "appCertifiedGraphFollow",
     "app.certified.location": "appCertifiedLocation",
     "org.hypercerts.claim.activity": "orgHypercertsClaimActivity",
     "org.hypercerts.claim.contribution": "orgHypercertsClaimContribution",
@@ -53,6 +55,10 @@
     {
       "nsid": "app.certified.actor.profile",
       "minimumRecords": 20
+    },
+    {
+      "nsid": "app.certified.graph.follow",
+      "minimumRecords": 20
     }
   ],
   "paginationCollections": [
@@ -62,6 +68,10 @@
     },
     {
       "nsid": "app.certified.actor.profile",
+      "pageSize": 10
+    },
+    {
+      "nsid": "app.certified.graph.follow",
       "pageSize": 10
     }
   ],

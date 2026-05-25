@@ -62,6 +62,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - Search
 - Strict pagination
 - Typed `ByUri` roundtrip
+- `app.certified.graph.follow` typed pagination, filters, and sorting
 - Optional ATProto write-through lifecycle for `app.certified.actor.profile` and `org.hypercerts.claim.activity`
 
 ## Optional write-through smoke check
@@ -101,3 +102,4 @@ The target deployment must have enough public data for read-path checks. These c
 
 - `org.hypercerts.claim.activity`
 - `app.certified.actor.profile`
+- `app.certified.graph.follow`
