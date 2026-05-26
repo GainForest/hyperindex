@@ -61,6 +61,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - `collectionStats`
 - Search
 - Strict pagination
+- Activity claim external label querying, value filtering, and pagination
 - Typed `ByUri` roundtrip
 - Optional ATProto write-through lifecycle for `app.certified.actor.profile` and `org.hypercerts.claim.activity`
 
@@ -101,3 +102,5 @@ The target deployment must have enough public data for read-path checks. These c
 
 - `org.hypercerts.claim.activity`
 - `app.certified.actor.profile`
+
+The label smoke checks also assume `org.hypercerts.claim.activity` has at least four records with an active `likely-test` external label from `did:plc:edod7rboajioq3jbyxsgeicc`.
