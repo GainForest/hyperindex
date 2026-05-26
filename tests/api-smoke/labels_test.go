@@ -64,12 +64,12 @@ type externalLabelRecordNode struct {
 }
 
 type externalLabel struct {
-	Src string `json:"src"`
-	URI string `json:"uri"`
-	CID string `json:"cid"`
-	Val string `json:"val"`
-	Neg bool   `json:"neg"`
-	CTS string `json:"cts"`
+	Src string  `json:"src"`
+	URI string  `json:"uri"`
+	CID *string `json:"cid"`
+	Val string  `json:"val"`
+	Neg bool    `json:"neg"`
+	CTS string  `json:"cts"`
 }
 
 func TestActivityClaimExternalLabelPaginationSmoke(t *testing.T) {
@@ -218,8 +218,8 @@ func assertMatchingActivityClaimLabel(t testing.TB, location string, uri string,
 	if label.URI != uri {
 		t.Fatalf("%s label %d uri = %q, want %q", location, labelIndex, label.URI, uri)
 	}
-	if label.CID != "" && cid != "" && label.CID != cid {
-		t.Fatalf("%s label %d cid = %q, want empty or node cid %q", location, labelIndex, label.CID, cid)
+	if label.CID != nil && cid != "" && *label.CID != cid {
+		t.Fatalf("%s label %d cid = %q, want null or node cid %q", location, labelIndex, *label.CID, cid)
 	}
 	if label.Val != value {
 		t.Fatalf("%s label %d val = %q, want %q", location, labelIndex, label.Val, value)
