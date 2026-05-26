@@ -61,6 +61,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - `collectionStats`
 - Search
 - Strict pagination
+- Activity claim external label querying, value filtering, and pagination
 - Typed `ByUri` roundtrip
 - `app.certified.graph.follow` typed pagination, filters, and sorting
 - Optional ATProto write-through lifecycle for `app.certified.actor.profile` and `org.hypercerts.claim.activity`
@@ -100,6 +101,7 @@ The default typed expectations also intentionally omit `app.certified.link.evm`.
 
 The target deployment must have enough public data for read-path checks. These collections must each contain at least 20 records:
 
+The label smoke checks also assume `org.hypercerts.claim.activity` has at least four records with an active `likely-test` external label from `did:plc:edod7rboajioq3jbyxsgeicc`.
 - `org.hypercerts.claim.activity`
 - `app.certified.actor.profile`
 - `app.certified.graph.follow`
