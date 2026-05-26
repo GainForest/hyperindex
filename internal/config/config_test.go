@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGetEnv(t *testing.T) {
@@ -371,7 +372,12 @@ func TestConfigLogConfigRedactsAdminAPIKey(t *testing.T) {
 	slog.SetDefault(logger)
 	t.Cleanup(func() { slog.SetDefault(original) })
 
-	cfg := Config{AdminAPIKey: "super-secret", TapAdminPassword: "tap-secret"}
+	cfg := Config{
+		AdminAPIKey:             "super-secret",
+		TapAdminPassword:        "tap-secret",
+		LabelerSubscribeURLs:    "wss://log-user:log-pass@labeler.example/labels?token=secret-token",
+		LabelerSubscribeEnabled: true,
+	}
 	cfg.LogConfig()
 
 	output := buf.String()
@@ -383,6 +389,14 @@ func TestConfigLogConfigRedactsAdminAPIKey(t *testing.T) {
 	}
 	if strings.Contains(output, "tap-secret") {
 		t.Fatalf("LogConfig() leaked tap admin password: %s", output)
+	}
+	if !strings.Contains(output, "labeler_subscribe_url_count=1") {
+		t.Fatalf("LogConfig() output missing labeler URL count: %s", output)
+	}
+	for _, leaked := range []string{"log-user", "log-pass", "secret-token", "labeler_subscribe_urls"} {
+		if strings.Contains(output, leaked) {
+			t.Fatalf("LogConfig() leaked labeler URL detail %q: %s", leaked, output)
+		}
 	}
 }
 
@@ -479,6 +493,152 @@ func TestTapConfigEnvVars(t *testing.T) {
 	}
 }
 
+func TestLabelerSubscribeURLParsing(t *testing.T) {
+	got := ParseLabelerSubscribeURLs(" wss://one.example/xrpc/com.atproto.label.subscribeLabels, ,wss://two.example/labels?foo=bar, wss://one.example/xrpc/com.atproto.label.subscribeLabels ")
+	want := []string{
+		"wss://one.example/xrpc/com.atproto.label.subscribeLabels",
+		"wss://two.example/labels?foo=bar",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("ParseLabelerSubscribeURLs() len = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ParseLabelerSubscribeURLs()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLabelerSubscribeConfigDefaults(t *testing.T) {
+	unsetEnvForTest(t,
+		"LABELER_SUBSCRIBE_ENABLED",
+		"LABELER_SUBSCRIBE_URLS",
+		"LABELER_SUBSCRIBE_RECONNECT_MIN",
+		"LABELER_SUBSCRIBE_RECONNECT_MAX",
+	)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.LabelerSubscribeEnabled {
+		t.Fatalf("LabelerSubscribeEnabled = true, want false")
+	}
+	if cfg.LabelerSubscribeURLs != "" {
+		t.Fatalf("LabelerSubscribeURLs = %q, want empty", cfg.LabelerSubscribeURLs)
+	}
+	if got := cfg.LabelerSubscribeURLList(); len(got) != 0 {
+		t.Fatalf("LabelerSubscribeURLList() = %#v, want empty", got)
+	}
+	if cfg.LabelerSubscribeReconnectMin != time.Second {
+		t.Fatalf("LabelerSubscribeReconnectMin = %v, want 1s", cfg.LabelerSubscribeReconnectMin)
+	}
+	if cfg.LabelerSubscribeReconnectMax != 60*time.Second {
+		t.Fatalf("LabelerSubscribeReconnectMax = %v, want 60s", cfg.LabelerSubscribeReconnectMax)
+	}
+}
+
+func TestLabelerSubscribeConfigEnvVars(t *testing.T) {
+	t.Setenv("LABELER_SUBSCRIBE_ENABLED", "true")
+	t.Setenv("LABELER_SUBSCRIBE_URLS", " wss://one.example/labels , wss://two.example/labels ")
+	t.Setenv("LABELER_SUBSCRIBE_RECONNECT_MIN", "2s")
+	t.Setenv("LABELER_SUBSCRIBE_RECONNECT_MAX", "30s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.LabelerSubscribeEnabled {
+		t.Fatalf("LabelerSubscribeEnabled = false, want true")
+	}
+	urls := cfg.LabelerSubscribeURLList()
+	if len(urls) != 2 || urls[0] != "wss://one.example/labels" || urls[1] != "wss://two.example/labels" {
+		t.Fatalf("LabelerSubscribeURLList() = %#v", urls)
+	}
+	if cfg.LabelerSubscribeReconnectMin != 2*time.Second {
+		t.Fatalf("LabelerSubscribeReconnectMin = %v, want 2s", cfg.LabelerSubscribeReconnectMin)
+	}
+	if cfg.LabelerSubscribeReconnectMax != 30*time.Second {
+		t.Fatalf("LabelerSubscribeReconnectMax = %v, want 30s", cfg.LabelerSubscribeReconnectMax)
+	}
+}
+
+func TestLabelerSubscribeConfigValidateNegativePaths(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "reconnect min must be positive",
+			env: map[string]string{
+				"LABELER_SUBSCRIBE_ENABLED":       "true",
+				"LABELER_SUBSCRIBE_URLS":          "wss://labeler.example/labels",
+				"LABELER_SUBSCRIBE_RECONNECT_MIN": "0s",
+				"LABELER_SUBSCRIBE_RECONNECT_MAX": "1s",
+			},
+			want: "LABELER_SUBSCRIBE_RECONNECT_MIN",
+		},
+		{
+			name: "reconnect max must be at least min",
+			env: map[string]string{
+				"LABELER_SUBSCRIBE_ENABLED":       "true",
+				"LABELER_SUBSCRIBE_URLS":          "wss://labeler.example/labels",
+				"LABELER_SUBSCRIBE_RECONNECT_MIN": "5s",
+				"LABELER_SUBSCRIBE_RECONNECT_MAX": "1s",
+			},
+			want: "LABELER_SUBSCRIBE_RECONNECT_MAX",
+		},
+		{
+			name: "enabled requires at least one URL",
+			env: map[string]string{
+				"LABELER_SUBSCRIBE_ENABLED":       "true",
+				"LABELER_SUBSCRIBE_URLS":          " , ",
+				"LABELER_SUBSCRIBE_RECONNECT_MIN": "1s",
+				"LABELER_SUBSCRIBE_RECONNECT_MAX": "60s",
+			},
+			want: "LABELER_SUBSCRIBE_URLS",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ADMIN_API_KEY", "admin-secret-123")
+			t.Setenv("SECRET_KEY_BASE", "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing")
+			for key, value := range tt.env {
+				t.Setenv(key, value)
+			}
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			err = cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Validate() error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestLabelerSubscribeConfigExplicitFalse(t *testing.T) {
+	t.Setenv("LABELER_SUBSCRIBE_ENABLED", "false")
+	t.Setenv("LABELER_SUBSCRIBE_URLS", "wss://one.example/labels")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.LabelerSubscribeEnabled {
+		t.Fatalf("LabelerSubscribeEnabled = true, want false")
+	}
+}
+
 func TestTapConfigFields(t *testing.T) {
 	cfg := Config{
 		TapURL:           "ws://localhost:2480",
@@ -554,6 +714,33 @@ func TestExternalBaseURLNormalization(t *testing.T) {
 			}
 		})
 	}
+}
+
+func unsetEnvForTest(t *testing.T, keys ...string) {
+	t.Helper()
+
+	type envState struct {
+		value string
+		set   bool
+	}
+
+	previous := make(map[string]envState, len(keys))
+	for _, key := range keys {
+		value, ok := os.LookupEnv(key)
+		previous[key] = envState{value: value, set: ok}
+		os.Unsetenv(key)
+	}
+
+	t.Cleanup(func() {
+		for _, key := range keys {
+			state := previous[key]
+			if state.set {
+				os.Setenv(key, state.value)
+			} else {
+				os.Unsetenv(key)
+			}
+		}
+	})
 }
 
 func TestGenerateRandomKey(t *testing.T) {

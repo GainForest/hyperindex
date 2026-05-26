@@ -1,0 +1,29 @@
+# Backend Railway/Docker build context allowlist.
+# The backend image only needs Go module files, backend source, embedded
+# migrations, and release metadata. Keep frontend/Vercel artifacts and local
+# tooling caches out of Railway backend builds.
+*
+
+!Dockerfile
+!railway.toml
+!go.mod
+!go.sum
+
+!cmd
+!cmd/**
+!internal
+!internal/**
+
+# Test files are not needed to compile the production backend image.
+**/*_test.go
+internal/integration
+internal/integration/**
+
+# Guard against negated allowlist patterns re-including frontend package
+# directories named "internal" from client/node_modules.
+client
+client/**
+
+!.changes
+!.changes/v*.md
+.changes/unreleased

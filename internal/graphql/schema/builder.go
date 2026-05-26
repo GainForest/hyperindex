@@ -16,6 +16,7 @@ import (
 	"github.com/graphql-go/graphql/language/ast"
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/externallabels"
 	"github.com/GainForest/hyperindex/internal/graphql/query"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
@@ -153,9 +154,44 @@ func (b *Builder) buildSortFieldEnums() {
 	}
 }
 
+var externalLabelPredicateInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "ExternalLabelPredicateInput",
+	Description: "Filter conditions for matching external labels on records.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"src": &graphql.InputObjectFieldConfig{
+			Type:        types.StringFilterInput,
+			Description: "Filter by label source DID.",
+		},
+		"val": &graphql.InputObjectFieldConfig{
+			Type:        types.StringFilterInput,
+			Description: "Filter by label value.",
+		},
+		"activeOnly": &graphql.InputObjectFieldConfig{
+			Type:         graphql.Boolean,
+			DefaultValue: true,
+			Description:  "When true, only active external labels can match records.",
+		},
+	},
+})
+
+var externalLabelWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "ExternalLabelWhereInput",
+	Description: "Record-level external label predicates.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"has": &graphql.InputObjectFieldConfig{
+			Type:        externalLabelPredicateInput,
+			Description: "Keep records that have a matching external label.",
+		},
+		"none": &graphql.InputObjectFieldConfig{
+			Type:        externalLabelPredicateInput,
+			Description: "Keep records that do not have a matching external label.",
+		},
+	},
+})
+
 // buildWhereInputTypes builds per-collection WhereInput GraphQL InputObject types.
 // For each collection lexicon, it creates a WhereInput type with a field for each
-// filterable property (string, integer, number, boolean, datetime) plus a `did` field.
+// filterable property (string, integer, number, boolean, datetime) plus metadata fields.
 func (b *Builder) buildWhereInputTypes() {
 	for _, lex := range b.registry.GetCollectionLexicons() {
 		if lex.Defs.Main == nil {
@@ -171,6 +207,10 @@ func (b *Builder) buildWhereInputTypes() {
 		fields["did"] = &graphql.InputObjectFieldConfig{
 			Type:        types.DIDFilterInput,
 			Description: "Filter by DID (record author)",
+		}
+		fields["externalLabels"] = &graphql.InputObjectFieldConfig{
+			Type:        externalLabelWhereInput,
+			Description: "Filter records by locally ingested external labels before pagination.",
 		}
 
 		// Add a field for each filterable property
@@ -376,6 +416,7 @@ var genericRecordType = graphql.NewObject(graphql.ObjectConfig{
 			Type:        types.JSONScalar,
 			Description: "The record data as JSON",
 		},
+		"externalLabels": externallabels.Field(),
 	},
 })
 
@@ -429,6 +470,14 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			},
 		},
 		Resolve: b.createGenericRecordsResolver(),
+	}
+
+	// Add external label lookup by subject DID or AT-URI.
+	fields["externalLabels"] = &graphql.Field{
+		Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(externallabels.Type))),
+		Description: "Query locally ingested external ATProto labels by DID or AT-URI subject.",
+		Args:        externallabels.Args(true),
+		Resolve:     b.createExternalLabelsResolver(),
 	}
 
 	// Add search query for cross-collection text search
@@ -544,13 +593,19 @@ type nodeBuilder func(rec *repositories.Record, value map[string]interface{}) (i
 // those operators are handled. All other keys are looked up in the lexicon registry
 // to determine the correct FieldType for SQL casting.
 func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Registry) ([]repositories.FieldFilter, repositories.DIDFilter, error) {
+	filters, didFilter, _, err := extractFiltersWithExternalLabels(whereArg, lexiconID, registry)
+	return filters, didFilter, err
+}
+
+func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, registry *lexicon.Registry) ([]repositories.FieldFilter, repositories.DIDFilter, repositories.ExternalLabelRecordFilter, error) {
 	whereMap, ok := whereArg.(map[string]interface{})
 	if !ok || len(whereMap) == 0 {
-		return nil, repositories.DIDFilter{}, nil
+		return nil, repositories.DIDFilter{}, repositories.ExternalLabelRecordFilter{}, nil
 	}
 
 	var filters []repositories.FieldFilter
 	var didFilter repositories.DIDFilter
+	var externalLabelFilter repositories.ExternalLabelRecordFilter
 
 	// Look up the record definition once for property type resolution
 	recordDef, _ := registry.GetRecordDef(lexiconID)
@@ -575,6 +630,15 @@ func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Re
 					}
 				}
 			}
+			continue
+		}
+
+		if fieldName == "externalLabels" {
+			parsedExternalLabelFilter, err := extractExternalLabelRecordFilter(filterMap)
+			if err != nil {
+				return nil, repositories.DIDFilter{}, repositories.ExternalLabelRecordFilter{}, err
+			}
+			externalLabelFilter = parsedExternalLabelFilter
 			continue
 		}
 
@@ -605,10 +669,69 @@ func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Re
 	}
 
 	if len(filters) > repositories.MaxFilterConditions {
-		return nil, repositories.DIDFilter{}, fmt.Errorf("too many filter conditions: %d (maximum %d)", len(filters), repositories.MaxFilterConditions)
+		return nil, repositories.DIDFilter{}, repositories.ExternalLabelRecordFilter{}, fmt.Errorf("too many filter conditions: %d (maximum %d)", len(filters), repositories.MaxFilterConditions)
 	}
 
-	return filters, didFilter, nil
+	return filters, didFilter, externalLabelFilter, nil
+}
+
+func extractExternalLabelRecordFilter(filterMap map[string]interface{}) (repositories.ExternalLabelRecordFilter, error) {
+	var filter repositories.ExternalLabelRecordFilter
+	if hasVal, ok := filterMap["has"].(map[string]interface{}); ok && hasVal != nil {
+		predicate, err := extractExternalLabelPredicate(hasVal)
+		if err != nil {
+			return repositories.ExternalLabelRecordFilter{}, fmt.Errorf("invalid externalLabels.has filter: %w", err)
+		}
+		filter.Has = &predicate
+	}
+	if noneVal, ok := filterMap["none"].(map[string]interface{}); ok && noneVal != nil {
+		predicate, err := extractExternalLabelPredicate(noneVal)
+		if err != nil {
+			return repositories.ExternalLabelRecordFilter{}, fmt.Errorf("invalid externalLabels.none filter: %w", err)
+		}
+		filter.None = &predicate
+	}
+	return filter, nil
+}
+
+func extractExternalLabelPredicate(predicateMap map[string]interface{}) (repositories.ExternalLabelPredicate, error) {
+	predicate := repositories.ExternalLabelPredicate{ActiveOnly: true}
+	if activeOnly, ok := predicateMap["activeOnly"].(bool); ok {
+		predicate.ActiveOnly = activeOnly
+	}
+
+	if srcFilter, ok := predicateMap["src"].(map[string]interface{}); ok && srcFilter != nil {
+		filters, err := extractExternalLabelStringFilters(srcFilter)
+		if err != nil {
+			return repositories.ExternalLabelPredicate{}, fmt.Errorf("invalid src filter: %w", err)
+		}
+		predicate.Sources = filters
+	}
+	if valFilter, ok := predicateMap["val"].(map[string]interface{}); ok && valFilter != nil {
+		filters, err := extractExternalLabelStringFilters(valFilter)
+		if err != nil {
+			return repositories.ExternalLabelPredicate{}, fmt.Errorf("invalid val filter: %w", err)
+		}
+		predicate.Values = filters
+	}
+
+	return predicate, nil
+}
+
+func extractExternalLabelStringFilters(filterMap map[string]interface{}) ([]repositories.ExternalLabelStringFilter, error) {
+	filters := make([]repositories.ExternalLabelStringFilter, 0, len(filterMap))
+	for op, val := range filterMap {
+		if val == nil {
+			continue
+		}
+		switch op {
+		case "eq", "neq", "in", "contains", "startsWith", "isNull":
+			filters = append(filters, repositories.ExternalLabelStringFilter{Operator: op, Value: val})
+		default:
+			return nil, fmt.Errorf("unsupported operator %q", op)
+		}
+	}
+	return filters, nil
 }
 
 // isTotalCountRequested checks whether the GraphQL query selected the totalCount field.
@@ -625,6 +748,112 @@ func isTotalCountRequested(p graphql.ResolveParams) bool {
 		}
 	}
 	return false
+}
+
+func isExternalLabelsSelected(p graphql.ResolveParams, fieldPath ...string) bool {
+	for _, field := range p.Info.FieldASTs {
+		if selectionSetHasFieldPath(p.Info, field.SelectionSet, fieldPath, map[string]bool{}) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectionSetHasFieldPath(info graphql.ResolveInfo, selectionSet *ast.SelectionSet, fieldPath []string, visitedFragments map[string]bool) bool {
+	if selectionSet == nil || len(fieldPath) == 0 {
+		return false
+	}
+
+	for _, selection := range selectionSet.Selections {
+		switch selected := selection.(type) {
+		case *ast.Field:
+			if selected.Name == nil || selected.Name.Value != fieldPath[0] {
+				continue
+			}
+			if len(fieldPath) == 1 {
+				return true
+			}
+			if selectionSetHasFieldPath(info, selected.SelectionSet, fieldPath[1:], visitedFragments) {
+				return true
+			}
+		case *ast.InlineFragment:
+			if selectionSetHasFieldPath(info, selected.SelectionSet, fieldPath, visitedFragments) {
+				return true
+			}
+		case *ast.FragmentSpread:
+			if selected.Name == nil || visitedFragments[selected.Name.Value] {
+				continue
+			}
+			fragment, ok := info.Fragments[selected.Name.Value].(*ast.FragmentDefinition)
+			if !ok {
+				continue
+			}
+			visitedFragments[selected.Name.Value] = true
+			if selectionSetHasFieldPath(info, fragment.SelectionSet, fieldPath, visitedFragments) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+type externalLabelHydration struct {
+	active  map[string][]repositories.ExternalLabel
+	history map[string][]repositories.ExternalLabel
+}
+
+func (b *Builder) hydrateExternalLabelsForConnection(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record) (*externalLabelHydration, error) {
+	if !isExternalLabelsSelected(p, "edges", "node", "externalLabels") {
+		return nil, nil
+	}
+	return b.hydrateExternalLabelsForRecords(p, repos, records)
+}
+
+func (b *Builder) hydrateExternalLabelsForSingleRecord(p graphql.ResolveParams, repos *resolver.Repositories, rec *repositories.Record) (*externalLabelHydration, error) {
+	if !isExternalLabelsSelected(p, "externalLabels") {
+		return nil, nil
+	}
+	return b.hydrateExternalLabelsForRecords(p, repos, []*repositories.Record{rec})
+}
+
+func (b *Builder) hydrateExternalLabelsForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record) (*externalLabelHydration, error) {
+	if repos == nil || repos.ExternalLabels == nil || len(records) == 0 {
+		return nil, nil
+	}
+
+	subjects := make([]repositories.LabelSubject, 0, len(records))
+	for _, rec := range records {
+		subjects = append(subjects, repositories.LabelSubject{URI: rec.URI, CID: rec.CID})
+	}
+
+	activeLabelsBySubject, err := repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{ActiveOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate active external labels: %w", err)
+	}
+
+	historyLabelsBySubject, err := repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{ActiveOnly: false})
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate historical external labels: %w", err)
+	}
+
+	return &externalLabelHydration{
+		active:  activeLabelsBySubject,
+		history: historyLabelsBySubject,
+	}, nil
+}
+
+func attachExternalLabels(node interface{}, rec *repositories.Record, hydration *externalLabelHydration) {
+	if hydration == nil {
+		return
+	}
+	nodeMap, ok := node.(map[string]interface{})
+	if !ok {
+		return
+	}
+	subject := repositories.LabelSubject{URI: rec.URI, CID: rec.CID}
+	nodeMap[externallabels.ActiveSourceKey] = hydration.active[subject.Key()]
+	nodeMap[externallabels.HistorySourceKey] = hydration.history[subject.Key()]
 }
 
 // buildSortAwareCursor builds a sort-aware cursor string for a record.
@@ -695,9 +924,10 @@ func (b *Builder) resolveRecordConnection(
 	// Extract where filters if present (typed collection queries only)
 	var filters []repositories.FieldFilter
 	var didFilter repositories.DIDFilter
+	var externalLabelFilter repositories.ExternalLabelRecordFilter
 	if whereArg, ok := p.Args["where"]; ok && whereArg != nil {
 		var err error
-		filters, didFilter, err = extractFilters(whereArg, collection, b.registry)
+		filters, didFilter, externalLabelFilter, err = extractFiltersWithExternalLabels(whereArg, collection, b.registry)
 		if err != nil {
 			return nil, err
 		}
@@ -731,7 +961,7 @@ func (b *Builder) resolveRecordConnection(
 		}
 
 		// Fetch last+1 to detect hasPreviousPage
-		records, err := repos.Records.GetByCollectionReversedWithKeysetCursor(p.Context, collection, filters, didFilter, sortOpt, last+1, beforeCursorValues)
+		records, err := repos.Records.GetByCollectionReversedWithKeysetCursorAndExternalLabels(p.Context, collection, filters, didFilter, externalLabelFilter, sortOpt, last+1, beforeCursorValues)
 		if err != nil {
 			return nil, fmt.Errorf("failed to query records: %w", err)
 		}
@@ -741,6 +971,11 @@ func (b *Builder) resolveRecordConnection(
 		hasPreviousPage := len(records) > last
 		if hasPreviousPage {
 			records = records[1:]
+		}
+
+		labelsBySubject, err := b.hydrateExternalLabelsForConnection(p, repos, records)
+		if err != nil {
+			return nil, err
 		}
 
 		// Build edges
@@ -758,6 +993,7 @@ func (b *Builder) resolveRecordConnection(
 			if !ok {
 				continue
 			}
+			attachExternalLabels(node, rec, labelsBySubject)
 
 			cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
 			if startCursor == "" {
@@ -782,7 +1018,7 @@ func (b *Builder) resolveRecordConnection(
 		}
 
 		if isTotalCountRequested(p) {
-			count, err := repos.Records.GetCollectionCountFiltered(p.Context, collection, filters, didFilter)
+			count, err := repos.Records.GetCollectionCountFilteredWithExternalLabels(p.Context, collection, filters, didFilter, externalLabelFilter)
 			if err == nil {
 				result["totalCount"] = int(count)
 			}
@@ -809,7 +1045,7 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	// Fetch first+1 to determine hasNextPage using the sorted method
-	records, err := repos.Records.GetByCollectionSortedWithKeysetCursor(p.Context, collection, filters, didFilter, sortOpt, first+1, afterCursorValues)
+	records, err := repos.Records.GetByCollectionSortedWithKeysetCursorAndExternalLabels(p.Context, collection, filters, didFilter, externalLabelFilter, sortOpt, first+1, afterCursorValues)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query records: %w", err)
 	}
@@ -818,6 +1054,11 @@ func (b *Builder) resolveRecordConnection(
 	hasNextPage := len(records) > first
 	if hasNextPage {
 		records = records[:first]
+	}
+
+	labelsBySubject, err := b.hydrateExternalLabelsForConnection(p, repos, records)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build edges with sort-aware cursors
@@ -835,6 +1076,7 @@ func (b *Builder) resolveRecordConnection(
 		if !ok {
 			continue
 		}
+		attachExternalLabels(node, rec, labelsBySubject)
 
 		cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
 		if startCursor == "" {
@@ -859,13 +1101,67 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	if isTotalCountRequested(p) {
-		count, err := repos.Records.GetCollectionCountFiltered(p.Context, collection, filters, didFilter)
+		count, err := repos.Records.GetCollectionCountFilteredWithExternalLabels(p.Context, collection, filters, didFilter, externalLabelFilter)
 		if err == nil {
 			result["totalCount"] = int(count)
 		}
 	}
 
 	return result, nil
+}
+
+// createExternalLabelsResolver creates a resolver for generic external label subject lookups.
+func (b *Builder) createExternalLabelsResolver() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		repos := resolver.GetRepositories(p.Context)
+		if repos == nil || repos.ExternalLabels == nil {
+			return []map[string]interface{}{}, nil
+		}
+
+		subjectValues := stringListArg(p.Args["subjects"])
+		if len(subjectValues) == 0 {
+			return []map[string]interface{}{}, nil
+		}
+
+		subjects := make([]repositories.LabelSubject, 0, len(subjectValues))
+		for _, subject := range subjectValues {
+			subjects = append(subjects, repositories.LabelSubject{URI: subject})
+		}
+
+		filter := externallabels.FilterFromArgs(p.Args)
+		labelsBySubject, err := repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{
+			Sources:    filter.Sources,
+			Values:     filter.Values,
+			ActiveOnly: filter.ActiveOnly,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to query external labels: %w", err)
+		}
+
+		labels := make([]repositories.ExternalLabel, 0)
+		for _, subject := range subjects {
+			labels = append(labels, labelsBySubject[subject.Key()]...)
+		}
+
+		return externallabels.ToGraphQL(labels), nil
+	}
+}
+
+func stringListArg(value interface{}) []string {
+	switch v := value.(type) {
+	case []interface{}:
+		items := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				items = append(items, s)
+			}
+		}
+		return items
+	case []string:
+		return v
+	default:
+		return nil
+	}
 }
 
 // createSearchResolver creates a resolver for the search query.
@@ -908,6 +1204,11 @@ func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 			records = records[:first]
 		}
 
+		labelsBySubject, err := b.hydrateExternalLabelsForConnection(p, repos, records)
+		if err != nil {
+			return nil, err
+		}
+
 		edges := make([]interface{}, 0, len(records))
 		var startCursor, endCursor string
 
@@ -924,16 +1225,19 @@ func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 			}
 			endCursor = cursor
 
+			node := map[string]interface{}{
+				"uri":        rec.URI,
+				"cid":        rec.CID,
+				"did":        rec.DID,
+				"collection": rec.Collection,
+				"rkey":       rec.RKey,
+				"value":      value,
+			}
+			attachExternalLabels(node, rec, labelsBySubject)
+
 			edges = append(edges, map[string]interface{}{
 				"cursor": cursor,
-				"node": map[string]interface{}{
-					"uri":        rec.URI,
-					"cid":        rec.CID,
-					"did":        rec.DID,
-					"collection": rec.Collection,
-					"rkey":       rec.RKey,
-					"value":      value,
-				},
+				"node":   node,
 			})
 		}
 
@@ -1048,6 +1352,12 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 		data["did"] = rec.DID
 		data["rkey"] = rec.RKey
 		b.coerceRequiredFields(data, lexiconID)
+
+		labelsBySubject, err := b.hydrateExternalLabelsForSingleRecord(p, repos, rec)
+		if err != nil {
+			return nil, err
+		}
+		attachExternalLabels(data, rec, labelsBySubject)
 
 		return data, nil
 	}
