@@ -503,6 +503,16 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 					return b.resolver.UploadLexicons(p.Context, zipBase64)
 				},
 			},
+			"reloadSchema": &graphql.Field{
+				Type:        graphql.NewNonNull(ReloadSchemaResultType),
+				Description: "Reload the live public GraphQL schema from current filesystem and database lexicons (admin only)",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					return b.resolver.ReloadSchema(p.Context)
+				},
+			},
 			"triggerBackfill": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.Boolean),
 				Description: "Trigger a full backfill of all known actors (admin only)",

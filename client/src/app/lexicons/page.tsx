@@ -4,7 +4,12 @@ import { useState, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
 import { GET_LEXICONS } from "@/lib/graphql/queries";
-import { REGISTER_LEXICON, DELETE_LEXICON, UPLOAD_LEXICONS } from "@/lib/graphql/mutations";
+import { REGISTER_LEXICON, DELETE_LEXICON, UPLOAD_LEXICONS, RELOAD_SCHEMA } from "@/lib/graphql/mutations";
+import {
+  formatReloadSchemaFailure,
+  formatReloadSchemaSuccess,
+  type ReloadSchemaResponse,
+} from "@/lib/graphql/schema-reload";
 import { useAdminSession } from "@/lib/auth";
 import { Button } from "@/components/ui/Button";
 import { Alert } from "@/components/ui/Alert";
@@ -292,6 +297,31 @@ export default function LexiconsPage() {
     onSettled: () => setZipUploading(false),
   });
 
+  const reloadSchemaMutation = useMutation({
+    mutationFn: () => {
+      if (!isAdmin) {
+        throw new Error("Admin access is required to reload the public GraphQL schema.");
+      }
+
+      return graphqlClient.request<ReloadSchemaResponse>(RELOAD_SCHEMA);
+    },
+    onSuccess: (response) => {
+      if (response.reloadSchema.success) {
+        setSuccess(formatReloadSchemaSuccess(response.reloadSchema.lexiconCount));
+        setError(null);
+        setTimeout(() => setSuccess(null), 5000);
+        return;
+      }
+
+      setError(formatReloadSchemaFailure(response.reloadSchema));
+      setSuccess(null);
+    },
+    onError: (err: Error) => {
+      setError(`Could not start schema reload: ${err.message}`);
+      setSuccess(null);
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (nsid: string) =>
       graphqlClient.request(DELETE_LEXICON, { nsid }),
@@ -442,6 +472,7 @@ export default function LexiconsPage() {
   const roots = Array.from(tree.entries()).sort(([a], [b]) => a.localeCompare(b));
   const isConfirmDeleting = confirmNsid !== null && confirmNsid === deletingNsid;
   const isZipUploadPending = zipUploading || uploadMutation.isPending;
+  const isSchemaReloadPending = reloadSchemaMutation.isPending;
 
   if (fetchError) {
     return (
@@ -521,7 +552,7 @@ export default function LexiconsPage() {
             </h3>
             <div className="mt-1 space-y-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
               <p>Upload a .zip containing one or more lexicon .json files. Lexicons do not need to be published yet.</p>
-              <p>Each JSON file must contain a top-level id field. A backend restart may be required before new lexicons appear in the public GraphQL schema.</p>
+              <p>Each JSON file must contain a top-level id field. After changing lexicons, use Reload schema below to update the live public GraphQL schema.</p>
             </div>
             <form onSubmit={handleUpload} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
               <label htmlFor="lexicon-zip-file" className="sr-only">
@@ -551,6 +582,29 @@ export default function LexiconsPage() {
                 Selected: {zipFile.name}
               </p>
             )}
+          </section>
+        )}
+
+        {isAdmin && (
+          <section className="rounded-xl border p-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
+            <h3 className="text-sm font-semibold" style={{ color: "var(--foreground)" }}>
+              Public GraphQL schema
+            </h3>
+            <div className="mt-1 space-y-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
+              <p>Registering, uploading, deleting, or re-adding lexicons updates the database list. Reload the live public /graphql schema to make typed fields appear or disappear without restarting the backend.</p>
+              <p>Reloading the schema does not update Tap/Jetstream ingestion filters. Configure ingestion filters separately.</p>
+            </div>
+            <div className="mt-4">
+              <Button
+                type="button"
+                variant="primary"
+                loading={isSchemaReloadPending}
+                disabled={isSchemaReloadPending}
+                onClick={() => reloadSchemaMutation.mutate()}
+              >
+                {isSchemaReloadPending ? "Reloading..." : "Reload schema"}
+              </Button>
+            </div>
           </section>
         )}
       </div>

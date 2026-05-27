@@ -33,6 +33,6 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 
 Vercel preview deployments run the frontend only. The app proxies GraphQL requests to the backend configured by `HYPERINDEX_URL` or `NEXT_PUBLIC_HYPERINDEX_URL`.
 
-If a preview branch targets a shared backend such as `dev.api.hi.gainforest.app`, redeploying the Vercel preview does not rebuild the backend GraphQL schema. After registering or uploading lexicons, restart/redeploy the backend indexer that the preview points to before expecting new typed GraphQL query fields to appear.
+If a preview branch targets a shared backend such as `dev.api.hi.gainforest.app`, redeploying the Vercel preview only updates the frontend. After registering, uploading, deleting, or re-adding lexicons, run the backend `reloadSchema` admin mutation or click **Reload schema** on the Lexicons page before expecting new typed GraphQL query fields to appear. If reload fails, the backend keeps serving the previous working public schema; Tap/Jetstream ingestion filters are configured separately.
 
 See the [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for general Vercel deployment details.

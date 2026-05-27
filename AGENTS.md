@@ -6,7 +6,6 @@
 - This repo contains two codebases:
   - the **Go backend** at the repo root
   - the **Next.js frontend** in `client/`
-- Use `bd` for task tracking. Run `bd onboard` if you need the repo-local workflow.
 
 ## Key boundaries and entrypoints
 

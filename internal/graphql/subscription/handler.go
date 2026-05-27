@@ -26,7 +26,25 @@ const (
 	msgError               = "error"
 	msgComplete            = "complete"
 	msgConnectionTerminate = "connection_terminate"
+
+	schemaUnavailableCode    = "SCHEMA_UNAVAILABLE"
+	schemaUnavailableMessage = "public GraphQL schema is unavailable: no schema has loaded successfully. Fix lexicon load errors in the backend logs, then run the admin reloadSchema mutation or restart after fixing configuration."
 )
+
+// SchemaProvider exposes the current public GraphQL schema to subscription
+// operations. Implementations return nil when no schema has loaded successfully.
+type SchemaProvider interface {
+	// Schema returns the currently active schema, or nil when none is available.
+	Schema() *graphql.Schema
+}
+
+type staticSchemaProvider struct {
+	schema *graphql.Schema
+}
+
+func (p staticSchemaProvider) Schema() *graphql.Schema {
+	return p.schema
+}
 
 // wsMessage represents a WebSocket message.
 type wsMessage struct {
@@ -44,19 +62,26 @@ type subscribePayload struct {
 
 // Handler handles WebSocket connections for GraphQL subscriptions.
 type Handler struct {
-	schema   *graphql.Schema
-	pubsub   *PubSub
-	upgrader websocket.Upgrader
+	schemaProvider SchemaProvider
+	pubsub         *PubSub
+	upgrader       websocket.Upgrader
 }
 
-// NewHandler creates a new subscription handler.
+// NewHandler creates a new subscription handler with a static schema.
 // allowedOrigins controls which origins may open WebSocket connections.
 // Pass []string{"*"} to allow all origins (development only).
-// Pass nil or empty slice to enforce same-origin policy.
+// Pass nil or empty slice to allow all origins, matching the router CORS default.
 func NewHandler(schema *graphql.Schema, pubsub *PubSub, allowedOrigins []string) *Handler {
+	return NewHandlerWithSchemaProvider(staticSchemaProvider{schema: schema}, pubsub, allowedOrigins)
+}
+
+// NewHandlerWithSchemaProvider creates a subscription handler that snapshots the
+// current schema when each subscription operation starts. Existing active
+// subscriptions keep using the schema snapshot they started with.
+func NewHandlerWithSchemaProvider(provider SchemaProvider, pubsub *PubSub, allowedOrigins []string) *Handler {
 	return &Handler{
-		schema: schema,
-		pubsub: pubsub,
+		schemaProvider: provider,
+		pubsub:         pubsub,
 		upgrader: websocket.Upgrader{
 			Subprotocols: []string{graphqlWSProtocol},
 			CheckOrigin:  makeOriginChecker(allowedOrigins),
@@ -106,10 +131,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &wsClient{
-		conn:          conn,
-		schema:        h.schema,
-		pubsub:        h.pubsub,
-		subscriptions: make(map[string]context.CancelFunc),
+		conn:           conn,
+		schemaProvider: h.schemaProvider,
+		pubsub:         h.pubsub,
+		subscriptions:  make(map[string]context.CancelFunc),
 	}
 
 	go client.run()
@@ -117,12 +142,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // wsClient manages a single WebSocket connection.
 type wsClient struct {
-	conn          *websocket.Conn
-	schema        *graphql.Schema
-	pubsub        *PubSub
-	subscriptions map[string]context.CancelFunc
-	mu            sync.Mutex
-	initialized   bool
+	conn           *websocket.Conn
+	schemaProvider SchemaProvider
+	pubsub         *PubSub
+	subscriptions  map[string]context.CancelFunc
+	mu             sync.Mutex
+	initialized    bool
 }
 
 // run handles the WebSocket connection lifecycle.
@@ -181,6 +206,12 @@ func (c *wsClient) handleSubscribe(msg *wsMessage) {
 		return
 	}
 
+	schema := c.currentSchema()
+	if schema == nil {
+		c.sendError(msg.ID, schemaUnavailableMessage)
+		return
+	}
+
 	// Create a cancellable context
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -188,12 +219,19 @@ func (c *wsClient) handleSubscribe(msg *wsMessage) {
 	c.subscriptions[msg.ID] = cancel
 	c.mu.Unlock()
 
-	// Start subscription in goroutine
-	go c.runSubscription(ctx, msg.ID, payload)
+	// Start subscription in goroutine with the schema snapshot active at subscribe time.
+	go c.runSubscription(ctx, msg.ID, payload, schema)
+}
+
+func (c *wsClient) currentSchema() *graphql.Schema {
+	if c.schemaProvider == nil {
+		return nil
+	}
+	return c.schemaProvider.Schema()
 }
 
 // runSubscription executes a subscription and sends events.
-func (c *wsClient) runSubscription(ctx context.Context, id string, payload subscribePayload) {
+func (c *wsClient) runSubscription(ctx context.Context, id string, payload subscribePayload, schema *graphql.Schema) {
 	defer c.completeSubscription(id)
 
 	// Subscribe to events
@@ -231,7 +269,7 @@ func (c *wsClient) runSubscription(ctx context.Context, id string, payload subsc
 
 			// Execute GraphQL query with the event as root value
 			result := graphql.Do(graphql.Params{
-				Schema:         *c.schema,
+				Schema:         *schema,
 				RequestString:  payload.Query,
 				OperationName:  payload.OperationName,
 				VariableValues: payload.Variables,
@@ -286,9 +324,15 @@ func (c *wsClient) completeSubscription(id string) {
 
 // sendError sends an error message.
 func (c *wsClient) sendError(id, message string) {
-	errPayload, _ := json.Marshal([]map[string]string{
-		{"message": message},
-	})
+	errorPayload := map[string]interface{}{"message": message}
+	if message == schemaUnavailableMessage {
+		errorPayload["extensions"] = map[string]interface{}{
+			"code":       schemaUnavailableCode,
+			"httpStatus": http.StatusServiceUnavailable,
+		}
+	}
+
+	errPayload, _ := json.Marshal([]map[string]interface{}{errorPayload})
 	c.send(&wsMessage{
 		ID:      id,
 		Type:    msgError,

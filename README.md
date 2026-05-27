@@ -60,7 +60,18 @@ Lexicons define the AT Protocol record types you want to index. Hyperindex suppo
 
 Or place lexicon JSON files in a directory and set the `LEXICON_DIR` environment variable.
 
-After registering by NSID or uploading a ZIP file, restart/redeploy the backend indexer for the new lexicons to appear in the public GraphQL schema and query list. The admin lexicon list updates immediately, but typed GraphQL queries are generated at backend startup.
+After registering, uploading, deleting, or re-adding lexicons, run the `reloadSchema` admin mutation or click **Reload schema** on the Lexicons page. This rebuilds the public `/graphql` schema in-place so typed fields appear or disappear without restarting the backend. If reload fails, Hyperindex keeps serving the previous working public schema and reports the lexicon error to fix. Schema reload does not change Tap/Jetstream ingestion filters; configure ingestion filters separately.
+
+```graphql
+mutation ReloadSchema {
+  reloadSchema {
+    success
+    lexiconCount
+    reloadedAt
+    error
+  }
+}
+```
 
 **Example lexicons:**
 - `org.hypercerts.claim.activity` - Hypercert claim activity
@@ -174,7 +185,7 @@ mutation {
 
 Access your indexed data at `/graphql`:
 
-Typed GraphQL query field names are generated from lexicon NSIDs. For example, `org.hypercerts.claim.activity` becomes `orgHypercertsClaimActivity`. Newly registered or uploaded lexicons appear in these typed queries after the backend indexer restarts.
+Typed GraphQL query field names are generated from lexicon NSIDs. For example, `org.hypercerts.claim.activity` becomes `orgHypercertsClaimActivity`. Newly registered, uploaded, deleted, or re-added lexicons appear in these typed queries after you run `reloadSchema` or click **Reload schema** on the Lexicons page.
 
 ```graphql
 # Generic query — all records by collection
@@ -426,6 +437,7 @@ The admin API at `/admin/graphql` provides:
 **Mutations:**
 - `uploadLexicons` - Register new lexicons
 - `deleteLexicon` - Remove a lexicon
+- `reloadSchema` - Rebuild the live public GraphQL schema after lexicon changes without restarting the backend
 - `backfillActor` - Backfill a specific user
 - `triggerBackfill` - Full network backfill
 - `populateActivity` - Populate activity from existing records

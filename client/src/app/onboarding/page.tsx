@@ -344,8 +344,8 @@ export default function OnboardingPage() {
                   </div>
                 )}
                 <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-                  You can skip this step and upload lexicons later. Your AppView will only
-                  index records matching your installed lexicons.
+                  You can skip this step and upload lexicons later. After adding lexicons,
+                  reload the public GraphQL schema from the Lexicons page so typed fields appear without a backend restart.
                 </p>
               </div>
             </div>

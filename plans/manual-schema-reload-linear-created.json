@@ -1,0 +1,77 @@
+{
+  "source": "/home/kzoeps/Projects/gainforest/hyperindex-worktree/plans/manual-schema-reload-linear-issues.json",
+  "issues": {
+    "MSR-000": {
+      "id": "f062e5b0-c54b-4eaa-a5a3-79650d3e5947",
+      "identifier": "GON-58",
+      "url": "https://linear.app/gongphel-labs/issue/GON-58/manual-public-graphql-schema-reload",
+      "title": "Manual public GraphQL schema reload",
+      "team": {
+        "id": "07b55767-49c4-4a4d-a1c8-0dfc804e3b94",
+        "key": "GON",
+        "name": "Gongphel labs"
+      }
+    },
+    "MSR-001": {
+      "id": "4555ec4d-8629-4957-9685-85c76b715faa",
+      "identifier": "GON-59",
+      "url": "https://linear.app/gongphel-labs/issue/GON-59/add-public-schema-manager-and-fallback-snapshots",
+      "title": "Add public schema manager and fallback snapshots",
+      "team": {
+        "id": "07b55767-49c4-4a4d-a1c8-0dfc804e3b94",
+        "key": "GON",
+        "name": "Gongphel labs"
+      },
+      "parentDraftId": "MSR-000"
+    },
+    "MSR-002": {
+      "id": "872de90a-3c84-4916-92c6-6b9ab8c31268",
+      "identifier": "GON-60",
+      "url": "https://linear.app/gongphel-labs/issue/GON-60/validate-admin-lexicon-writes-before-persistence",
+      "title": "Validate admin lexicon writes before persistence",
+      "team": {
+        "id": "07b55767-49c4-4a4d-a1c8-0dfc804e3b94",
+        "key": "GON",
+        "name": "Gongphel labs"
+      },
+      "parentDraftId": "MSR-000"
+    },
+    "MSR-003": {
+      "id": "d157d8ab-bc40-4d0f-8dec-1bafe56e380e",
+      "identifier": "GON-61",
+      "url": "https://linear.app/gongphel-labs/issue/GON-61/add-admin-reloadschema-mutation-and-resolver-callback",
+      "title": "Add admin reloadSchema mutation and resolver callback",
+      "team": {
+        "id": "07b55767-49c4-4a4d-a1c8-0dfc804e3b94",
+        "key": "GON",
+        "name": "Gongphel labs"
+      },
+      "parentDraftId": "MSR-000"
+    },
+    "MSR-004": {
+      "id": "9ff129e9-f7d8-4092-bc9b-eaa1c774df32",
+      "identifier": "GON-62",
+      "url": "https://linear.app/gongphel-labs/issue/GON-62/make-http-and-subscription-handlers-schema-provider-aware",
+      "title": "Make HTTP and subscription handlers schema-provider aware",
+      "team": {
+        "id": "07b55767-49c4-4a4d-a1c8-0dfc804e3b94",
+        "key": "GON",
+        "name": "Gongphel labs"
+      },
+      "parentDraftId": "MSR-000"
+    },
+    "MSR-005": {
+      "id": "208fbb51-2029-41c9-bde0-c2574e38a27a",
+      "identifier": "GON-63",
+      "url": "https://linear.app/gongphel-labs/issue/GON-63/add-frontend-reload-ui-docs-and-changie",
+      "title": "Add frontend reload UI, docs, and Changie",
+      "team": {
+        "id": "07b55767-49c4-4a4d-a1c8-0dfc804e3b94",
+        "key": "GON",
+        "name": "Gongphel labs"
+      },
+      "parentDraftId": "MSR-000"
+    }
+  },
+  "updatedAt": "2026-05-21T16:27:32.291Z"
+}

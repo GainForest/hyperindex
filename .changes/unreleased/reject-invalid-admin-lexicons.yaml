@@ -1,0 +1,4 @@
+kind: changed
+body: Change admin lexicon upload and registration so invalid lexicon documents are rejected before storage, preventing bad lexicons from breaking later public schema reloads.
+custom:
+  Affects: operator
