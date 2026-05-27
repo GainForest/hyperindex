@@ -1528,6 +1528,220 @@ func TestExternalLabelsGraphQLByURIHydration(t *testing.T) {
 	}
 }
 
+func TestCertifiedProfileDataGraphQLHydration(t *testing.T) {
+	schema := buildCertifiedProfileTestSchema(t)
+	ctx := setupCertifiedProfileGraphQLTestDB(t)
+
+	query := `{
+		comExampleCertifiedConsumer(first: 10) {
+			edges {
+				node {
+					did
+					certifiedProfileData {
+						uri
+						cid
+						did
+						rkey
+						displayName
+						description
+						externalLabels(values: ["test-account"]) { src val neg }
+					}
+				}
+			}
+		}
+		records(collection: "com.example.certified.consumer", first: 10) {
+			edges {
+				node {
+					did
+					certifiedProfileData {
+						displayName
+						externalLabels(values: ["test-account"]) { val }
+					}
+				}
+			}
+		}
+		comExampleCertifiedConsumerByUri(uri: "at://did:plc:author/com.example.certified.consumer/rkey1") {
+			did
+			certifiedProfileData { displayName externalLabels(values: ["test-account"]) { val } }
+		}
+		search(query: "hello", collection: "com.example.certified.consumer", first: 10) {
+			edges {
+				node {
+					did
+					certifiedProfileData {
+						displayName
+						externalLabels(values: ["test-account"]) { val }
+					}
+				}
+			}
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+
+	typedNode := firstConnectionNode(t, data["comExampleCertifiedConsumer"], "comExampleCertifiedConsumer")
+	assertCertifiedProfileData(t, typedNode, "typed collection")
+
+	genericNode := firstConnectionNode(t, data["records"], "records")
+	assertCertifiedProfileData(t, genericNode, "generic records")
+
+	byURI, ok := data["comExampleCertifiedConsumerByUri"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("ByUri result is %T, want map[string]interface{}", data["comExampleCertifiedConsumerByUri"])
+	}
+	assertCertifiedProfileData(t, byURI, "ByUri")
+
+	searchNode := firstConnectionNode(t, data["search"], "search")
+	assertCertifiedProfileData(t, searchNode, "search")
+}
+
+func TestCertifiedProfileDataMissingProfileReturnsNull(t *testing.T) {
+	schema := buildCertifiedProfileTestSchema(t)
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	_, err := db.Records.Insert(ctx,
+		"at://did:plc:missing/com.example.certified.consumer/rkey1",
+		"cid-consumer-missing",
+		"did:plc:missing",
+		"com.example.certified.consumer",
+		`{"text":"hello missing"}`,
+	)
+	if err != nil {
+		t.Fatalf("insert record: %v", err)
+	}
+	repos := &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels}
+	ctx = resolver.WithRepositories(ctx, repos)
+
+	query := `{
+		comExampleCertifiedConsumer(first: 10) {
+			edges { node { certifiedProfileData { displayName } } }
+		}
+	}`
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	node := firstConnectionNode(t, data["comExampleCertifiedConsumer"], "comExampleCertifiedConsumer")
+	if got := node["certifiedProfileData"]; got != nil {
+		t.Fatalf("certifiedProfileData = %#v, want nil", got)
+	}
+}
+
+func buildCertifiedProfileTestSchema(t *testing.T) *graphql.Schema {
+	t.Helper()
+
+	registry := lexicon.NewRegistry()
+	registerCertifiedProfileTestLexicon(registry)
+	registry.Register(&lexicon.Lexicon{
+		ID: "com.example.certified.consumer",
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "text", Property: lexicon.Property{Type: lexicon.TypeString}},
+				},
+			},
+		},
+	})
+
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("buildCertifiedProfileTestSchema: failed to build schema: %v", err)
+	}
+	return schema
+}
+
+func registerCertifiedProfileTestLexicon(registry *lexicon.Registry) {
+	registry.Register(&lexicon.Lexicon{
+		ID: "app.certified.actor.profile",
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "literal:self",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "displayName", Property: lexicon.Property{Type: lexicon.TypeString}},
+					{Name: "description", Property: lexicon.Property{Type: lexicon.TypeString}},
+					{Name: "createdAt", Property: lexicon.Property{Type: lexicon.TypeString, Format: "datetime", Required: true}},
+				},
+			},
+		},
+	})
+}
+
+func setupCertifiedProfileGraphQLTestDB(t *testing.T) context.Context {
+	t.Helper()
+
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+
+	consumerURI := "at://did:plc:author/com.example.certified.consumer/rkey1"
+	profileURI := "at://did:plc:author/app.certified.actor.profile/self"
+	profileCID := "cid-profile"
+	if err := db.Records.BatchInsert(ctx, []*repositories.Record{
+		{
+			URI:        consumerURI,
+			CID:        "cid-consumer",
+			DID:        "did:plc:author",
+			Collection: "com.example.certified.consumer",
+			JSON:       `{"text":"hello from author"}`,
+			RKey:       "rkey1",
+		},
+		{
+			URI:        profileURI,
+			CID:        profileCID,
+			DID:        "did:plc:author",
+			Collection: "app.certified.actor.profile",
+			JSON:       `{"displayName":"Certified Author","description":"Profile record","createdAt":"2025-01-02T03:04:05Z"}`,
+			RKey:       "self",
+		},
+	}); err != nil {
+		t.Fatalf("setupCertifiedProfileGraphQLTestDB: insert records: %v", err)
+	}
+
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := db.ExternalLabels.PersistEvent(ctx, url, 1, []repositories.ExternalLabelInput{
+		{LabelIndex: 0, Src: "did:plc:labeler", URI: profileURI, CID: &profileCID, Val: "test-account", Cts: "2025-01-02T03:05:05Z", RawJSON: `{}`},
+	}); err != nil {
+		t.Fatalf("setupCertifiedProfileGraphQLTestDB: persist profile label: %v", err)
+	}
+
+	repos := &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels}
+	return resolver.WithRepositories(ctx, repos)
+}
+
+func assertCertifiedProfileData(t *testing.T, record map[string]interface{}, path string) {
+	t.Helper()
+
+	profile, ok := record["certifiedProfileData"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s certifiedProfileData is %T, want map[string]interface{}", path, record["certifiedProfileData"])
+	}
+	if got := profile["displayName"]; got != "Certified Author" {
+		t.Fatalf("%s profile displayName = %v, want Certified Author", path, got)
+	}
+	labels, ok := profile["externalLabels"].([]interface{})
+	if !ok || len(labels) != 1 {
+		t.Fatalf("%s profile externalLabels = %#v, want one label", path, profile["externalLabels"])
+	}
+	label, ok := labels[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s profile label is %T, want map[string]interface{}", path, labels[0])
+	}
+	if got := label["val"]; got != "test-account" {
+		t.Fatalf("%s profile label val = %v, want test-account", path, got)
+	}
+}
+
 func buildExternalLabelsTestSchema(t *testing.T) *graphql.Schema {
 	t.Helper()
 
