@@ -1,13 +1,15 @@
 # Build stage
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
 # Install build dependencies
 RUN apk add --no-cache git
 
-# Enable automatic toolchain download for dependencies requiring newer Go
-ENV GOTOOLCHAIN=auto
+# Keep builds on the toolchain provided by the builder image. go.mod requires
+# Go 1.26, so using a matching image avoids Railway downloading a second Go
+# toolchain during every uncached Docker build.
+ENV GOTOOLCHAIN=local
 
 # Copy go mod files
 COPY go.mod go.sum* ./
@@ -17,7 +19,19 @@ RUN go mod download
 COPY . .
 
 # Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -o /hyperindex ./cmd/hyperindex
+ARG VERSION
+RUN set -eu; \
+    build_version="${VERSION:-}"; \
+    if [ -z "$build_version" ]; then \
+        release_file="$(ls .changes/v*.md 2>/dev/null | sort -V | tail -n 1 || true)"; \
+        if [ -n "$release_file" ]; then \
+            release_name="${release_file##*/}"; \
+            build_version="${release_name%.md}"; \
+        else \
+            build_version="0.1.0-dev"; \
+        fi; \
+    fi; \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w -X github.com/GainForest/hyperindex/internal/buildinfo.Version=$build_version" -o /hyperindex ./cmd/hyperindex
 
 # Runtime stage
 FROM alpine:3.19
