@@ -75,6 +75,20 @@
       "pageSize": 10
     }
   ],
+  "externalLabelActivityClaims": {
+    "sourceDIDEnv": "HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID",
+    "pageSize": 10,
+    "labels": [
+      {
+        "value": "high-quality",
+        "minimumRecords": 20
+      },
+      {
+        "value": "standard",
+        "minimumRecords": 20
+      }
+    ]
+  },
   "search": {
     "query": "hypercert",
     "first": 1

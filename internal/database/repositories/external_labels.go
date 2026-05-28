@@ -350,14 +350,14 @@ func (r *ExternalLabelsRepository) GetBySubjects(ctx context.Context, subjects [
 	}
 
 	orderByCts := externalLabelTimestampExpr(r.db, "el.cts")
-	sqlStr := fmt.Sprintf(`WITH requested_subject(subject_key, uri, cid) AS (
+	sqlStr := fmt.Sprintf(`WITH requested_subject(subject_index, uri, cid) AS (
 		%s
 	)
-	SELECT rs.subject_key, %s
+	SELECT rs.subject_index, %s
 	FROM requested_subject rs
 	JOIN external_label el ON el.uri = rs.uri
 	WHERE %s
-	ORDER BY rs.subject_key ASC, %s DESC, el.id DESC`,
+	ORDER BY rs.subject_index ASC, %s DESC, el.id DESC`,
 		requestedSubjectSQL,
 		r.externalLabelColumnsForAlias("el"),
 		strings.Join(conditions, "\n\t\tAND "),
@@ -371,11 +371,16 @@ func (r *ExternalLabelsRepository) GetBySubjects(ctx context.Context, subjects [
 	defer rows.Close()
 
 	for rows.Next() {
-		var subjectKey string
-		label, err := scanExternalLabelRow(rows, &subjectKey)
+		var subjectIndex int64
+		label, err := scanExternalLabelRow(rows, &subjectIndex)
 		if err != nil {
 			return nil, err
 		}
+		if subjectIndex < 0 || subjectIndex >= int64(len(normalizedSubjects)) {
+			return nil, fmt.Errorf("get external labels by subjects: invalid subject index %d", subjectIndex)
+		}
+
+		subjectKey := normalizedSubjects[subjectIndex].Key()
 		labelsBySubject[subjectKey] = append(labelsBySubject[subjectKey], label)
 	}
 	if err := rows.Err(); err != nil {
@@ -488,16 +493,16 @@ func (r *ExternalLabelsRepository) externalLabelColumnsForAlias(alias string) st
 
 func buildRequestedSubjectSQL(exec database.Executor, subjects []LabelSubject, params *[]database.Value) string {
 	selects := make([]string, 0, len(subjects))
-	for _, subject := range subjects {
+	for i, subject := range subjects {
 		base := len(*params) + 1
 		selects = append(selects, fmt.Sprintf(
-			"SELECT CAST(%s AS TEXT) AS subject_key, CAST(%s AS TEXT) AS uri, CAST(%s AS TEXT) AS cid",
+			"SELECT CAST(%s AS INTEGER) AS subject_index, CAST(%s AS TEXT) AS uri, CAST(%s AS TEXT) AS cid",
 			exec.Placeholder(base),
 			exec.Placeholder(base+1),
 			exec.Placeholder(base+2),
 		))
 		*params = append(*params,
-			database.Text(subject.Key()),
+			database.Int(int64(i)),
 			database.Text(subject.URI),
 			nullableNonEmptyText(subject.CID),
 		)
