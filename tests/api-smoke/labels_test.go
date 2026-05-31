@@ -5,11 +5,12 @@ package apismoke
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 )
 
 const (
-	smokeActivityClaimLabelSource = "did:plc:edod7rboajioq3jbyxsgeicc"
 	smokeActivityClaimLabelValue  = "likely-test"
 	smokeAbsentActivityLabelValue = "not-likely-test"
 )
@@ -74,62 +75,83 @@ type externalLabel struct {
 
 func TestActivityClaimExternalLabelPaginationSmoke(t *testing.T) {
 	config := loadSmokeConfig(t)
+	sourceDID := smokeActivityClaimLabelSourceDID(t, config)
 	ctx := context.Background()
 
-	firstPage := queryActivityClaimLabelPage(t, ctx, config, 2, "", smokeActivityClaimLabelValue)
-	firstPageURIs := assertActivityClaimLabelPage(t, "first page", firstPage, 2, smokeActivityClaimLabelValue)
+	firstPage := queryActivityClaimLabelPage(t, ctx, config, 2, "", sourceDID, smokeActivityClaimLabelValue)
+	firstPageURIs := assertActivityClaimLabelPage(t, "first page", firstPage, 2, sourceDID, smokeActivityClaimLabelValue)
 	if !firstPage.PageInfo.HasNextPage {
-		t.Fatalf("activity claim label pagination: first page hasNextPage = false, want true for label value %q", smokeActivityClaimLabelValue)
+		t.Fatalf("activity claim label pagination: first page hasNextPage = false, want true for source %q and label value %q", sourceDID, smokeActivityClaimLabelValue)
 	}
 	if firstPage.PageInfo.EndCursor == "" {
-		t.Fatalf("activity claim label pagination: first page endCursor is empty for label value %q", smokeActivityClaimLabelValue)
+		t.Fatalf("activity claim label pagination: first page endCursor is empty for source %q and label value %q", sourceDID, smokeActivityClaimLabelValue)
 	}
 
-	secondPage := queryActivityClaimLabelPage(t, ctx, config, 2, firstPage.PageInfo.EndCursor, smokeActivityClaimLabelValue)
-	secondPageURIs := assertActivityClaimLabelPage(t, "second page", secondPage, 2, smokeActivityClaimLabelValue)
+	secondPage := queryActivityClaimLabelPage(t, ctx, config, 2, firstPage.PageInfo.EndCursor, sourceDID, smokeActivityClaimLabelValue)
+	secondPageURIs := assertActivityClaimLabelPage(t, "second page", secondPage, 2, sourceDID, smokeActivityClaimLabelValue)
 	for uri := range secondPageURIs {
 		if firstPageURIs[uri] {
-			t.Fatalf("activity claim label pagination returned duplicate URI %q across adjacent pages", uri)
+			t.Fatalf("activity claim label pagination returned duplicate URI %q across adjacent pages for source %q", uri, sourceDID)
 		}
 	}
 
-	smokeLog("✓ activity claim external label querying paginates for source %s", smokeActivityClaimLabelSource)
+	smokeLog("✓ activity claim external label querying paginates for source %s", sourceDID)
 }
 
 func TestExternalLabelValueFiltersSmoke(t *testing.T) {
 	config := loadSmokeConfig(t)
+	sourceDID := smokeActivityClaimLabelSourceDID(t, config)
 	ctx := context.Background()
 
-	page := queryActivityClaimLabelPage(t, ctx, config, 1, "", smokeActivityClaimLabelValue)
-	uris := assertActivityClaimLabelPage(t, "subject lookup page", page, 1, smokeActivityClaimLabelValue)
+	page := queryActivityClaimLabelPage(t, ctx, config, 1, "", sourceDID, smokeActivityClaimLabelValue)
+	uris := assertActivityClaimLabelPage(t, "subject lookup page", page, 1, sourceDID, smokeActivityClaimLabelValue)
 	var subject string
 	for uri := range uris {
 		subject = uri
 		break
 	}
 
-	matchingLabels := queryRootExternalLabels(t, ctx, config, subject, smokeActivityClaimLabelValue)
+	matchingLabels := queryRootExternalLabels(t, ctx, config, subject, sourceDID, smokeActivityClaimLabelValue)
 	if len(matchingLabels) == 0 {
-		t.Fatalf("root externalLabels for subject %q and value %q returned no labels", subject, smokeActivityClaimLabelValue)
+		t.Fatalf("root externalLabels for subject %q, source %q, and value %q returned no labels", subject, sourceDID, smokeActivityClaimLabelValue)
 	}
 	for index, label := range matchingLabels {
-		assertMatchingActivityClaimLabel(t, "root externalLabels", subject, "", smokeActivityClaimLabelValue, index, label)
+		assertMatchingActivityClaimLabel(t, "root externalLabels", subject, "", sourceDID, smokeActivityClaimLabelValue, index, label)
 	}
 
-	absentLabels := queryRootExternalLabels(t, ctx, config, subject, smokeAbsentActivityLabelValue)
+	absentLabels := queryRootExternalLabels(t, ctx, config, subject, sourceDID, smokeAbsentActivityLabelValue)
 	if len(absentLabels) != 0 {
-		t.Fatalf("root externalLabels for subject %q and absent value %q returned %d labels, want 0", subject, smokeAbsentActivityLabelValue, len(absentLabels))
+		t.Fatalf("root externalLabels for subject %q, source %q, and absent value %q returned %d labels, want 0", subject, sourceDID, smokeAbsentActivityLabelValue, len(absentLabels))
 	}
 
-	smokeLog("✓ external label value filters distinguish %q from %q", smokeActivityClaimLabelValue, smokeAbsentActivityLabelValue)
+	smokeLog("✓ external label value filters distinguish %q from %q for source %s", smokeActivityClaimLabelValue, smokeAbsentActivityLabelValue, sourceDID)
 }
 
-func queryActivityClaimLabelPage(t testing.TB, ctx context.Context, config smokeConfig, first int, after string, value string) externalLabelRecordConnection {
+func smokeActivityClaimLabelSourceDID(t testing.TB, config smokeConfig) string {
+	t.Helper()
+
+	expectation := config.expectations.ExternalLabelActivityClaims
+	if !expectation.configured() {
+		t.Skip("externalLabelActivityClaims is not configured in the smoke expectations file")
+	}
+
+	sourceDID := strings.TrimSpace(os.Getenv(expectation.SourceDIDEnv))
+	if sourceDID == "" {
+		t.Skipf("%s is unset; skipping activity claim label smoke test", expectation.SourceDIDEnv)
+	}
+	if !strings.HasPrefix(sourceDID, "did:") {
+		t.Fatalf("%s = %q, want a DID starting with did:", expectation.SourceDIDEnv, sourceDID)
+	}
+
+	return sourceDID
+}
+
+func queryActivityClaimLabelPage(t testing.TB, ctx context.Context, config smokeConfig, first int, after string, sourceDID string, value string) externalLabelRecordConnection {
 	t.Helper()
 
 	variables := map[string]any{
 		"first":  first,
-		"source": smokeActivityClaimLabelSource,
+		"source": sourceDID,
 		"value":  value,
 	}
 	if after != "" {
@@ -146,11 +168,11 @@ func queryActivityClaimLabelPage(t testing.TB, ctx context.Context, config smoke
 	return data.ActivityClaims
 }
 
-func assertActivityClaimLabelPage(t testing.TB, pageName string, page externalLabelRecordConnection, expectedEdges int, value string) map[string]bool {
+func assertActivityClaimLabelPage(t testing.TB, pageName string, page externalLabelRecordConnection, expectedEdges int, sourceDID string, value string) map[string]bool {
 	t.Helper()
 
 	if len(page.Edges) != expectedEdges {
-		t.Fatalf("activity claim label %s returned %d edges, want %d for value %q", pageName, len(page.Edges), expectedEdges, value)
+		t.Fatalf("activity claim label %s returned %d edges, want %d for source %q and value %q", pageName, len(page.Edges), expectedEdges, sourceDID, value)
 	}
 
 	seenURIs := make(map[string]bool, len(page.Edges))
@@ -169,17 +191,17 @@ func assertActivityClaimLabelPage(t testing.TB, pageName string, page externalLa
 		}
 		seenURIs[edge.Node.URI] = true
 		if len(edge.Node.ExternalLabels) == 0 {
-			t.Fatalf("activity claim label %s edge %d uri %q returned no externalLabels for source %q and value %q", pageName, edgeIndex, edge.Node.URI, smokeActivityClaimLabelSource, value)
+			t.Fatalf("activity claim label %s edge %d uri %q returned no externalLabels for source %q and value %q", pageName, edgeIndex, edge.Node.URI, sourceDID, value)
 		}
 		for labelIndex, label := range edge.Node.ExternalLabels {
-			assertMatchingActivityClaimLabel(t, pageName, edge.Node.URI, edge.Node.CID, value, labelIndex, label)
+			assertMatchingActivityClaimLabel(t, pageName, edge.Node.URI, edge.Node.CID, sourceDID, value, labelIndex, label)
 		}
 	}
 
 	return seenURIs
 }
 
-func queryRootExternalLabels(t testing.TB, ctx context.Context, config smokeConfig, subject string, value string) []externalLabel {
+func queryRootExternalLabels(t testing.TB, ctx context.Context, config smokeConfig, subject string, sourceDID string, value string) []externalLabel {
 	t.Helper()
 
 	response := postGraphQL(t, ctx, config, "SmokeRootExternalLabels", `
@@ -195,7 +217,7 @@ func queryRootExternalLabels(t testing.TB, ctx context.Context, config smokeConf
 		}
 	`, map[string]any{
 		"subject": subject,
-		"source":  smokeActivityClaimLabelSource,
+		"source":  sourceDID,
 		"value":   value,
 	})
 
@@ -209,11 +231,11 @@ func queryRootExternalLabels(t testing.TB, ctx context.Context, config smokeConf
 	return data.ExternalLabels
 }
 
-func assertMatchingActivityClaimLabel(t testing.TB, location string, uri string, cid string, value string, labelIndex int, label externalLabel) {
+func assertMatchingActivityClaimLabel(t testing.TB, location string, uri string, cid string, sourceDID string, value string, labelIndex int, label externalLabel) {
 	t.Helper()
 
-	if label.Src != smokeActivityClaimLabelSource {
-		t.Fatalf("%s label %d src = %q, want %q", location, labelIndex, label.Src, smokeActivityClaimLabelSource)
+	if label.Src != sourceDID {
+		t.Fatalf("%s label %d src = %q, want %q", location, labelIndex, label.Src, sourceDID)
 	}
 	if label.URI != uri {
 		t.Fatalf("%s label %d uri = %q, want %q", location, labelIndex, label.URI, uri)
