@@ -423,15 +423,45 @@ Typed collection queries accept a \`where\` argument for field-level filtering. 
 | Operator | Applicable Types | Description | Example |
 |----------|-----------------|-------------|---------|
 | \`eq\` | String, Int, Float, Boolean, DateTime | Exact equality | \`{ title: { eq: "Hello" } }\` |
-| \`neq\` | String, Int, Float, Boolean, DateTime | Not equal | \`{ status: { neq: "draft" } }\` |
+| \`neq\` | String, Int, Float, DateTime | Not equal | \`{ status: { neq: "draft" } }\` |
 | \`gt\` | Int, Float, DateTime | Greater than | \`{ score: { gt: 5 } }\` |
 | \`lt\` | Int, Float, DateTime | Less than | \`{ score: { lt: 100 } }\` |
 | \`gte\` | Int, Float, DateTime | Greater or equal | \`{ createdAt: { gte: "2024-01-01" } }\` |
 | \`lte\` | Int, Float, DateTime | Less or equal | \`{ createdAt: { lte: "2024-12-31" } }\` |
-| \`in\` | String, Int, Float | Value in list | \`{ type: { in: ["post", "reply"] } }\` |
+| \`in\` | String, Int | Value in list | \`{ type: { in: ["post", "reply"] } }\` |
 | \`contains\` | String | Substring match | \`{ text: { contains: "forest" } }\` |
 | \`startsWith\` | String | Prefix match | \`{ name: { startsWith: "Gain" } }\` |
-| \`isNull\` | All | Null check | \`{ optionalField: { isNull: true } }\` |
+| \`isNull\` | Scalar fields and complex top-level fields | Missing/null or present check | \`{ optionalField: { isNull: true } }\` |
+
+### Complex Field Presence Filtering
+
+Scalar fields keep the typed operators above. Complex top-level lexicon fields such as arrays, refs, unions, objects, blobs, bytes, unknown values, and CID links expose only a presence filter:
+
+\`\`\`graphql
+where: {
+  image: { isNull: false }
+  contributors: { isNull: false }
+}
+\`\`\`
+
+Presence filtering is top-level only. It does not support nested filters such as \`image.type.eq\` or \`contributors.identity.eq\`.
+
+\`isNull: true\` matches records where the top-level JSON field is missing or explicitly \`null\`. \`isNull: false\` matches records where the field is present and non-null. Empty arrays \`[]\`, empty objects \`{}\`, and empty strings \`""\` count as present.
+
+The generic \`records(collection: ...)\` query is unchanged and does not accept generated \`where\` filters.
+
+To discover generated where inputs, introspect the collection input object with \`inputFields\`:
+
+\`\`\`graphql
+{
+  __type(name: "OrgHypercertsClaimActivityWhereInput") {
+    inputFields {
+      name
+      type { name kind ofType { name kind } }
+    }
+  }
+}
+\`\`\`
 
 ### DID (Author) Filtering
 

@@ -48,6 +48,8 @@ By default, the suite loads `tests/api-smoke/.env` if the file exists. Copy `tes
 
 By default, the suite loads `tests/api-smoke/expectations.json`. Set `HYPERINDEX_SMOKE_EXPECTATIONS=/path/to/expectations.json` to provide environment-specific expectations for the smoke run.
 
+The default expectations assume the target API started with all listed lexicons loaded. For local full-stack runs, set `LEXICON_DIR` to a directory containing those lexicons or point `HYPERINDEX_SMOKE_EXPECTATIONS` at a smaller environment-specific expectations file.
+
 The expectations file is read, decoded, and validated before requests are sent. Expectation load failures include the file path so operators can see which file failed; for example, a missing override reports `read expectations file "/path/to/expectations.json": no such file or directory`.
 
 ## What the suite checks
@@ -65,6 +67,8 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - Activity claim external label querying, value filtering, and pagination
 - Typed `ByUri` roundtrip
 - `app.certified.graph.follow` typed pagination, filters, and sorting
+- `org.hypercerts.claim.activity` schema support for `image: PresenceFilterInput`
+- `org.hypercerts.claim.activity` image presence filtering with `where: { image: { isNull: false } }`
 - Optional external label filtering and pagination for `org.hypercerts.claim.activity`
 - Optional ATProto write-through lifecycle for `app.certified.actor.profile` and `org.hypercerts.claim.activity`
 
@@ -105,19 +109,16 @@ Because the suite verifies Hyperindex through the public GraphQL API, it cannot 
 
 Public typed GraphQL collection and `ByUri` fields are generated from the lexicons available when the backend starts. After changing which lexicons the backend loads, or after updating smoke expectations for newly loaded lexicons, restart or redeploy the API before expecting schema checks for those typed fields to pass.
 
-These helper and non-record lexicons are excluded from typed field assertions because the public GraphQL schema should not expose typed collection or `ByUri` query fields for them:
-
-- `app.certified.defs`
-- `org.hypercerts.defs`
-- `org.hypercerts.workscope.cel`
-
-The default typed expectations also intentionally omit `app.certified.link.evm`. The development schema does not expose `appCertifiedLinkEvm` or `appCertifiedLinkEvmByUri`, so the default `tests/api-smoke/expectations.json` does not require that NSID as a typed public GraphQL collection.
+Helper, object-only, and query/procedure lexicons listed in `nonRecordNSIDs` are excluded from typed field assertions because the public GraphQL schema should not expose typed collection or `ByUri` query fields for them. Keep that list in `tests/api-smoke/expectations.json` aligned with the loaded lexicon set.
 
 ## Production data assumptions
 
 The target deployment must have enough public data for read-path checks. These collections must each contain at least 20 records:
 
-The label smoke checks also assume `org.hypercerts.claim.activity` has active external labels from the source DID configured by `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` or the expectation file's `externalLabelActivityClaims.sourceDIDEnv` setting.
 - `org.hypercerts.claim.activity`
 - `app.certified.actor.profile`
 - `app.certified.graph.follow`
+
+At least one `org.hypercerts.claim.activity` record must have a non-null top-level `image` field for the image presence smoke check.
+
+The label smoke checks also assume `org.hypercerts.claim.activity` has active external labels from the source DID configured by `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` or the expectation file's `externalLabelActivityClaims.sourceDIDEnv` setting.

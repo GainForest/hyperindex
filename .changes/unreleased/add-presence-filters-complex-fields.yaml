@@ -1,0 +1,4 @@
+kind: added
+body: Add presence-only GraphQL filters for complex top-level lexicon fields.
+custom:
+  Affects: user

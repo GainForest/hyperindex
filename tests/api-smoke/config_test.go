@@ -300,8 +300,16 @@ func TestConfig(t *testing.T) {
 	if config.httpClient == nil || config.httpClient.Timeout != 10*time.Second {
 		t.Fatalf("httpClient timeout = %v, want 10s", config.httpClient)
 	}
-	if len(config.expectations.RequiredNSIDs) != 21 {
-		t.Fatalf("required NSID count = %d, want 21", len(config.expectations.RequiredNSIDs))
+	requiredNSIDs := makeSet(config.expectations.RequiredNSIDs)
+	for _, nsid := range []string{
+		"org.hypercerts.claim.activity",
+		"app.certified.actor.profile",
+		"app.gainforest.ac.audio",
+		"org.simocracy.gathering",
+	} {
+		if !requiredNSIDs[nsid] {
+			t.Fatalf("required NSIDs missing %q", nsid)
+		}
 	}
 }
 

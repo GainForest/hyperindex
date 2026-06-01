@@ -5,6 +5,8 @@ package types //nolint:revive // package name is descriptive within graphql cont
 
 import (
 	"github.com/graphql-go/graphql"
+
+	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
 // StringFilterInput is a GraphQL InputObject for filtering string fields.
@@ -185,23 +187,63 @@ var DIDFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	},
 })
 
-// FilterInputForLexiconType maps a lexicon property type and format to the
-// appropriate GraphQL filter InputObject. Returns nil for non-filterable types.
+// PresenceFilterInput is a GraphQL InputObject for checking whether a top-level
+// JSON field is missing/null or present. Use it for complex lexicon properties
+// where Hyperindex exposes presence checks but not nested value filtering.
+var PresenceFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "PresenceFilterInput",
+	Description: "Filter conditions for checking whether a top-level JSON field is missing/null or present.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"isNull": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewNonNull(graphql.Boolean),
+			Description: "True matches missing or null fields; false matches present and non-null fields.",
+		},
+	},
+})
+
+// FilterInputForLexiconType maps scalar lexicon property types and formats to
+// their GraphQL filter InputObject. It returns nil for complex types; use
+// FilterInputForLexiconProperty when building collection where inputs that
+// should expose presence-only filters for complex top-level properties.
 func FilterInputForLexiconType(lexiconType, format string) *graphql.InputObject {
 	switch lexiconType {
-	case "string":
-		if format == "datetime" {
+	case lexicon.TypeString:
+		if format == lexicon.FormatDatetime {
 			return DateTimeFilterInput
 		}
 		return StringFilterInput
-	case "integer":
+	case lexicon.TypeInteger:
 		return IntFilterInput
 	case "number":
 		return FloatFilterInput
-	case "boolean":
+	case lexicon.TypeBoolean:
 		return BooleanFilterInput
 	default:
-		// blob, bytes, unknown, ref, union, array, object, record — not filterable
+		return nil
+	}
+}
+
+// FilterInputForLexiconProperty maps a top-level lexicon property type and
+// format to the GraphQL filter InputObject used by generated collection where
+// inputs. Scalar fields keep their typed filter inputs; complex fields get
+// PresenceFilterInput so clients can check whether the field is missing/null or
+// present without nested JSON filtering.
+func FilterInputForLexiconProperty(lexiconType, format string) *graphql.InputObject {
+	if input := FilterInputForLexiconType(lexiconType, format); input != nil {
+		return input
+	}
+
+	switch lexiconType {
+	case lexicon.TypeArray,
+		lexicon.TypeRef,
+		lexicon.TypeUnion,
+		lexicon.TypeObject,
+		lexicon.TypeBlob,
+		lexicon.TypeBytes,
+		lexicon.TypeUnknown,
+		lexicon.TypeCIDLink:
+		return PresenceFilterInput
+	default:
 		return nil
 	}
 }
