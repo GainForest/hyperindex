@@ -10,6 +10,7 @@ import { ThemeToggle } from '@/components/ThemeToggle'
 const navLinks = [
   { href: '/', label: 'Dashboard' },
   { href: '/lexicons', label: 'Lexicons' },
+  { href: '/query-builder', label: 'Query Builder' },
   { href: '/backfill', label: 'Backfill' },
   { href: '/docs', label: 'API Docs' },
 ]

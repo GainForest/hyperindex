@@ -1,0 +1,4 @@
+kind: added
+body: Add a browser-based GraphQL query builder that discovers the live public schema, helps users compose collection queries with fields, arguments, filters, and variables, and can run or copy generated queries.
+custom:
+  Affects: user
