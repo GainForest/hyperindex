@@ -53,6 +53,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 ## What the suite checks
 
 - `/health`
+- `/ready`
 - `/stats`
 - GraphQL `__typename`
 - Introspection query fields

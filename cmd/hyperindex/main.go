@@ -78,7 +78,7 @@ type backgroundServices struct {
 	jsCancel           context.CancelFunc
 	tapConsumer        *tap.Consumer
 	tapCancel          context.CancelFunc
-	tapAdminClient     *tap.AdminClient // reused for health checks; nil when TAP_ENABLED=false
+	tapAdminClient     *tap.AdminClient // reused for stats checks; nil when TAP_ENABLED=false
 	labelerCancel      context.CancelFunc
 }
 
@@ -249,9 +249,9 @@ func populateActivityIfEmpty(ctx context.Context, svc *services) {
 }
 
 // setupRouter creates the chi router with middleware and basic HTTP endpoints
-// (health, stats, root info, XRPC placeholder).
-// bg is passed so that health/stats handlers can access the Tap admin client
-// once it is wired up by startTap (after setupRouter returns).
+// (health, readiness, stats, root info, XRPC placeholder).
+// bg is passed so that stats handlers can access the Tap admin client once it
+// is wired up by startTap (after setupRouter returns).
 func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -275,25 +275,42 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 		AllowAdminAPIKeyAuth: allowAdminAPIKeyAuth,
 	}))
 
-	// Health check — reports process liveness and deterministic labeler cursor
-	// failures that require operator reset. Transient Tap or labeler reconnects
-	// are exposed via GET /stats but do not fail health by themselves.
+	// Health check reports process liveness only. Dependency readiness and
+	// deterministic labeler cursor failures are exposed via GET /ready.
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
+		payload := map[string]any{
+			"status": "ok",
+			"time":   time.Now().UTC().Format(time.RFC3339),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	})
+
+	// Readiness check reports whether dependencies that should gate traffic are
+	// currently usable. Detailed non-blocking observability lives in GET /stats.
+	r.Get("/ready", func(w http.ResponseWriter, req *http.Request) {
 		payload := map[string]any{
 			"status": "ok",
 			"time":   time.Now().UTC().Format(time.RFC3339),
 		}
 		statusCode := http.StatusOK
 
-		labelerDiagnostics, labelerFatal, labelerErr := configuredLabelerDiagnostics(req.Context(), cfg, svc.externalLabels)
-		if labelerErr != nil {
+		if err := databaseReady(req.Context(), svc); err != nil {
 			statusCode = http.StatusServiceUnavailable
-			payload["status"] = "unhealthy"
-			payload["labelersError"] = labelerErr.Error()
-		} else if labelerFatal {
-			statusCode = http.StatusServiceUnavailable
-			payload["status"] = "unhealthy"
-			payload["labelers"] = labelerDiagnostics
+			payload["status"] = "not_ready"
+			payload["databaseError"] = err.Error()
+		} else {
+			labelerDiagnostics, labelerFatal, labelerErr := configuredLabelerDiagnostics(req.Context(), cfg, svc.externalLabels)
+			if labelerErr != nil {
+				statusCode = http.StatusServiceUnavailable
+				payload["status"] = "not_ready"
+				payload["labelersError"] = labelerErr.Error()
+			} else if labelerFatal {
+				statusCode = http.StatusServiceUnavailable
+				payload["status"] = "not_ready"
+				payload["labelers"] = labelerDiagnostics
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -385,6 +402,22 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 	})
 
 	return r
+}
+
+func databaseReady(ctx context.Context, svc *services) error {
+	if svc == nil || svc.db == nil {
+		return errors.New("database executor is unavailable")
+	}
+
+	db := svc.db.DB()
+	if db == nil {
+		return errors.New("database connection is unavailable")
+	}
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping database: %w", err)
+	}
+
+	return nil
 }
 
 func applyTapSidecarHealth(
@@ -938,7 +971,7 @@ func startTap(
 		}
 	}()
 
-	// Create a shared admin client for health checks and backfill callbacks.
+	// Create a shared admin client for stats checks and backfill callbacks.
 	tapHTTPURL := strings.Replace(strings.Replace(tapURL, "ws://", "http://", 1), "wss://", "https://", 1)
 	adminClient := tap.NewAdminClient(tapHTTPURL, cfg.TapAdminPassword)
 	bg.tapAdminClient = adminClient

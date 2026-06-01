@@ -42,11 +42,11 @@ func TestRootEndpointReturnsBuildInfoVersion(t *testing.T) {
 	}
 }
 
-func TestHealthReturnsOKForRetryableLabelerError(t *testing.T) {
+func TestHealthIgnoresLabelerReadiness(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
-	if err := db.ExternalLabels.UpdateError(context.Background(), url, "temporary websocket timeout"); err != nil {
-		t.Fatalf("UpdateError() error = %v", err)
+	if err := db.ExternalLabels.MarkFatalCursor(context.Background(), url, "FutureCursor", "Cursor is in the future. Reset subscription cursor and replay labels."); err != nil {
+		t.Fatalf("MarkFatalCursor() error = %v", err)
 	}
 
 	r := setupRouter(labelerTestConfig(url), labelerTestServices(db), &backgroundServices{})
@@ -58,9 +58,129 @@ func TestHealthReturnsOKForRetryableLabelerError(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /health status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode GET /health response: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("status = %v, want ok", body["status"])
+	}
+	if _, ok := body["labelers"]; ok {
+		t.Fatalf("unexpected labelers in liveness response: %#v", body["labelers"])
+	}
+	if _, ok := body["labelersError"]; ok {
+		t.Fatalf("unexpected labelersError in liveness response: %#v", body["labelersError"])
+	}
 }
 
-func TestHealthReturnsUnavailableForFatalLabeler(t *testing.T) {
+func TestHealthIgnoresLabelerDiagnosticsFailure(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := db.Executor.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	r := setupRouter(labelerTestConfig(url), labelerTestServices(db), &backgroundServices{})
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode GET /health response: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("status = %v, want ok", body["status"])
+	}
+	if _, ok := body["labelersError"]; ok {
+		t.Fatalf("unexpected labelersError in liveness response: %#v", body["labelersError"])
+	}
+	if _, ok := body["databaseError"]; ok {
+		t.Fatalf("unexpected databaseError in liveness response: %#v", body["databaseError"])
+	}
+}
+
+func TestReadyReturnsOKForRetryableLabelerError(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := db.ExternalLabels.UpdateError(context.Background(), url, "temporary websocket timeout"); err != nil {
+		t.Fatalf("UpdateError() error = %v", err)
+	}
+
+	r := setupRouter(labelerTestConfig(url), labelerTestServices(db), &backgroundServices{})
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /ready status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestReadyReturnsUnavailableWhenDatabaseUnavailable(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	if err := db.Executor.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	r := setupRouter(&config.Config{ExternalBaseURL: "https://example.com"}, labelerTestServices(db), &backgroundServices{})
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /ready status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode GET /ready response: %v", err)
+	}
+	if body["status"] != "not_ready" {
+		t.Fatalf("status = %v, want not_ready", body["status"])
+	}
+	if databaseErr, ok := body["databaseError"].(string); !ok || databaseErr == "" {
+		t.Fatalf("databaseError = %#v, want non-empty string", body["databaseError"])
+	}
+}
+
+func TestReadyReturnsUnavailableWhenLabelerDiagnosticsFail(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	svc := labelerTestServices(db)
+	svc.externalLabels = nil
+
+	r := setupRouter(labelerTestConfig(url), svc, &backgroundServices{})
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /ready status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode GET /ready response: %v", err)
+	}
+	if body["status"] != "not_ready" {
+		t.Fatalf("status = %v, want not_ready", body["status"])
+	}
+	if labelersErr, ok := body["labelersError"].(string); !ok || labelersErr == "" {
+		t.Fatalf("labelersError = %#v, want non-empty string", body["labelersError"])
+	}
+}
+
+func TestReadyReturnsUnavailableForFatalLabeler(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
 	if err := db.ExternalLabels.UpdateLastSeq(context.Background(), url, 56428); err != nil {
@@ -71,21 +191,21 @@ func TestHealthReturnsUnavailableForFatalLabeler(t *testing.T) {
 	}
 
 	r := setupRouter(labelerTestConfig(url), labelerTestServices(db), &backgroundServices{})
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 	rec := httptest.NewRecorder()
 
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("GET /health status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+		t.Fatalf("GET /ready status = %d, want %d; body=%s", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
 	}
 
 	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("decode GET /health response: %v", err)
+		t.Fatalf("decode GET /ready response: %v", err)
 	}
-	if body["status"] != "unhealthy" {
-		t.Fatalf("status = %v, want unhealthy", body["status"])
+	if body["status"] != "not_ready" {
+		t.Fatalf("status = %v, want not_ready", body["status"])
 	}
 	labelers, ok := body["labelers"].([]any)
 	if !ok || len(labelers) != 1 {
@@ -153,6 +273,7 @@ func labelerTestConfig(url string) *config.Config {
 
 func labelerTestServices(db *testutil.TestDB) *services {
 	return &services{
+		db:             db.Executor,
 		records:        db.Records,
 		actors:         db.Actors,
 		lexicons:       db.Lexicons,
