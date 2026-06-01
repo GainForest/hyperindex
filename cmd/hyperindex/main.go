@@ -301,7 +301,7 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 			payload["status"] = "not_ready"
 			payload["databaseError"] = err.Error()
 		} else {
-			labelerDiagnostics, labelerFatal, labelerErr := configuredLabelerDiagnostics(req.Context(), cfg, svc.externalLabels)
+			labelerDiagnostics, labelerFatal, labelerErr := configuredLabelerDiagnostics(req.Context(), cfg, svc.config, svc.externalLabels)
 			if labelerErr != nil {
 				statusCode = http.StatusServiceUnavailable
 				payload["status"] = "not_ready"
@@ -365,7 +365,7 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 		}
 
 		if cfg.LabelerSubscribeEnabled {
-			labelerDiagnostics, _, err := configuredLabelerDiagnostics(reqCtx, cfg, svc.externalLabels)
+			labelerDiagnostics, _, err := configuredLabelerDiagnostics(reqCtx, cfg, svc.config, svc.externalLabels)
 			if err != nil {
 				stats["labelers"] = []map[string]any{}
 				stats["labelersError"] = err.Error()
@@ -438,12 +438,25 @@ func applyTapSidecarHealth(
 	tapInfo["sidecar"] = "ok"
 }
 
-func configuredLabelerDiagnostics(ctx context.Context, cfg *config.Config, repo *repositories.ExternalLabelsRepository) ([]map[string]any, bool, error) {
+func configuredLabelerSubscribeURLs(ctx context.Context, cfg *config.Config, repo *repositories.ConfigRepository) []string {
+	if cfg == nil {
+		return nil
+	}
+	if repo != nil {
+		if value, err := repo.Get(ctx, repositories.ConfigKeyLabelerSubscribeURLs); err == nil {
+			return config.ParseLabelerSubscribeURLs(value)
+		}
+	}
+
+	return cfg.LabelerSubscribeURLList()
+}
+
+func configuredLabelerDiagnostics(ctx context.Context, cfg *config.Config, configRepo *repositories.ConfigRepository, repo *repositories.ExternalLabelsRepository) ([]map[string]any, bool, error) {
 	if cfg == nil || !cfg.LabelerSubscribeEnabled {
 		return nil, false, nil
 	}
 
-	urls := cfg.LabelerSubscribeURLList()
+	urls := configuredLabelerSubscribeURLs(ctx, cfg, configRepo)
 	if len(urls) == 0 {
 		return nil, false, nil
 	}
@@ -595,6 +608,8 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 		slog.Error("Failed to create admin GraphQL handler", "error", err)
 		return nil
 	}
+
+	adminHandler.Resolver().SetLabelerSubscribeConfig(cfg.LabelerSubscribeEnabled, cfg.LabelerSubscribeURLs)
 
 	// Wire up backfill callbacks for the admin UI
 	configureBackfillCallbacks(adminHandler, cfg, svc)
@@ -799,7 +814,7 @@ func startWorkers(svc *services, bg *backgroundServices) {
 }
 
 func startLabelerSubscribers(cfg *config.Config, svc *services, bg *backgroundServices) {
-	urls := cfg.LabelerSubscribeURLList()
+	urls := configuredLabelerSubscribeURLs(context.Background(), cfg, svc.config)
 	if !cfg.LabelerSubscribeEnabled || len(urls) == 0 {
 		if cfg.LabelerSubscribeEnabled && len(urls) == 0 {
 			slog.Info("Labeler subscriptions disabled (LABELER_SUBSCRIBE_URLS empty)")

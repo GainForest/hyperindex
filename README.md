@@ -149,6 +149,8 @@ LABELER_SUBSCRIBE_URLS=wss://hyperlabel-proxy-test.up.railway.app/xrpc/com.atpro
 | `LABELER_SUBSCRIBE_RECONNECT_MIN` | Minimum reconnect backoff | `1s` |
 | `LABELER_SUBSCRIBE_RECONNECT_MAX` | Maximum reconnect backoff | `60s` |
 
+Admins can remove a configured labeler URL from the Settings page or with the `removeLabelerSubscribeUrl` admin GraphQL mutation. Removal writes a persisted override for the subscription URL list; restart Hyperindex to stop any subscription goroutine that was already running for that URL.
+
 If a labeler returns `FutureCursor` or `OutdatedCursor`, Hyperindex records a `FATAL_CURSOR ...` marker in `label_subscription_state.last_error`, stops retrying that labeler, and returns `503` from `/ready`. `/health` remains a liveness-only endpoint for process checks. Use `/stats` to see the affected labeler URL, `status: "fatal"`, `lastErrorCode`, and reset guidance. Repair requires resetting the saved cursor and replaying or purging labels as needed, then clearing `last_error`; because the subscription goroutine stops, restart Hyperindex after repair.
 
 #### Legacy Mode: Jetstream + Backfill
@@ -433,6 +435,7 @@ The admin API at `/admin/graphql` provides:
 - `triggerBackfill` - Full network backfill
 - `populateActivity` - Populate activity from existing records
 - `updateSettings` - Update server settings
+- `removeLabelerSubscribeUrl` - Remove a configured external labeler subscription URL
 - `resetAll` - Clear all data (requires confirmation)
 
 ## Architecture

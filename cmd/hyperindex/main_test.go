@@ -263,6 +263,42 @@ func TestStatsIncludesLabelerDiagnostics(t *testing.T) {
 	}
 }
 
+func TestStatsUsesPersistedLabelerURLOverride(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	envURL := "wss://env-labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	persistedURL := "wss://persisted-labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := db.Config.Set(ctx, repositories.ConfigKeyLabelerSubscribeURLs, persistedURL); err != nil {
+		t.Fatalf("Set(labeler_subscribe_urls) error = %v", err)
+	}
+	if err := db.ExternalLabels.MarkFatalCursor(ctx, persistedURL, "OutdatedCursor", "Cursor is outside retained history. Reset subscription cursor and replay labels."); err != nil {
+		t.Fatalf("MarkFatalCursor() error = %v", err)
+	}
+
+	r := setupRouter(labelerTestConfig(envURL), labelerTestServices(db), &backgroundServices{})
+	req := httptest.NewRequest(http.MethodGet, "/stats", nil)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /stats status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode GET /stats response: %v", err)
+	}
+	labelers, ok := body["labelers"].([]any)
+	if !ok || len(labelers) != 1 {
+		t.Fatalf("labelers = %#v, want one diagnostic", body["labelers"])
+	}
+	diagnostic := labelers[0].(map[string]any)
+	if diagnostic["url"] != persistedURL {
+		t.Fatalf("url = %v, want persisted override %s", diagnostic["url"], persistedURL)
+	}
+}
+
 func labelerTestConfig(url string) *config.Config {
 	return &config.Config{
 		ExternalBaseURL:         "https://example.com",
@@ -277,6 +313,7 @@ func labelerTestServices(db *testutil.TestDB) *services {
 		records:        db.Records,
 		actors:         db.Actors,
 		lexicons:       db.Lexicons,
+		config:         db.Config,
 		externalLabels: db.ExternalLabels,
 	}
 }

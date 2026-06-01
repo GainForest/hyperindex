@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/GainForest/hyperindex/internal/atproto"
+	"github.com/GainForest/hyperindex/internal/config"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/oauth"
@@ -49,13 +50,15 @@ type LexiconChangeCallback func(collections []string) error
 
 // Resolver provides methods for resolving admin GraphQL queries and mutations.
 type Resolver struct {
-	repos                 *Repositories
-	adminDIDs             []string
-	backfillActive        atomic.Bool
-	domainDID             string // The DID of this labeler instance
-	backfillCallback      BackfillCallback
-	fullBackfillCallback  FullBackfillCallback
-	lexiconChangeCallback LexiconChangeCallback
+	repos                       *Repositories
+	adminDIDs                   []string
+	backfillActive              atomic.Bool
+	domainDID                   string // The DID of this labeler instance
+	labelerSubscribeEnabled     bool
+	defaultLabelerSubscribeURLs string
+	backfillCallback            BackfillCallback
+	fullBackfillCallback        FullBackfillCallback
+	lexiconChangeCallback       LexiconChangeCallback
 }
 
 // NewResolver creates a new admin resolver.
@@ -65,6 +68,13 @@ func NewResolver(repos *Repositories, domainDID string, adminDIDs []string) *Res
 		adminDIDs: adminDIDs,
 		domainDID: domainDID,
 	}
+}
+
+// SetLabelerSubscribeConfig sets the environment-derived labeler subscription
+// defaults shown by the admin API when no persisted override exists.
+func (r *Resolver) SetLabelerSubscribeConfig(enabled bool, urls string) {
+	r.labelerSubscribeEnabled = enabled
+	r.defaultLabelerSubscribeURLs = urls
 }
 
 // SetBackfillCallback sets the callback for single-actor backfill operations.
@@ -150,16 +160,29 @@ func (r *Resolver) Settings(ctx context.Context) (map[string]interface{}, error)
 	plcDirectoryURL, _ := r.repos.Config.Get(ctx, "plc_directory_url")
 	jetstreamURL, _ := r.repos.Config.Get(ctx, "jetstream_url")
 	oauthScopes, _ := r.repos.Config.Get(ctx, "oauth_supported_scopes")
+	labelerSubscribeURLs := r.labelerSubscribeURLList(ctx)
 
 	return map[string]interface{}{
-		"id":                   "settings",
-		"domainAuthority":      domainAuthority,
-		"adminDids":            r.adminDIDs,
-		"relayUrl":             relayURL,
-		"plcDirectoryUrl":      plcDirectoryURL,
-		"jetstreamUrl":         jetstreamURL,
-		"oauthSupportedScopes": oauthScopes,
+		"id":                      "settings",
+		"domainAuthority":         domainAuthority,
+		"adminDids":               r.adminDIDs,
+		"relayUrl":                relayURL,
+		"plcDirectoryUrl":         plcDirectoryURL,
+		"jetstreamUrl":            jetstreamURL,
+		"oauthSupportedScopes":    oauthScopes,
+		"labelerSubscribeEnabled": r.labelerSubscribeEnabled,
+		"labelerSubscribeUrls":    labelerSubscribeURLs,
 	}, nil
+}
+
+func (r *Resolver) labelerSubscribeURLList(ctx context.Context) []string {
+	if r.repos != nil && r.repos.Config != nil {
+		if value, err := r.repos.Config.Get(ctx, repositories.ConfigKeyLabelerSubscribeURLs); err == nil {
+			return config.ParseLabelerSubscribeURLs(value)
+		}
+	}
+
+	return config.ParseLabelerSubscribeURLs(r.defaultLabelerSubscribeURLs)
 }
 
 // IsBackfilling returns whether a backfill is currently active.
@@ -878,6 +901,40 @@ func (r *Resolver) UpdateSettings(ctx context.Context, domainAuthority, relayURL
 		if err := r.repos.Config.Set(ctx, "oauth_supported_scopes", *oauthScopes); err != nil {
 			return nil, fmt.Errorf("failed to update oauth_supported_scopes: %w", err)
 		}
+	}
+
+	return r.Settings(ctx)
+}
+
+// RemoveLabelerSubscribeURL removes one external labeler websocket URL from
+// the persisted admin-managed subscription list.
+func (r *Resolver) RemoveLabelerSubscribeURL(ctx context.Context, subscriptionURL string) (map[string]interface{}, error) {
+	if r.repos == nil || r.repos.Config == nil {
+		return nil, fmt.Errorf("config repository is unavailable")
+	}
+
+	normalizedURL := strings.TrimSpace(subscriptionURL)
+	if normalizedURL == "" {
+		return nil, fmt.Errorf("labeler subscription URL is required")
+	}
+
+	current := r.labelerSubscribeURLList(ctx)
+	next := make([]string, 0, len(current))
+	found := false
+	for _, existingURL := range current {
+		if existingURL == normalizedURL {
+			found = true
+			continue
+		}
+		next = append(next, existingURL)
+	}
+
+	if !found {
+		return nil, fmt.Errorf("labeler subscription URL not found: %s", normalizedURL)
+	}
+
+	if err := r.repos.Config.Set(ctx, repositories.ConfigKeyLabelerSubscribeURLs, strings.Join(next, ",")); err != nil {
+		return nil, fmt.Errorf("failed to update labeler subscription URLs: %w", err)
 	}
 
 	return r.Settings(ctx)

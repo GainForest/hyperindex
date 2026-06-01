@@ -286,6 +286,8 @@ func TestSettingsTypeFields(t *testing.T) {
 		"plcDirectoryUrl",
 		"jetstreamUrl",
 		"oauthSupportedScopes",
+		"labelerSubscribeEnabled",
+		"labelerSubscribeUrls",
 	}
 
 	fields := SettingsType.Fields()
@@ -315,6 +317,9 @@ func TestSchemaRemovesAdminMutationPaths(t *testing.T) {
 	updateSettings := fields["updateSettings"]
 	if updateSettings == nil {
 		t.Fatal("expected updateSettings mutation")
+	}
+	if fields["removeLabelerSubscribeUrl"] == nil {
+		t.Fatal("expected removeLabelerSubscribeUrl mutation")
 	}
 	for _, arg := range updateSettings.Args {
 		if arg.PrivateName == "adminDids" {
