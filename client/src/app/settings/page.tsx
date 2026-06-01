@@ -357,7 +357,7 @@ export default function SettingsPage() {
                     size="sm"
                     onClick={() => handleRemoveLabelerUrl(url)}
                     loading={removingLabelerUrl === url}
-                    disabled={removeLabelerMutation.isPending}
+                    disabled={removingLabelerUrl !== null && removingLabelerUrl !== url}
                   >
                     Remove
                   </Button>

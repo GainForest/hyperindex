@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -183,6 +184,20 @@ func (r *Resolver) labelerSubscribeURLList(ctx context.Context) []string {
 	}
 
 	return config.ParseLabelerSubscribeURLs(r.defaultLabelerSubscribeURLs)
+}
+
+func normalizeLabelerSubscribeURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return trimmed
+	}
+
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = ""
+	return parsed.String()
 }
 
 // IsBackfilling returns whether a backfill is currently active.
@@ -913,16 +928,17 @@ func (r *Resolver) RemoveLabelerSubscribeURL(ctx context.Context, subscriptionUR
 		return nil, fmt.Errorf("config repository is unavailable")
 	}
 
-	normalizedURL := strings.TrimSpace(subscriptionURL)
-	if normalizedURL == "" {
+	trimmedURL := strings.TrimSpace(subscriptionURL)
+	if trimmedURL == "" {
 		return nil, fmt.Errorf("labeler subscription URL is required")
 	}
+	normalizedURL := normalizeLabelerSubscribeURL(trimmedURL)
 
 	current := r.labelerSubscribeURLList(ctx)
 	next := make([]string, 0, len(current))
 	found := false
 	for _, existingURL := range current {
-		if existingURL == normalizedURL {
+		if normalizeLabelerSubscribeURL(existingURL) == normalizedURL {
 			found = true
 			continue
 		}
@@ -930,7 +946,7 @@ func (r *Resolver) RemoveLabelerSubscribeURL(ctx context.Context, subscriptionUR
 	}
 
 	if !found {
-		return nil, fmt.Errorf("labeler subscription URL not found: %s", normalizedURL)
+		return nil, fmt.Errorf("labeler subscription URL not found: %s", trimmedURL)
 	}
 
 	if err := r.repos.Config.Set(ctx, repositories.ConfigKeyLabelerSubscribeURLs, strings.Join(next, ",")); err != nil {

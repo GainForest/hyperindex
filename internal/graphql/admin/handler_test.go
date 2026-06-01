@@ -87,6 +87,37 @@ func TestIsValidAdminAPIKey(t *testing.T) {
 	}
 }
 
+func TestLogSafeMutationVariablesRedactsURLValues(t *testing.T) {
+	variables := map[string]interface{}{
+		"url":             "wss://user:pass@labeler.example/labels?token=secret#fragment",
+		"relayUrl":        "wss://relay.example/xrpc?token=secret",
+		"webhookUrls":     []interface{}{"https://token@example.com/a?secret=1", "not-a-url"},
+		"domainAuthority": "example.com",
+	}
+
+	got := logSafeMutationVariables(variables)
+
+	if got["url"] != "wss://labeler.example/labels" {
+		t.Fatalf("url = %q, want redacted URL", got["url"])
+	}
+	if got["relayUrl"] != "wss://relay.example/xrpc" {
+		t.Fatalf("relayUrl = %q, want redacted URL", got["relayUrl"])
+	}
+	gotURLs, ok := got["webhookUrls"].([]interface{})
+	if !ok {
+		t.Fatalf("webhookUrls = %#v, want []interface{}", got["webhookUrls"])
+	}
+	if gotURLs[0] != "https://example.com/a" || gotURLs[1] != "<invalid-url>" {
+		t.Fatalf("webhookUrls = %#v, want redacted URL list", gotURLs)
+	}
+	if got["domainAuthority"] != "example.com" {
+		t.Fatalf("domainAuthority = %q, want unchanged", got["domainAuthority"])
+	}
+	if variables["url"] != "wss://user:pass@labeler.example/labels?token=secret#fragment" {
+		t.Fatalf("variables mutated: %#v", variables)
+	}
+}
+
 func TestHandlerServeHTTP_AuthViaXUserDIDWithValidAdminAPIKey(t *testing.T) {
 	handler := newTestAdminHandler(t, "did:plc:admin1", "super-secret-key")
 
