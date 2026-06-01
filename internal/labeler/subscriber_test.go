@@ -3,10 +3,12 @@ package labeler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	lexutil "github.com/bluesky-social/indigo/lex/util"
 	"github.com/gorilla/websocket"
 
+	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
@@ -24,6 +27,34 @@ type cborMarshaler interface {
 
 var testUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+type flakyFatalRepo struct {
+	inner             *repositories.ExternalLabelsRepository
+	markFatalAttempts atomic.Int32
+}
+
+func (r *flakyFatalRepo) EnsureState(ctx context.Context, subscriptionURL string) (*repositories.LabelSubscriptionState, error) {
+	return r.inner.EnsureState(ctx, subscriptionURL)
+}
+
+func (r *flakyFatalRepo) UpdateConnected(ctx context.Context, subscriptionURL string) error {
+	return r.inner.UpdateConnected(ctx, subscriptionURL)
+}
+
+func (r *flakyFatalRepo) UpdateError(ctx context.Context, subscriptionURL, errText string) error {
+	return r.inner.UpdateError(ctx, subscriptionURL, errText)
+}
+
+func (r *flakyFatalRepo) PersistEvent(ctx context.Context, subscriptionURL string, seq int64, labels []repositories.ExternalLabelInput) error {
+	return r.inner.PersistEvent(ctx, subscriptionURL, seq, labels)
+}
+
+func (r *flakyFatalRepo) MarkFatalCursor(ctx context.Context, subscriptionURL, errorCode, errText string) error {
+	if r.markFatalAttempts.Add(1) == 1 {
+		return errors.New("injected fatal marker persistence failure")
+	}
+	return r.inner.MarkFatalCursor(ctx, subscriptionURL, errorCode, errText)
 }
 
 func TestBuildSubscribeURL(t *testing.T) {
@@ -206,7 +237,7 @@ func TestSubscriberPersistsWebsocketLabels(t *testing.T) {
 	}
 }
 
-func TestSubscriberRecordsOutdatedCursorInfo(t *testing.T) {
+func TestSubscriberRecordsOutdatedCursorAsFatalAndStopsRetrying(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	repo := db.ExternalLabels
 	ctx, cancel := context.WithCancel(context.Background())
@@ -218,7 +249,9 @@ func TestSubscriberRecordsOutdatedCursorInfo(t *testing.T) {
 		Message: &message,
 	})
 
+	var attempts atomic.Int32
 	srv := newWebsocketServer(t, func(_ *http.Request, conn *websocket.Conn) {
+		attempts.Add(1)
 		if err := conn.WriteMessage(websocket.BinaryMessage, infoFrame); err != nil {
 			t.Errorf("WriteMessage() error = %v", err)
 			return
@@ -237,16 +270,157 @@ func TestSubscriberRecordsOutdatedCursorInfo(t *testing.T) {
 
 	waitFor(t, 2*time.Second, func() bool {
 		state, err := repo.GetState(context.Background(), wsURL)
-		return err == nil && state.LastError != nil && strings.Contains(*state.LastError, "OutdatedCursor")
+		return err == nil && state.IsFatal()
 	})
-	cancel()
+
+	time.Sleep(75 * time.Millisecond)
 
 	state, err := repo.GetState(context.Background(), wsURL)
 	if err != nil {
 		t.Fatalf("GetState() error = %v", err)
 	}
-	if state.LastError == nil || !strings.Contains(*state.LastError, "cursor too old") {
-		t.Fatalf("LastError = %v, want OutdatedCursor message", state.LastError)
+	if state.Status() != repositories.LabelSubscriptionStatusFatal {
+		t.Fatalf("Status() = %q, want fatal", state.Status())
+	}
+	if got := repositories.FatalCursorCode(state.LastError); got != "OutdatedCursor" {
+		t.Fatalf("FatalCursorCode() = %q, want OutdatedCursor", got)
+	}
+	if state.LastError == nil || !strings.HasPrefix(*state.LastError, "FATAL_CURSOR OutdatedCursor:") || !strings.Contains(*state.LastError, "cursor too old") || !strings.Contains(*state.LastError, "Reset subscription cursor and replay labels") {
+		t.Fatalf("LastError = %v, want OutdatedCursor reset marker", state.LastError)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("connection attempts = %d, want 1 fatal non-retry", got)
+	}
+}
+
+func TestSubscriberRecordsFutureCursorAsFatalAndStopsRetrying(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	repo := db.ExternalLabels
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errorFrame := encodeErrorFrame(t, &events.ErrorFrame{
+		Error:   "FutureCursor",
+		Message: "Cursor is in the future",
+	})
+
+	var attempts atomic.Int32
+	srv := newWebsocketServer(t, func(_ *http.Request, conn *websocket.Conn) {
+		attempts.Add(1)
+		if err := conn.WriteMessage(websocket.BinaryMessage, errorFrame); err != nil {
+			t.Errorf("WriteMessage() error = %v", err)
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	wsURL := httpToWS(srv.URL)
+	if err := repo.UpdateLastSeq(context.Background(), wsURL, 56428); err != nil {
+		t.Fatalf("UpdateLastSeq() error = %v", err)
+	}
+
+	subscriber := NewSubscriber(repo, Config{
+		URLs:         []string{wsURL},
+		ReconnectMin: 25 * time.Millisecond,
+		ReconnectMax: 25 * time.Millisecond,
+	})
+	subscriber.Start(ctx)
+
+	waitFor(t, 2*time.Second, func() bool {
+		state, err := repo.GetState(context.Background(), wsURL)
+		return err == nil && state.IsFatal()
+	})
+
+	time.Sleep(75 * time.Millisecond)
+
+	state, err := repo.GetState(context.Background(), wsURL)
+	if err != nil {
+		t.Fatalf("GetState() error = %v", err)
+	}
+	if state.LastSeq != 56428 {
+		t.Fatalf("LastSeq = %d, want saved cursor preserved", state.LastSeq)
+	}
+	if got := repositories.FatalCursorCode(state.LastError); got != "FutureCursor" {
+		t.Fatalf("FatalCursorCode() = %q, want FutureCursor", got)
+	}
+	if state.LastError == nil || !strings.HasPrefix(*state.LastError, "FATAL_CURSOR FutureCursor:") || !strings.Contains(*state.LastError, "Cursor is in the future") || !strings.Contains(*state.LastError, "Reset subscription cursor and replay labels") {
+		t.Fatalf("LastError = %v, want FutureCursor reset marker", state.LastError)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("connection attempts = %d, want 1 fatal non-retry", got)
+	}
+}
+
+func TestSubscriberRetriesWhenFatalMarkerPersistFails(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	repo := &flakyFatalRepo{inner: db.ExternalLabels}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errorFrame := encodeErrorFrame(t, &events.ErrorFrame{
+		Error:   "FutureCursor",
+		Message: "Cursor is in the future",
+	})
+
+	var attempts atomic.Int32
+	srv := newWebsocketServer(t, func(_ *http.Request, conn *websocket.Conn) {
+		attempts.Add(1)
+		if err := conn.WriteMessage(websocket.BinaryMessage, errorFrame); err != nil {
+			t.Errorf("WriteMessage() error = %v", err)
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	})
+	defer srv.Close()
+
+	wsURL := httpToWS(srv.URL)
+	subscriber := newSubscriber(repo, Config{
+		URLs:         []string{wsURL},
+		ReconnectMin: 25 * time.Millisecond,
+		ReconnectMax: 25 * time.Millisecond,
+	})
+	subscriber.Start(ctx)
+
+	waitFor(t, 2*time.Second, func() bool {
+		state, err := db.ExternalLabels.GetState(context.Background(), wsURL)
+		return err == nil && state.IsFatal() && attempts.Load() >= 2
+	})
+
+	time.Sleep(75 * time.Millisecond)
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("connection attempts = %d, want retry once then stop after fatal marker persists", got)
+	}
+}
+
+func TestSubscriberSkipsConnectionWhenFatalMarkerExists(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	repo := db.ExternalLabels
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var attempts atomic.Int32
+	srv := newWebsocketServer(t, func(_ *http.Request, conn *websocket.Conn) {
+		attempts.Add(1)
+		_ = conn.Close()
+	})
+	defer srv.Close()
+
+	wsURL := httpToWS(srv.URL)
+	if err := repo.MarkFatalCursor(context.Background(), wsURL, "FutureCursor", "Cursor is in the future. Reset subscription cursor and replay labels."); err != nil {
+		t.Fatalf("MarkFatalCursor() error = %v", err)
+	}
+
+	subscriber := NewSubscriber(repo, Config{
+		URLs:         []string{wsURL},
+		ReconnectMin: 25 * time.Millisecond,
+		ReconnectMax: 25 * time.Millisecond,
+	})
+	subscriber.Start(ctx)
+
+	time.Sleep(75 * time.Millisecond)
+	if got := attempts.Load(); got != 0 {
+		t.Fatalf("connection attempts = %d, want 0 for existing fatal marker", got)
 	}
 }
 
@@ -260,6 +434,20 @@ func encodeMessageFrame(t *testing.T, msgType string, payload cborMarshaler) []b
 	}
 	if err := payload.MarshalCBOR(&buf); err != nil {
 		t.Fatalf("MarshalCBOR(payload) error = %v", err)
+	}
+	return buf.Bytes()
+}
+
+func encodeErrorFrame(t *testing.T, payload *events.ErrorFrame) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	header := &events.EventHeader{Op: events.EvtKindErrorFrame}
+	if err := header.MarshalCBOR(&buf); err != nil {
+		t.Fatalf("MarshalCBOR(error header) error = %v", err)
+	}
+	if err := payload.MarshalCBOR(&buf); err != nil {
+		t.Fatalf("MarshalCBOR(error payload) error = %v", err)
 	}
 	return buf.Bytes()
 }

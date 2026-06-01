@@ -53,6 +53,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 ## What the suite checks
 
 - `/health`
+- `/ready`
 - `/stats`
 - GraphQL `__typename`
 - Introspection query fields
@@ -69,7 +70,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 
 ## Optional external label smoke check
 
-The default expectations file requires at least 20 `org.hypercerts.claim.activity` records labeled `high-quality` and at least 20 labeled `standard` by the configured external label source. The test queries the typed activity claim collection with `where.externalLabels`, verifies two pages of results, checks each returned node exposes the matching `externalLabels` entry, and cross-checks one URI through the root `externalLabels` query.
+The default expectations file requires at least 20 `org.hypercerts.claim.activity` records labeled `high-quality` and at least 20 labeled `standard` by the configured external label source. The label smoke checks also expect at least four activity claim records labeled `likely-test` from that same configured source. The tests query the typed activity claim collection with `where.externalLabels`, verify pagination, check each returned node exposes the matching `externalLabels` entry, and cross-check one URI through the root `externalLabels` query.
 
 Set the source DID to enable this check:
 
@@ -116,7 +117,7 @@ The default typed expectations also intentionally omit `app.certified.link.evm`.
 
 The target deployment must have enough public data for read-path checks. These collections must each contain at least 20 records:
 
-The label smoke checks also assume `org.hypercerts.claim.activity` has at least four records with an active `likely-test` external label from `did:plc:edod7rboajioq3jbyxsgeicc`.
+The label smoke checks also assume `org.hypercerts.claim.activity` has active external labels from the source DID configured by `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` or the expectation file's `externalLabelActivityClaims.sourceDIDEnv` setting.
 - `org.hypercerts.claim.activity`
 - `app.certified.actor.profile`
 - `app.certified.graph.follow`

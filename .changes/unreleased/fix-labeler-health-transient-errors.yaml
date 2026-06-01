@@ -1,0 +1,4 @@
+kind: changed
+body: Split liveness and readiness probes so `/health` stays process-only while `/ready` reports database and configured labeler diagnostics failures.
+custom:
+  Affects: operator
