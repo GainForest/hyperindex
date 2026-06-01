@@ -95,10 +95,10 @@ func generateGraphiQLHTML(cfg GraphiQLConfig) string {
   <div id="graphiql">Loading...</div>
   <script type="module">
     import React from 'https://esm.sh/react@18.3.1';
-    import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
-    import { GraphiQL } from 'https://esm.sh/graphiql@3.9.0';
+    import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1';
+    import { GraphiQL } from 'https://esm.sh/graphiql@3.9.0?deps=react@18.3.1,react-dom@18.3.1,@graphiql/react@0.29.0,graphql@16.12.0';
     import { createGraphiQLFetcher } from 'https://esm.sh/@graphiql/toolkit@0.12.0?deps=graphql@16.12.0,graphql-ws@5.16.0';
-    import { explorerPlugin } from 'https://esm.sh/@graphiql/plugin-explorer@3.2.6';
+    import { explorerPlugin } from 'https://esm.sh/@graphiql/plugin-explorer@3.2.6?deps=react@18.3.1,react-dom@18.3.1,@graphiql/react@0.29.0,graphql@16.12.0';
 
     const fetcher = createGraphiQLFetcher(` + fetcherConfigJSON + `);
     const plugins = [explorerPlugin()];
