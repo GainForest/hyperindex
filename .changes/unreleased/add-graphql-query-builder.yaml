@@ -1,4 +1,4 @@
 kind: added
-body: Add a Schema Builder panel to GraphiQL so users can select root queries, fill arguments, and check or uncheck schema fields to generate queries directly in the GraphiQL editor.
+body: Add the official GraphiQL Explorer plugin so users can build public and admin GraphQL queries by checking and unchecking schema fields directly in the GraphiQL sidebar.
 custom:
   Affects: user

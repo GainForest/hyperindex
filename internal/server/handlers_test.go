@@ -361,7 +361,7 @@ func TestHandleGraphiQL(t *testing.T) {
 		}
 	})
 
-	t.Run("body contains schema builder", func(t *testing.T) {
+	t.Run("body contains official GraphiQL explorer plugin", func(t *testing.T) {
 		handler := HandleGraphiQL(baseCfg)
 		req := httptest.NewRequest(http.MethodGet, "/graphiql", nil)
 		rec := httptest.NewRecorder()
@@ -369,11 +369,14 @@ func TestHandleGraphiQL(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		body := rec.Body.String()
-		if !strings.Contains(body, "Schema Builder") {
-			t.Error("response body does not contain Schema Builder panel")
+		if !strings.Contains(body, "@graphiql/plugin-explorer") {
+			t.Error("response body does not load the official GraphiQL explorer plugin")
 		}
-		if !strings.Contains(body, "GraphiQLSchemaBuilderIntrospection") {
-			t.Error("response body does not contain schema builder introspection query")
+		if !strings.Contains(body, "explorerPlugin()") {
+			t.Error("response body does not wire the GraphiQL explorer plugin")
+		}
+		if strings.Contains(body, "Schema Builder") {
+			t.Error("response body should not contain the custom Schema Builder panel")
 		}
 	})
 
