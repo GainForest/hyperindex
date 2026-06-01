@@ -1,4 +1,4 @@
 kind: added
-body: Add a browser-based GraphQL query builder that discovers the live public schema, helps users compose collection queries with fields, arguments, filters, and variables, and can run or copy generated queries.
+body: Add a Schema Builder panel to GraphiQL so users can select root queries, fill arguments, and check or uncheck schema fields to generate queries directly in the GraphiQL editor.
 custom:
   Affects: user

@@ -361,6 +361,22 @@ func TestHandleGraphiQL(t *testing.T) {
 		}
 	})
 
+	t.Run("body contains schema builder", func(t *testing.T) {
+		handler := HandleGraphiQL(baseCfg)
+		req := httptest.NewRequest(http.MethodGet, "/graphiql", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		body := rec.Body.String()
+		if !strings.Contains(body, "Schema Builder") {
+			t.Error("response body does not contain Schema Builder panel")
+		}
+		if !strings.Contains(body, "GraphiQLSchemaBuilderIntrospection") {
+			t.Error("response body does not contain schema builder introspection query")
+		}
+	})
+
 	t.Run("subscription endpoint included when configured", func(t *testing.T) {
 		cfg := GraphiQLConfig{
 			Endpoint:             "/graphql",

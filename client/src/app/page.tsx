@@ -164,28 +164,6 @@ export default function Dashboard() {
             Backfill
           </span>
         </Link>
-        <Link
-          href="/query-builder"
-          className="group flex items-center gap-2 py-2 px-3 rounded-lg
-                     hover:opacity-80 transition-opacity"
-        >
-          <svg
-            className="w-5 h-5 transition-colors"
-            style={{ color: "var(--muted-foreground)" }}
-            fill="none"
-            viewBox="0 0 24 24"
-            strokeWidth={1.5}
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h12A2.25 2.25 0 0 1 20.25 6v12A2.25 2.25 0 0 1 18 20.25H6A2.25 2.25 0 0 1 3.75 18V6Zm4.5 3.75h7.5M8.25 12h4.5m-4.5 2.25h6" />
-          </svg>
-          <span
-            className="text-sm font-medium transition-colors"
-            style={{ color: "var(--foreground)" }}
-          >
-            Query Builder
-          </span>
-        </Link>
         <a
           href="/graphiql"
           target="_blank"
