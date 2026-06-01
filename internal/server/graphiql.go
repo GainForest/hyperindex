@@ -85,25 +85,47 @@ func generateGraphiQLHTML(cfg GraphiQLConfig) string {
       overflow: hidden;
     }
     #graphiql {
-      height: 100vh;
+      height: 100dvh;
+    }
+    .loading {
+      align-items: center;
+      display: flex;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      height: 100%;
+      justify-content: center;
     }
   </style>
-  <link rel="stylesheet" href="https://unpkg.com/graphiql@3.5.0/graphiql.min.css" />
-  <link rel="stylesheet" href="https://unpkg.com/@graphiql/plugin-explorer@3.2.0/dist/style.css" />
-</head>
-<body>
-  <div id="graphiql">Loading...</div>
+  <link rel="stylesheet" href="https://esm.sh/graphiql@5.2.2/dist/style.css" />
+  <link rel="stylesheet" href="https://esm.sh/@graphiql/plugin-explorer@5.1.1/dist/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "@emotion/is-prop-valid": "data:text/javascript,",
+        "@graphiql/plugin-explorer": "https://esm.sh/@graphiql/plugin-explorer@5.1.1?standalone&external=react,@graphiql/react,graphql",
+        "@graphiql/react": "https://esm.sh/@graphiql/react@0.37.3?standalone&external=react,react-dom,graphql,@graphiql/toolkit,@emotion/is-prop-valid",
+        "@graphiql/toolkit": "https://esm.sh/@graphiql/toolkit@0.11.3?standalone&external=graphql",
+        "graphql": "https://esm.sh/graphql@16.13.2",
+        "graphiql": "https://esm.sh/graphiql@5.2.2?standalone&external=react,react-dom,@graphiql/react,graphql",
+        "graphiql/": "https://esm.sh/graphiql@5.2.2/",
+        "react": "https://esm.sh/react@19.2.5",
+        "react/": "https://esm.sh/react@19.2.5/",
+        "react-dom": "https://esm.sh/react-dom@19.2.5",
+        "react-dom/": "https://esm.sh/react-dom@19.2.5/"
+      }
+    }
+  </script>
   <script type="module">
-    import React from 'https://esm.sh/react@18.3.1';
-    import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1';
-    import { GraphiQL } from 'https://esm.sh/graphiql@3.5.0?deps=react@18.3.1,react-dom@18.3.1,@graphiql/react@0.24.0,graphql@16.12.0';
-    import { createGraphiQLFetcher } from 'https://esm.sh/@graphiql/toolkit@0.11.3?deps=graphql@16.12.0,graphql-ws@5.16.0';
-    import { explorerPlugin } from 'https://esm.sh/@graphiql/plugin-explorer@3.2.0?deps=react@18.3.1,react-dom@18.3.1,@graphiql/react@0.24.0,graphql@16.12.0';
+    import React from 'react';
+    import ReactDOM from 'react-dom/client';
+    import { GraphiQL, HISTORY_PLUGIN } from 'graphiql';
+    import { createGraphiQLFetcher } from '@graphiql/toolkit';
+    import { explorerPlugin } from '@graphiql/plugin-explorer';
+    import 'graphiql/setup-workers/esm.sh';
 
     const fetcher = createGraphiQLFetcher(` + fetcherConfigJSON + `);
-    const plugins = [explorerPlugin()];
+    const plugins = [HISTORY_PLUGIN, explorerPlugin()];
 
-    createRoot(document.getElementById('graphiql')).render(
+    ReactDOM.createRoot(document.getElementById('graphiql')).render(
       React.createElement(GraphiQL, {
         fetcher,
         defaultEditorToolsVisibility: true,
@@ -112,6 +134,9 @@ func generateGraphiQLHTML(cfg GraphiQLConfig) string {
       }),
     );
   </script>
+</head>
+<body>
+  <div id="graphiql"><div class="loading">Loading…</div></div>
 </body>
 </html>`
 }
