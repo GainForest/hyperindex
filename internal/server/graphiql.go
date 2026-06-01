@@ -24,7 +24,7 @@ type GraphiQLConfig struct {
 // HandleGraphiQL creates an HTTP handler that serves the GraphiQL IDE.
 func HandleGraphiQL(cfg GraphiQLConfig) http.HandlerFunc {
 	// Use CDN-hosted GraphiQL
-	html := generateGraphiQLHTML(cfg)
+	pageHTML := generateGraphiQLHTML(cfg)
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -33,7 +33,7 @@ func HandleGraphiQL(cfg GraphiQLConfig) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(html))
+		_, _ = w.Write([]byte(pageHTML))
 	}
 }
 
@@ -510,14 +510,33 @@ func generateGraphiQLHTML(cfg GraphiQLConfig) string {
         });
       }
 
-      function renderFieldTree(typeRef, path, depth) {
+      function renderFieldTree(typeRef, path, depth, visitedTypes) {
+        const typeName = unwrapType(typeRef).name;
+        if (depth > 5) {
+          return [h('div', {
+            key: fieldKey(path) + '.__max_depth',
+            className: 'schema-builder__row',
+            style: { paddingLeft: (depth * 14 + 5) + 'px' },
+          }, h('span', { className: 'schema-builder__type' }, 'Max depth reached'))];
+        }
+        if (typeName && visitedTypes.has(typeName)) {
+          return [h('div', {
+            key: fieldKey(path) + '.__recursive',
+            className: 'schema-builder__row',
+            style: { paddingLeft: (depth * 14 + 5) + 'px' },
+          }, h('span', { className: 'schema-builder__type' }, 'Recursive type ' + typeName + ' omitted'))];
+        }
+
+        const nextVisitedTypes = new Set(visitedTypes);
+        if (typeName) nextVisitedTypes.add(typeName);
+
         return typeFields(typeMap, typeRef).map((field) => {
           const nextPath = path.concat(field.name);
           const key = fieldKey(nextPath);
           const leaf = isLeafType(field.type);
           const descendantKeys = leaf ? [key] : scalarDescendants(typeMap, field.type, nextPath, 0);
           const checked = descendantKeys.length > 0 && descendantKeys.some((descendant) => selectedKeys.has(descendant));
-          const children = leaf ? null : renderFieldTree(field.type, nextPath, depth + 1);
+          const children = !leaf && (checked || depth < 1) ? renderFieldTree(field.type, nextPath, depth + 1, nextVisitedTypes) : null;
           return h('div', { key },
             h('label', { className: 'schema-builder__row', style: { paddingLeft: (depth * 14 + 5) + 'px' }, title: field.description || '' },
               h('input', {
@@ -529,7 +548,7 @@ func generateGraphiQLHTML(cfg GraphiQLConfig) string {
               h('span', { className: 'schema-builder__field-name' }, field.name),
               h('span', { className: 'schema-builder__type' }, typeToString(field.type))
             ),
-            checked || depth < 1 ? children : null
+            children
           );
         });
       }
@@ -587,7 +606,7 @@ func generateGraphiQLHTML(cfg GraphiQLConfig) string {
           h('div', { className: 'schema-builder__section' },
             h('span', { className: 'schema-builder__label' }, 'Fields'),
             h('div', { className: 'schema-builder__tree' },
-              selectedRoot ? renderFieldTree(selectedRoot.type, [selectedRoot.name], 0) : h('div', { className: 'schema-builder__empty' }, 'No query fields found.')
+              selectedRoot ? renderFieldTree(selectedRoot.type, [selectedRoot.name], 0, new Set()) : h('div', { className: 'schema-builder__empty' }, 'No query fields found.')
             )
           )
         )
