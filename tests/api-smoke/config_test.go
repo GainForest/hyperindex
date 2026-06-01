@@ -20,6 +20,8 @@ const (
 	smokeExpectationsEnv = "HYPERINDEX_SMOKE_EXPECTATIONS"
 	smokeDebugEnv        = "HYPERINDEX_SMOKE_DEBUG"
 	smokeEnvFileEnv      = "HYPERINDEX_SMOKE_ENV_FILE"
+
+	externalLabelActivityClaimsCollection = "org.hypercerts.claim.activity"
 )
 
 type smokeConfig struct {
@@ -30,12 +32,13 @@ type smokeConfig struct {
 }
 
 type expectations struct {
-	RequiredNSIDs          []string                 `json:"requiredNSIDs"`
-	TypedQueryFields       map[string]string        `json:"typedQueryFields"`
-	NonRecordNSIDs         []string                 `json:"nonRecordNSIDs"`
-	DataBearingCollections []dataBearingExpectation `json:"dataBearingCollections"`
-	PaginationCollections  []paginationExpectation  `json:"paginationCollections"`
-	Search                 searchExpectation        `json:"search"`
+	RequiredNSIDs               []string                               `json:"requiredNSIDs"`
+	TypedQueryFields            map[string]string                      `json:"typedQueryFields"`
+	NonRecordNSIDs              []string                               `json:"nonRecordNSIDs"`
+	DataBearingCollections      []dataBearingExpectation               `json:"dataBearingCollections"`
+	PaginationCollections       []paginationExpectation                `json:"paginationCollections"`
+	ExternalLabelActivityClaims externalLabelActivityClaimsExpectation `json:"externalLabelActivityClaims"`
+	Search                      searchExpectation                      `json:"search"`
 }
 
 type dataBearingExpectation struct {
@@ -51,6 +54,17 @@ type paginationExpectation struct {
 type searchExpectation struct {
 	Query string `json:"query"`
 	First int    `json:"first"`
+}
+
+type externalLabelActivityClaimsExpectation struct {
+	SourceDIDEnv string                                  `json:"sourceDIDEnv"`
+	PageSize     int                                     `json:"pageSize"`
+	Labels       []externalLabelActivityLabelExpectation `json:"labels"`
+}
+
+type externalLabelActivityLabelExpectation struct {
+	Value          string `json:"value"`
+	MinimumRecords int    `json:"minimumRecords"`
 }
 
 func loadSmokeConfig(t testing.TB) smokeConfig {
@@ -207,11 +221,60 @@ func (e expectations) validate() error {
 		}
 	}
 
+	if err := e.ExternalLabelActivityClaims.validate(requiredNSIDs, nonRecordNSIDs, e.TypedQueryFields); err != nil {
+		return err
+	}
+
 	if e.Search.Query == "" {
 		return fmt.Errorf("search.query is required")
 	}
 	if e.Search.First < 1 {
 		return fmt.Errorf("search.first must be positive")
+	}
+
+	return nil
+}
+
+func (e externalLabelActivityClaimsExpectation) configured() bool {
+	return e.SourceDIDEnv != "" || e.PageSize != 0 || len(e.Labels) > 0
+}
+
+func (e externalLabelActivityClaimsExpectation) validate(requiredNSIDs map[string]bool, nonRecordNSIDs map[string]bool, typedQueryFields map[string]string) error {
+	if !e.configured() {
+		return nil
+	}
+	if e.SourceDIDEnv == "" {
+		return fmt.Errorf("externalLabelActivityClaims.sourceDIDEnv is required when externalLabelActivityClaims is configured")
+	}
+	if e.PageSize < 1 {
+		return fmt.Errorf("externalLabelActivityClaims.pageSize must be positive")
+	}
+	if len(e.Labels) == 0 {
+		return fmt.Errorf("externalLabelActivityClaims.labels must include at least one label expectation")
+	}
+	if !requiredNSIDs[externalLabelActivityClaimsCollection] {
+		return fmt.Errorf("externalLabelActivityClaims collection %q is missing from requiredNSIDs", externalLabelActivityClaimsCollection)
+	}
+	if nonRecordNSIDs[externalLabelActivityClaimsCollection] {
+		return fmt.Errorf("externalLabelActivityClaims collection %q cannot be listed in nonRecordNSIDs", externalLabelActivityClaimsCollection)
+	}
+	if typedQueryFields[externalLabelActivityClaimsCollection] == "" {
+		return fmt.Errorf("externalLabelActivityClaims collection %q is missing from typedQueryFields", externalLabelActivityClaimsCollection)
+	}
+
+	requiredMinimumRecords := 2 * e.PageSize
+	seenValues := make(map[string]bool, len(e.Labels))
+	for _, label := range e.Labels {
+		if label.Value == "" {
+			return fmt.Errorf("externalLabelActivityClaims.labels must not contain an empty value")
+		}
+		if seenValues[label.Value] {
+			return fmt.Errorf("externalLabelActivityClaims.labels contains duplicate value %q", label.Value)
+		}
+		seenValues[label.Value] = true
+		if label.MinimumRecords < requiredMinimumRecords {
+			return fmt.Errorf("externalLabelActivityClaims label %q requires minimumRecords >= %d for two full pages, got %d", label.Value, requiredMinimumRecords, label.MinimumRecords)
+		}
 	}
 
 	return nil
@@ -298,6 +361,40 @@ func TestExpectationsValidationRejectsPaginationCollectionWithoutTwoFullPages(t 
 	requiredMinimum := 2 * pageSize
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("pagination collection %q requires data-bearing minimumRecords >= %d", nsid, requiredMinimum)) || !strings.Contains(err.Error(), fmt.Sprintf("got %d", actualMinimum)) {
 		t.Fatalf("validate() error = %v, want pagination minimumRecords error naming collection %q, required %d, actual %d", err, nsid, requiredMinimum, actualMinimum)
+	}
+}
+
+func TestExpectationsValidationRejectsExternalLabelActivityClaimsMissingSourceEnv(t *testing.T) {
+	loaded, err := loadExpectations(defaultExpectationsPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.ExternalLabelActivityClaims.SourceDIDEnv = ""
+
+	err = loaded.validate()
+	if err == nil || !strings.Contains(err.Error(), "externalLabelActivityClaims.sourceDIDEnv is required") {
+		t.Fatalf("validate() error = %v, want missing external label source DID env error", err)
+	}
+}
+
+func TestExpectationsValidationRejectsExternalLabelActivityClaimsWithoutTwoFullPages(t *testing.T) {
+	loaded, err := loadExpectations(defaultExpectationsPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pageSize := loaded.ExternalLabelActivityClaims.PageSize
+	if pageSize == 0 || len(loaded.ExternalLabelActivityClaims.Labels) == 0 {
+		t.Fatal("test fixture externalLabelActivityClaims is not configured")
+	}
+
+	actualMinimum := 2*pageSize - 1
+	loaded.ExternalLabelActivityClaims.Labels[0].MinimumRecords = actualMinimum
+
+	err = loaded.validate()
+	requiredMinimum := 2 * pageSize
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("externalLabelActivityClaims label %q requires minimumRecords >= %d", loaded.ExternalLabelActivityClaims.Labels[0].Value, requiredMinimum)) || !strings.Contains(err.Error(), fmt.Sprintf("got %d", actualMinimum)) {
+		t.Fatalf("validate() error = %v, want external label activity claim minimumRecords error", err)
 	}
 }
 
