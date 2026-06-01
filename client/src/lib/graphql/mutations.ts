@@ -22,6 +22,8 @@ export const UPDATE_SETTINGS = gql`
       plcDirectoryUrl
       jetstreamUrl
       oauthSupportedScopes
+      labelerSubscribeEnabled
+      labelerSubscribeUrls
     }
   }
 `;
@@ -44,6 +46,22 @@ export const BACKFILL_ACTOR = gql`
 export const UPLOAD_LEXICONS = gql`
   mutation UploadLexicons($zipBase64: String!) {
     uploadLexicons(zipBase64: $zipBase64)
+  }
+`;
+
+// Remove Labeler Subscription URL
+export const REMOVE_LABELER_SUBSCRIBE_URL = gql`
+  mutation RemoveLabelerSubscribeUrl($url: String!) {
+    removeLabelerSubscribeUrl(url: $url) {
+      domainAuthority
+      adminDids
+      relayUrl
+      plcDirectoryUrl
+      jetstreamUrl
+      oauthSupportedScopes
+      labelerSubscribeEnabled
+      labelerSubscribeUrls
+    }
   }
 `;
 

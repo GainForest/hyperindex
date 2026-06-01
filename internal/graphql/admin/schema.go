@@ -324,6 +324,23 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 					return b.resolver.UpdateSettings(p.Context, domainPtr, relayPtr, plcPtr, jetPtr, scopesPtr)
 				},
 			},
+			"removeLabelerSubscribeUrl": &graphql.Field{
+				Type:        graphql.NewNonNull(SettingsType),
+				Description: "Remove an external labeler websocket URL from the admin-managed subscription list (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"url": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "External labeler websocket URL to remove",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					url, _ := p.Args["url"].(string)
+					return b.resolver.RemoveLabelerSubscribeURL(p.Context, url)
+				},
+			},
 			"resetAll": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.Boolean),
 				Description: "Delete all data (admin only, requires confirmation)",
