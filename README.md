@@ -306,13 +306,22 @@ Typed collection queries accept a `where` argument with per-field filters:
 
 | Operator | Types | Example |
 |----------|-------|---------|
-| `eq` | All | `{ title: { eq: "Hello" } }` |
-| `neq` | All | `{ status: { neq: "draft" } }` |
+| `eq` | String, Int, Float, Boolean, DateTime | `{ title: { eq: "Hello" } }` |
+| `neq` | String, Int, Float, DateTime | `{ status: { neq: "draft" } }` |
 | `gt`, `lt`, `gte`, `lte` | Int, Float, DateTime | `{ score: { gt: 5, lte: 100 } }` |
-| `in` | String, Int, Float | `{ type: { in: ["post", "reply"] } }` |
+| `in` | String, Int | `{ type: { in: ["post", "reply"] } }` |
 | `contains` | String | `{ text: { contains: "forest" } }` |
 | `startsWith` | String | `{ name: { startsWith: "Gain" } }` |
-| `isNull` | All | `{ optionalField: { isNull: true } }` |
+| `isNull` | Scalar fields and complex top-level fields | `{ optionalField: { isNull: true } }` |
+
+Complex top-level fields such as arrays, refs, unions, objects, blobs, bytes, unknown values, and CID links support presence filtering only:
+
+```graphql
+where: {
+  image: { isNull: false }
+  contributors: { isNull: false }
+}
+```
 
 Every `where` input also includes a `did` field for filtering by author DID.
 
