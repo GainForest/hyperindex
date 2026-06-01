@@ -149,6 +149,8 @@ LABELER_SUBSCRIBE_URLS=wss://hyperlabel-proxy-test.up.railway.app/xrpc/com.atpro
 | `LABELER_SUBSCRIBE_RECONNECT_MIN` | Minimum reconnect backoff | `1s` |
 | `LABELER_SUBSCRIBE_RECONNECT_MAX` | Maximum reconnect backoff | `60s` |
 
+If a labeler returns `FutureCursor` or `OutdatedCursor`, Hyperindex records a `FATAL_CURSOR ...` marker in `label_subscription_state.last_error`, stops retrying that labeler, and returns `503` from `/health`. Use `/stats` to see the affected labeler URL, `status: "fatal"`, `lastErrorCode`, and reset guidance. Repair requires resetting the saved cursor and replaying or purging labels as needed, then clearing `last_error`; because the subscription goroutine stops, restart Hyperindex after repair.
+
 #### Legacy Mode: Jetstream + Backfill
 
 > **Note:** Jetstream+Backfill mode is the legacy ingestion path. It lacks cryptographic verification and ordering guarantees. Use Tap (above) for new deployments.

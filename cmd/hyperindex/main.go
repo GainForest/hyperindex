@@ -275,18 +275,30 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 		AllowAdminAPIKeyAuth: allowAdminAPIKeyAuth,
 	}))
 
-	// Health check — reflects hyperindex's own health only.
-	// Tap liveness is intentionally excluded: if Tap is temporarily unreachable
-	// (restart, deploy, network blip) hyperindex itself is still healthy and
-	// should not be restarted by Railway's health check. Tap status is
-	// available via GET /stats for observability.
+	// Health check — reports process liveness and deterministic labeler cursor
+	// failures that require operator reset. Transient Tap or labeler reconnects
+	// are exposed via GET /stats but do not fail health by themselves.
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]string{
+		payload := map[string]any{
 			"status": "ok",
 			"time":   time.Now().UTC().Format(time.RFC3339),
-		})
+		}
+		statusCode := http.StatusOK
+
+		labelerDiagnostics, labelerFatal, labelerErr := configuredLabelerDiagnostics(req.Context(), cfg, svc.externalLabels)
+		if labelerErr != nil {
+			statusCode = http.StatusServiceUnavailable
+			payload["status"] = "unhealthy"
+			payload["labelersError"] = labelerErr.Error()
+		} else if labelerFatal {
+			statusCode = http.StatusServiceUnavailable
+			payload["status"] = "unhealthy"
+			payload["labelers"] = labelerDiagnostics
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		_ = json.NewEncoder(w).Encode(payload)
 	})
 
 	// Stats endpoint
@@ -335,6 +347,16 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 			stats["tap"] = tapInfo
 		}
 
+		if cfg.LabelerSubscribeEnabled {
+			labelerDiagnostics, _, err := configuredLabelerDiagnostics(reqCtx, cfg, svc.externalLabels)
+			if err != nil {
+				stats["labelers"] = []map[string]any{}
+				stats["labelersError"] = err.Error()
+			} else {
+				stats["labelers"] = labelerDiagnostics
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(stats)
 	})
@@ -381,6 +403,65 @@ func applyTapSidecarHealth(
 	}
 
 	tapInfo["sidecar"] = "ok"
+}
+
+func configuredLabelerDiagnostics(ctx context.Context, cfg *config.Config, repo *repositories.ExternalLabelsRepository) ([]map[string]any, bool, error) {
+	if cfg == nil || !cfg.LabelerSubscribeEnabled {
+		return nil, false, nil
+	}
+
+	urls := cfg.LabelerSubscribeURLList()
+	if len(urls) == 0 {
+		return nil, false, nil
+	}
+	if repo == nil {
+		return nil, false, fmt.Errorf("external label subscriptions are enabled but the external label repository is unavailable")
+	}
+
+	states, err := repo.ListStates(ctx, urls)
+	if err != nil {
+		return nil, false, fmt.Errorf("list external label subscription states: %w", err)
+	}
+
+	diagnostics := make([]map[string]any, 0, len(states))
+	fatal := false
+	for _, state := range states {
+		if state.IsFatal() {
+			fatal = true
+		}
+		diagnostics = append(diagnostics, labelerDiagnostic(state))
+	}
+
+	return diagnostics, fatal, nil
+}
+
+func labelerDiagnostic(state repositories.LabelSubscriptionState) map[string]any {
+	diagnostic := map[string]any{
+		"url":     state.URL,
+		"status":  state.Status(),
+		"lastSeq": state.LastSeq,
+	}
+
+	if code := repositories.FatalCursorCode(state.LastError); code != "" {
+		diagnostic["lastErrorCode"] = code
+	}
+	if state.LastError != nil {
+		diagnostic["lastError"] = *state.LastError
+	}
+	if state.LastConnectedAt != nil {
+		diagnostic["lastConnectedAt"] = state.LastConnectedAt.UTC().Format(time.RFC3339)
+	}
+	if state.LastEventAt != nil {
+		diagnostic["lastEventAt"] = state.LastEventAt.UTC().Format(time.RFC3339)
+	}
+	if !state.CreatedAt.IsZero() {
+		diagnostic["createdAt"] = state.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if !state.UpdatedAt.IsZero() {
+		diagnostic["updatedAt"] = state.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+
+	return diagnostic
 }
 
 // setupOAuth registers all OAuth 2.0 endpoints (discovery, authorization flow,

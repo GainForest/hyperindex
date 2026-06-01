@@ -13,6 +13,21 @@ import (
 const (
 	externalLabelLastErrorMaxLen = 4096
 	labelSubjectKeySeparator     = "\x00"
+	fatalCursorPrefix            = "FATAL_CURSOR "
+	fatalCursorLikePattern       = fatalCursorPrefix + "%"
+
+	// LabelSubscriptionStatusPending means the subscription is configured but has
+	// not yet reported a successful connection, event, or error in this database.
+	LabelSubscriptionStatusPending = "pending"
+	// LabelSubscriptionStatusConnected means the subscription connected or
+	// persisted an event successfully and has no current recorded error.
+	LabelSubscriptionStatusConnected = "connected"
+	// LabelSubscriptionStatusError means the subscription most recently hit a
+	// retryable error. Health checks do not fail solely for this state.
+	LabelSubscriptionStatusError = "error"
+	// LabelSubscriptionStatusFatal means the subscription hit a non-retryable
+	// cursor error stored as a fatal marker in last_error.
+	LabelSubscriptionStatusFatal = "fatal"
 )
 
 // LabelSubscriptionState tracks cursor state for a labeler websocket subscription.
@@ -25,6 +40,52 @@ type LabelSubscriptionState struct {
 	LastError       *string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+}
+
+// Status derives the subscription's diagnostic status from the persisted cursor
+// and error fields. Fatal cursor markers take precedence over retryable errors,
+// followed by successful connection or event timestamps.
+func (s LabelSubscriptionState) Status() string {
+	if s.IsFatal() {
+		return LabelSubscriptionStatusFatal
+	}
+	if s.LastError != nil && strings.TrimSpace(*s.LastError) != "" {
+		return LabelSubscriptionStatusError
+	}
+	if s.LastConnectedAt != nil || s.LastEventAt != nil || s.LastSeq > 0 {
+		return LabelSubscriptionStatusConnected
+	}
+	return LabelSubscriptionStatusPending
+}
+
+// IsFatal reports whether last_error contains a fatal cursor marker that
+// requires an operator reset and label replay before ingestion can resume.
+func (s LabelSubscriptionState) IsFatal() bool {
+	return IsFatalCursorError(s.LastError)
+}
+
+// IsFatalCursorError reports whether lastError uses Hyperindex's durable fatal
+// cursor marker convention.
+func IsFatalCursorError(lastError *string) bool {
+	if lastError == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(*lastError), fatalCursorPrefix)
+}
+
+// FatalCursorCode extracts the labeler cursor error code from a fatal marker. It
+// returns an empty string when lastError is not a fatal cursor marker.
+func FatalCursorCode(lastError *string) string {
+	if !IsFatalCursorError(lastError) {
+		return ""
+	}
+	marker := strings.TrimPrefix(strings.TrimSpace(*lastError), fatalCursorPrefix)
+	code, _, _ := strings.Cut(marker, ":")
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return "FatalCursor"
+	}
+	return code
 }
 
 // ExternalLabel is a raw label received from an external ATProto labeler stream.
@@ -121,62 +182,81 @@ func (r *ExternalLabelsRepository) GetState(ctx context.Context, subscriptionURL
 		FROM label_subscription_state
 		WHERE url = %s`, r.stateColumns(), r.db.Placeholder(1))
 
-	var state LabelSubscriptionState
-	var labelerDID, lastConnectedAt, lastEventAt, lastError sql.NullString
-	var createdAt, updatedAt string
-
-	err := r.db.QueryRow(ctx, sqlStr, []database.Value{database.Text(subscriptionURL)},
-		&state.URL,
-		&labelerDID,
-		&state.LastSeq,
-		&lastConnectedAt,
-		&lastEventAt,
-		&lastError,
-		&createdAt,
-		&updatedAt,
-	)
+	row := r.db.DB().QueryRowContext(ctx, sqlStr, r.db.ConvertParams([]database.Value{database.Text(subscriptionURL)})...)
+	state, err := scanLabelSubscriptionStateRow(row)
 	if err != nil {
 		return nil, err
-	}
-
-	if labelerDID.Valid {
-		state.LabelerDID = &labelerDID.String
-	}
-	if lastError.Valid {
-		state.LastError = &lastError.String
-	}
-
-	parsedCreatedAt, err := parseDBTime(createdAt)
-	if err != nil {
-		return nil, fmt.Errorf("parse label_subscription_state.created_at: %w", err)
-	}
-	state.CreatedAt = parsedCreatedAt
-
-	parsedUpdatedAt, err := parseDBTime(updatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("parse label_subscription_state.updated_at: %w", err)
-	}
-	state.UpdatedAt = parsedUpdatedAt
-
-	if lastConnectedAt.Valid {
-		parsed, err := parseDBTime(lastConnectedAt.String)
-		if err != nil {
-			return nil, fmt.Errorf("parse label_subscription_state.last_connected_at: %w", err)
-		}
-		state.LastConnectedAt = &parsed
-	}
-	if lastEventAt.Valid {
-		parsed, err := parseDBTime(lastEventAt.String)
-		if err != nil {
-			return nil, fmt.Errorf("parse label_subscription_state.last_event_at: %w", err)
-		}
-		state.LastEventAt = &parsed
 	}
 
 	return &state, nil
 }
 
-// UpdateConnected records a successful websocket connection attempt.
+// ListStates retrieves subscription states for the provided URLs, preserving the
+// input order. Configured URLs without a database row are returned as pending so
+// health and stats handlers can report every configured labeler without writing
+// during read-only requests.
+func (r *ExternalLabelsRepository) ListStates(ctx context.Context, subscriptionURLs []string) ([]LabelSubscriptionState, error) {
+	if len(subscriptionURLs) == 0 {
+		return nil, nil
+	}
+
+	urls := make([]string, 0, len(subscriptionURLs))
+	seen := make(map[string]struct{}, len(subscriptionURLs))
+	for _, subscriptionURL := range subscriptionURLs {
+		if err := validateSubscriptionURL(subscriptionURL); err != nil {
+			return nil, err
+		}
+		if _, ok := seen[subscriptionURL]; ok {
+			continue
+		}
+		seen[subscriptionURL] = struct{}{}
+		urls = append(urls, subscriptionURL)
+	}
+
+	if len(urls) == 0 {
+		return nil, nil
+	}
+
+	params := make([]database.Value, 0, len(urls))
+	for _, subscriptionURL := range urls {
+		params = append(params, database.Text(subscriptionURL))
+	}
+
+	sqlStr := fmt.Sprintf(`SELECT %s
+		FROM label_subscription_state
+		WHERE url IN (%s)`, r.stateColumns(), r.db.Placeholders(len(urls), 1))
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+	if err != nil {
+		return nil, fmt.Errorf("list label subscription states: %w", err)
+	}
+	defer rows.Close()
+
+	statesByURL := make(map[string]LabelSubscriptionState, len(urls))
+	for rows.Next() {
+		state, err := scanLabelSubscriptionStateRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		statesByURL[state.URL] = state
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	states := make([]LabelSubscriptionState, 0, len(urls))
+	for _, subscriptionURL := range urls {
+		state, ok := statesByURL[subscriptionURL]
+		if !ok {
+			state = LabelSubscriptionState{URL: subscriptionURL}
+		}
+		states = append(states, state)
+	}
+
+	return states, nil
+}
+
+// UpdateConnected records a successful websocket connection attempt. It does
+// not clear a fatal cursor marker; operators must reset that marker explicitly.
 func (r *ExternalLabelsRepository) UpdateConnected(ctx context.Context, subscriptionURL string) error {
 	if _, err := r.EnsureState(ctx, subscriptionURL); err != nil {
 		return err
@@ -186,13 +266,18 @@ func (r *ExternalLabelsRepository) UpdateConnected(ctx context.Context, subscrip
 		SET last_connected_at = %s,
 			last_error = NULL,
 			updated_at = %s
-		WHERE url = %s`, r.db.Now(), r.db.Now(), r.db.Placeholder(1))
+		WHERE url = %s
+			AND (last_error IS NULL OR last_error NOT LIKE %s)`, r.db.Now(), r.db.Now(), r.db.Placeholder(1), r.db.Placeholder(2))
 
-	_, err := r.db.Exec(ctx, sqlStr, []database.Value{database.Text(subscriptionURL)})
+	_, err := r.db.Exec(ctx, sqlStr, []database.Value{
+		database.Text(subscriptionURL),
+		database.Text(fatalCursorLikePattern),
+	})
 	return err
 }
 
-// UpdateError records the latest subscription error.
+// UpdateError records the latest retryable subscription error. Fatal cursor
+// markers are sticky and are not overwritten by retryable bookkeeping.
 func (r *ExternalLabelsRepository) UpdateError(ctx context.Context, subscriptionURL, errText string) error {
 	if _, err := r.EnsureState(ctx, subscriptionURL); err != nil {
 		return err
@@ -202,10 +287,31 @@ func (r *ExternalLabelsRepository) UpdateError(ctx context.Context, subscription
 	sqlStr := fmt.Sprintf(`UPDATE label_subscription_state
 		SET last_error = %s,
 			updated_at = %s
-		WHERE url = %s`, r.db.Placeholder(1), r.db.Now(), r.db.Placeholder(2))
+		WHERE url = %s
+			AND (last_error IS NULL OR last_error NOT LIKE %s)`, r.db.Placeholder(1), r.db.Now(), r.db.Placeholder(2), r.db.Placeholder(3))
 
 	_, err := r.db.Exec(ctx, sqlStr, []database.Value{
 		database.Text(normalizedErr),
+		database.Text(subscriptionURL),
+		database.Text(fatalCursorLikePattern),
+	})
+	return err
+}
+
+// MarkFatalCursor records a non-retryable cursor error in last_error using the
+// durable fatal marker convention consumed by health and stats diagnostics.
+func (r *ExternalLabelsRepository) MarkFatalCursor(ctx context.Context, subscriptionURL, errorCode, errText string) error {
+	if _, err := r.EnsureState(ctx, subscriptionURL); err != nil {
+		return err
+	}
+
+	sqlStr := fmt.Sprintf(`UPDATE label_subscription_state
+		SET last_error = %s,
+			updated_at = %s
+		WHERE url = %s`, r.db.Placeholder(1), r.db.Now(), r.db.Placeholder(2))
+
+	_, err := r.db.Exec(ctx, sqlStr, []database.Value{
+		database.Text(formatFatalCursorLastError(errorCode, errText)),
 		database.Text(subscriptionURL),
 	})
 	return err
@@ -441,15 +547,16 @@ func (r *ExternalLabelsRepository) updateLastSeqTx(ctx context.Context, tx *sql.
 	sqlStr := fmt.Sprintf(`UPDATE label_subscription_state
 		SET last_seq = CASE WHEN last_seq < %s THEN %s ELSE last_seq END,
 			last_event_at = CASE WHEN last_seq < %s THEN %s ELSE last_event_at END,
-			last_error = CASE WHEN last_seq < %s THEN NULL ELSE last_error END,
+			last_error = NULL,
 			updated_at = %s
-		WHERE url = %s`,
+		WHERE url = %s
+			AND (last_error IS NULL OR last_error NOT LIKE %s)`,
 		r.db.Placeholder(1),
 		r.db.Placeholder(2),
 		r.db.Placeholder(3),
 		r.db.Now(),
-		r.db.Placeholder(4),
 		r.db.Now(),
+		r.db.Placeholder(4),
 		r.db.Placeholder(5),
 	)
 
@@ -457,8 +564,8 @@ func (r *ExternalLabelsRepository) updateLastSeqTx(ctx context.Context, tx *sql.
 		database.Int(seq),
 		database.Int(seq),
 		database.Int(seq),
-		database.Int(seq),
 		database.Text(subscriptionURL),
+		database.Text(fatalCursorLikePattern),
 	}
 	if _, err := tx.ExecContext(ctx, sqlStr, r.db.ConvertParams(params)...); err != nil {
 		return fmt.Errorf("update external label cursor: %w", err)
@@ -682,6 +789,85 @@ func normalizeLastError(errText string) string {
 		return errText[:externalLabelLastErrorMaxLen]
 	}
 	return errText
+}
+
+func normalizeErrorCode(errorCode string) string {
+	errorCode = strings.TrimSpace(strings.ToValidUTF8(errorCode, "�"))
+	if errorCode == "" {
+		return "Unknown"
+	}
+	return errorCode
+}
+
+func formatFatalCursorLastError(errorCode, errText string) string {
+	code := normalizeErrorCode(errorCode)
+	message := strings.TrimSpace(strings.ToValidUTF8(errText, "�"))
+	message = strings.TrimPrefix(message, fatalCursorPrefix)
+	message = strings.TrimSpace(message)
+	if strings.HasPrefix(message, code+":") {
+		message = strings.TrimSpace(strings.TrimPrefix(message, code+":"))
+	}
+	message = normalizeLastError(message)
+	return normalizeLastError(fmt.Sprintf("%s%s: %s", fatalCursorPrefix, code, message))
+}
+
+type labelSubscriptionStateScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanLabelSubscriptionStateRow(scanner labelSubscriptionStateScanner) (LabelSubscriptionState, error) {
+	var state LabelSubscriptionState
+	var labelerDID, lastConnectedAt, lastEventAt, lastError sql.NullString
+	var createdAt, updatedAt string
+
+	if err := scanner.Scan(
+		&state.URL,
+		&labelerDID,
+		&state.LastSeq,
+		&lastConnectedAt,
+		&lastEventAt,
+		&lastError,
+		&createdAt,
+		&updatedAt,
+	); err != nil {
+		return LabelSubscriptionState{}, err
+	}
+
+	if labelerDID.Valid {
+		state.LabelerDID = &labelerDID.String
+	}
+	if lastError.Valid {
+		state.LastError = &lastError.String
+	}
+
+	parsedCreatedAt, err := parseDBTime(createdAt)
+	if err != nil {
+		return LabelSubscriptionState{}, fmt.Errorf("parse label_subscription_state.created_at: %w", err)
+	}
+	state.CreatedAt = parsedCreatedAt
+
+	parsedUpdatedAt, err := parseDBTime(updatedAt)
+	if err != nil {
+		return LabelSubscriptionState{}, fmt.Errorf("parse label_subscription_state.updated_at: %w", err)
+	}
+	state.UpdatedAt = parsedUpdatedAt
+
+	if lastConnectedAt.Valid {
+		parsed, err := parseDBTime(lastConnectedAt.String)
+		if err != nil {
+			return LabelSubscriptionState{}, fmt.Errorf("parse label_subscription_state.last_connected_at: %w", err)
+		}
+		state.LastConnectedAt = &parsed
+	}
+	if lastEventAt.Valid {
+		parsed, err := parseDBTime(lastEventAt.String)
+		if err != nil {
+			return LabelSubscriptionState{}, fmt.Errorf("parse label_subscription_state.last_event_at: %w", err)
+		}
+		state.LastEventAt = &parsed
+	}
+
+	return state, nil
 }
 
 func scanExternalLabels(rows *sql.Rows) ([]ExternalLabel, error) {
