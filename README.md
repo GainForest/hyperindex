@@ -300,6 +300,28 @@ query {
 
 `where.externalLabels` decides which records qualify. The `node.externalLabels(...)` field decides which labels are displayed on each returned record, so repeat the same source/value constraints on the field if you only want to display labels used for filtering.
 
+Generated record types and `GenericRecord` also include a virtual `certifiedProfileData` field when the `app.certified.actor.profile` lexicon is registered. This field resolves the author's `at://<did>/app.certified.actor.profile/self` record and can include external labels attached to that profile record:
+
+```graphql
+query {
+  orgHypercertsClaimActivity(first: 20) {
+    edges {
+      node {
+        uri
+        did
+        certifiedProfileData {
+          displayName
+          description
+          externalLabels(values: ["test-account"]) { src val cts }
+        }
+      }
+    }
+  }
+}
+```
+
+`certifiedProfileData` is nullable when the author has no Certified profile record. Its nested `externalLabels` field uses labels on the profile record URI only.
+
 #### Filtering (`where`)
 
 Typed collection queries accept a `where` argument with per-field filters:

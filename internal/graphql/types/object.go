@@ -7,17 +7,19 @@ import (
 
 	"github.com/graphql-go/graphql"
 
+	"github.com/GainForest/hyperindex/internal/graphql/certifiedprofiles"
 	"github.com/GainForest/hyperindex/internal/graphql/externallabels"
 	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
 // ReservedRecordFields are field names injected as metadata and must not be overwritten by lexicon properties.
 var ReservedRecordFields = map[string]bool{
-	"uri":            true,
-	"cid":            true,
-	"did":            true,
-	"rkey":           true,
-	"externalLabels": true,
+	"uri":                  true,
+	"cid":                  true,
+	"did":                  true,
+	"rkey":                 true,
+	"externalLabels":       true,
+	"certifiedProfileData": true,
 }
 
 // ObjectBuilder builds GraphQL object types from lexicon definitions.
@@ -128,6 +130,9 @@ func (b *ObjectBuilder) buildRecordFields(lexiconID string, def *lexicon.RecordD
 			Description: "Record key (last segment of AT-URI)",
 		},
 		"externalLabels": externallabels.Field(),
+	}
+	if profileType, ok := b.mapper.GetObjectType(certifiedprofiles.CollectionID); ok {
+		fields["certifiedProfileData"] = certifiedprofiles.Field(profileType)
 	}
 
 	// Build required set for quick lookup
