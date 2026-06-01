@@ -131,6 +131,7 @@ func generateGraphiQLHTML(cfg GraphiQLConfig) string {
         defaultEditorToolsVisibility: true,
         defaultQuery: ` + defaultQueryJSON + `,
         plugins,
+        visiblePlugin: 'GraphiQL Explorer',
       }),
     );
   </script>

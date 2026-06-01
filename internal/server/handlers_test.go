@@ -375,6 +375,9 @@ func TestHandleGraphiQL(t *testing.T) {
 		if !strings.Contains(body, "explorerPlugin()") {
 			t.Error("response body does not wire the GraphiQL explorer plugin")
 		}
+		if !strings.Contains(body, "visiblePlugin: 'GraphiQL Explorer'") {
+			t.Error("response body does not open the GraphiQL explorer plugin")
+		}
 		if strings.Contains(body, "Schema Builder") {
 			t.Error("response body should not contain the custom Schema Builder panel")
 		}
