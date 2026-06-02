@@ -1,4 +1,0 @@
-kind: added
-body: Add the official GraphiQL Explorer plugin so users can build public and admin GraphQL queries by checking and unchecking schema fields directly in the GraphiQL sidebar.
-custom:
-  Affects: user

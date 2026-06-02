@@ -1,4 +1,0 @@
-kind: added
-body: Add a read-only post-deploy API smoke test suite so operators can verify public GraphQL health, schema, records, and pagination after deployment.
-custom:
-  Affects: operator

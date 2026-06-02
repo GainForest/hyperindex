@@ -1,4 +1,0 @@
-kind: changed
-body: Increase the GraphQL connection page-size cap from 100 to 1000 records per request.
-custom:
-  Affects: user
