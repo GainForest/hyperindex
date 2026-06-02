@@ -9,7 +9,7 @@ const (
 	// DefaultPageSize is the number of records returned when no first argument is provided.
 	DefaultPageSize = 20
 	// MaxPageSize is the maximum number of records that can be requested in a single page.
-	MaxPageSize = 100
+	MaxPageSize = 1000
 )
 
 // ClampPageSize returns a valid page size within [1, MaxPageSize], defaulting to DefaultPageSize.

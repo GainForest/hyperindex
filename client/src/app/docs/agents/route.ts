@@ -423,15 +423,47 @@ Typed collection queries accept a \`where\` argument for field-level filtering. 
 | Operator | Applicable Types | Description | Example |
 |----------|-----------------|-------------|---------|
 | \`eq\` | String, Int, Float, Boolean, DateTime | Exact equality | \`{ title: { eq: "Hello" } }\` |
-| \`neq\` | String, Int, Float, Boolean, DateTime | Not equal | \`{ status: { neq: "draft" } }\` |
+| \`neq\` | String, Int, Float, DateTime | Not equal | \`{ status: { neq: "draft" } }\` |
 | \`gt\` | Int, Float, DateTime | Greater than | \`{ score: { gt: 5 } }\` |
 | \`lt\` | Int, Float, DateTime | Less than | \`{ score: { lt: 100 } }\` |
 | \`gte\` | Int, Float, DateTime | Greater or equal | \`{ createdAt: { gte: "2024-01-01" } }\` |
 | \`lte\` | Int, Float, DateTime | Less or equal | \`{ createdAt: { lte: "2024-12-31" } }\` |
-| \`in\` | String, Int, Float | Value in list | \`{ type: { in: ["post", "reply"] } }\` |
+| \`in\` | String, Int | Value in list | \`{ type: { in: ["post", "reply"] } }\` |
 | \`contains\` | String | Substring match | \`{ text: { contains: "forest" } }\` |
 | \`startsWith\` | String | Prefix match | \`{ name: { startsWith: "Gain" } }\` |
-| \`isNull\` | All | Null check | \`{ optionalField: { isNull: true } }\` |
+| \`isNull\` | Scalar fields and complex top-level fields | Missing/null or present check | \`{ optionalField: { isNull: true } }\` |
+
+### Complex Field Presence Filtering
+
+Scalar fields keep the typed operators above. Complex top-level lexicon fields such as arrays, refs, unions, objects, blobs, bytes, unknown values, and CID links expose only a presence filter:
+
+\`\`\`graphql
+where: {
+  image: { isNull: false }
+  contributors: { isNull: false }
+}
+\`\`\`
+
+Presence filtering is top-level only. It does not support nested filters such as \`image.type.eq\` or \`contributors.identity.eq\`.
+
+\`isNull: true\` matches records where the top-level JSON field is missing or explicitly \`null\`. \`isNull: false\` matches records where the field is present and non-null. Empty arrays \`[]\`, empty objects \`{}\`, and empty strings \`""\` count as present.
+
+Presence filtering does not guarantee a complex value conforms to the generated typed GraphQL field. Nullable union fields with unknown \`$type\` values or missing required top-level fields resolve to \`null\` instead of being coerced to another union member.
+
+The generic \`records(collection: ...)\` query is unchanged and does not accept generated \`where\` filters.
+
+To discover generated where inputs, introspect the collection input object with \`inputFields\`:
+
+\`\`\`graphql
+{
+  __type(name: "OrgHypercertsClaimActivityWhereInput") {
+    inputFields {
+      name
+      type { name kind ofType { name kind } }
+    }
+  }
+}
+\`\`\`
 
 ### DID (Author) Filtering
 
@@ -511,7 +543,7 @@ query {
 |----------|------|----------|-------------|
 | \`query\` | String! | Yes | Search text (minimum 3 characters) |
 | \`collection\` | String | No | Restrict search to a collection NSID |
-| \`first\` | Int | No | Page size (default 20, max 100) |
+| \`first\` | Int | No | Page size (default 20, max 1000) |
 | \`after\` | String | No | Cursor for pagination |
 
 Search is case-insensitive and matches against the full JSON content of records.
@@ -531,7 +563,7 @@ Hyperindex uses Relay-style cursor-based pagination.
 | \`last\` | Int | Number of items from the end |
 | \`before\` | String | Cursor to start before |
 
-**Note:** The maximum page size is 100. Requests with \`first\` or \`last\` greater than 100 are silently clamped. You cannot use \`first\`/\`after\` and \`last\`/\`before\` simultaneously — doing so returns a GraphQL error.
+**Note:** The maximum page size is 1000. Requests with \`first\` or \`last\` greater than 1000 are silently clamped. You cannot use \`first\`/\`after\` and \`last\`/\`before\` simultaneously — doing so returns a GraphQL error.
 
 ### totalCount
 

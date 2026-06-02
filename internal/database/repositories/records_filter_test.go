@@ -178,6 +178,34 @@ func TestBuildFilterClause_InOperator(t *testing.T) {
 	}
 }
 
+func TestBuildFilterClause_InvalidOperators(t *testing.T) {
+	repo := newTestRepo(t)
+
+	t.Run("unsupported operator returns error", func(t *testing.T) {
+		_, _, err := repo.buildFilterClause([]FieldFilter{
+			{Field: "image", Operator: "exists", Value: true, FieldType: "object"},
+		}, 1)
+		if err == nil {
+			t.Fatal("expected unsupported operator error, got nil")
+		}
+		if !strings.Contains(err.Error(), "unsupported filter operator") {
+			t.Fatalf("error = %q, want unsupported operator message", err.Error())
+		}
+	})
+
+	t.Run("isNull requires boolean", func(t *testing.T) {
+		_, _, err := repo.buildFilterClause([]FieldFilter{
+			{Field: "image", Operator: "isNull", Value: "false", FieldType: "object"},
+		}, 1)
+		if err == nil {
+			t.Fatal("expected isNull type error, got nil")
+		}
+		if !strings.Contains(err.Error(), "must be a boolean") {
+			t.Fatalf("error = %q, want boolean type message", err.Error())
+		}
+	})
+}
+
 func TestBuildFilterClause_NumericCast(t *testing.T) {
 	repo := newTestRepo(t)
 
