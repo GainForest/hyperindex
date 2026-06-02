@@ -13,6 +13,8 @@ export interface Settings {
   plcDirectoryUrl: string;
   jetstreamUrl: string;
   oauthSupportedScopes: string;
+  labelerSubscribeEnabled: boolean;
+  labelerSubscribeUrls: string[];
 }
 
 // Session

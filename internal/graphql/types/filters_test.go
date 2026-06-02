@@ -6,8 +6,8 @@ import (
 	"github.com/graphql-go/graphql"
 )
 
-// TestFilterInputTypes verifies that each of the 5 filter InputObject types
-// has exactly the fields specified in the issue.
+// TestFilterInputTypes verifies that each shared filter InputObject type has
+// the expected operator fields.
 func TestFilterInputTypes(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -43,6 +43,12 @@ func TestFilterInputTypes(t *testing.T) {
 			inputObj:   DateTimeFilterInput,
 			wantFields: []string{"eq", "neq", "gt", "lt", "gte", "lte", "isNull"},
 			wantAbsent: []string{"in", "contains", "startsWith"},
+		},
+		{
+			name:       "PresenceFilterInput fields",
+			inputObj:   PresenceFilterInput,
+			wantFields: []string{"isNull"},
+			wantAbsent: []string{"eq", "neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith"},
 		},
 	}
 
@@ -166,7 +172,28 @@ func TestDateTimeFilterInput_FieldTypes(t *testing.T) {
 	}
 }
 
-// TestFilterInputForLexiconType verifies the mapping from lexicon types to filter inputs.
+func TestPresenceFilterInput_FieldTypes(t *testing.T) {
+	fields := PresenceFilterInput.Fields()
+
+	if len(fields) != 1 {
+		t.Fatalf("PresenceFilterInput fields length = %d, want 1", len(fields))
+	}
+
+	isNullField, ok := fields["isNull"]
+	if !ok {
+		t.Fatal("PresenceFilterInput: missing field 'isNull'")
+	}
+
+	nonNull, ok := isNullField.Type.(*graphql.NonNull)
+	if !ok {
+		t.Fatalf("PresenceFilterInput: isNull type = %T, want *graphql.NonNull", isNullField.Type)
+	}
+	if nonNull.OfType != graphql.Boolean {
+		t.Errorf("PresenceFilterInput: isNull inner type = %v, want Boolean", nonNull.OfType)
+	}
+}
+
+// TestFilterInputForLexiconType verifies the scalar-only mapping from lexicon types to filter inputs.
 func TestFilterInputForLexiconType(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -192,6 +219,7 @@ func TestFilterInputForLexiconType(t *testing.T) {
 		{name: "union", lexiconType: "union", format: "", wantNil: true},
 		{name: "array", lexiconType: "array", format: "", wantNil: true},
 		{name: "object", lexiconType: "object", format: "", wantNil: true},
+		{name: "cid-link", lexiconType: "cid-link", format: "", wantNil: true},
 		{name: "record", lexiconType: "record", format: "", wantNil: true},
 		{name: "empty type", lexiconType: "", format: "", wantNil: true},
 	}
@@ -221,6 +249,56 @@ func TestFilterInputForLexiconType(t *testing.T) {
 	}
 }
 
+func TestFilterInputForLexiconProperty(t *testing.T) {
+	tests := []struct {
+		name        string
+		lexiconType string
+		format      string
+		wantInput   *graphql.InputObject
+		wantNil     bool
+	}{
+		{name: "string no format", lexiconType: "string", format: "", wantInput: StringFilterInput},
+		{name: "string datetime format", lexiconType: "string", format: "datetime", wantInput: DateTimeFilterInput},
+		{name: "integer", lexiconType: "integer", format: "", wantInput: IntFilterInput},
+		{name: "number", lexiconType: "number", format: "", wantInput: FloatFilterInput},
+		{name: "boolean", lexiconType: "boolean", format: "", wantInput: BooleanFilterInput},
+		{name: "array", lexiconType: "array", format: "", wantInput: PresenceFilterInput},
+		{name: "ref", lexiconType: "ref", format: "", wantInput: PresenceFilterInput},
+		{name: "union", lexiconType: "union", format: "", wantInput: PresenceFilterInput},
+		{name: "object", lexiconType: "object", format: "", wantInput: PresenceFilterInput},
+		{name: "blob", lexiconType: "blob", format: "", wantInput: PresenceFilterInput},
+		{name: "bytes", lexiconType: "bytes", format: "", wantInput: PresenceFilterInput},
+		{name: "unknown", lexiconType: "unknown", format: "", wantInput: PresenceFilterInput},
+		{name: "cid-link", lexiconType: "cid-link", format: "", wantInput: PresenceFilterInput},
+		{name: "record", lexiconType: "record", format: "", wantNil: true},
+		{name: "empty type", lexiconType: "", format: "", wantNil: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FilterInputForLexiconProperty(tt.lexiconType, tt.format)
+
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("FilterInputForLexiconProperty(%q, %q) = %v, want nil",
+						tt.lexiconType, tt.format, got.Name())
+				}
+				return
+			}
+
+			if got == nil {
+				t.Fatalf("FilterInputForLexiconProperty(%q, %q) = nil, want %v",
+					tt.lexiconType, tt.format, tt.wantInput.Name())
+			}
+
+			if got != tt.wantInput {
+				t.Errorf("FilterInputForLexiconProperty(%q, %q) = %v, want %v",
+					tt.lexiconType, tt.format, got.Name(), tt.wantInput.Name())
+			}
+		})
+	}
+}
+
 // TestFilterInputNames verifies the Name() of each filter input type.
 func TestFilterInputNames(t *testing.T) {
 	tests := []struct {
@@ -233,6 +311,7 @@ func TestFilterInputNames(t *testing.T) {
 		{BooleanFilterInput, "BooleanFilterInput"},
 		{DateTimeFilterInput, "DateTimeFilterInput"},
 		{DIDFilterInput, "DIDFilterInput"},
+		{PresenceFilterInput, "PresenceFilterInput"},
 	}
 
 	for _, tt := range tests {

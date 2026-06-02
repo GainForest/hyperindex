@@ -17,7 +17,8 @@ import (
 	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
-// testLexiconJSON is a minimal lexicon with string, integer, datetime, and boolean fields.
+// testLexiconJSON is a minimal lexicon with scalar fields and complex fields
+// used to verify presence-only filtering.
 const testLexiconJSON = `{
 	"lexicon": 1,
 	"id": "test.collection",
@@ -34,6 +35,8 @@ const testLexiconJSON = `{
 					"createdAt": {"type": "string", "format": "datetime"},
 					"active": {"type": "boolean"},
 					"optionalField": {"type": "string"},
+					"image": {"type": "blob"},
+					"contributors": {"type": "array", "items": {"type": "string"}},
 					"field1": {"type": "string"},
 					"field2": {"type": "string"},
 					"field3": {"type": "string"},
@@ -216,6 +219,28 @@ func buildQuotedValues(prefix string, count int) string {
 	return strings.Join(values, ", ")
 }
 
+func assertEdgeURIs(t *testing.T, edges []interface{}, wantURIs []string) {
+	t.Helper()
+
+	got := make(map[string]bool, len(edges))
+	for _, edge := range edges {
+		uri, ok := getNodeField(t, edge, "uri").(string)
+		if !ok {
+			t.Fatalf("edge uri is %T, want string", getNodeField(t, edge, "uri"))
+		}
+		got[uri] = true
+	}
+
+	if len(got) != len(wantURIs) {
+		t.Fatalf("edge URI count = %d, want %d: %v", len(got), len(wantURIs), got)
+	}
+	for _, uri := range wantURIs {
+		if !got[uri] {
+			t.Fatalf("missing URI %s in %v", uri, got)
+		}
+	}
+}
+
 // TestFilterSort_FilterByStringEq tests filtering by string equality.
 func TestFilterSort_FilterByStringEq(t *testing.T) {
 	env := setupFilterTestEnv(t)
@@ -362,6 +387,100 @@ func TestFilterSort_FilterByIsNull(t *testing.T) {
 	// All records have no optionalField in their JSON
 	if len(edges) != 5 {
 		t.Errorf("Expected 5 records with optionalField isNull, got %d", len(edges))
+	}
+}
+
+func TestFilterSort_FilterByComplexPresence(t *testing.T) {
+	env := setupFilterTestEnv(t)
+
+	presenceRecords := []*repositories.Record{
+		{
+			URI:        "at://did:plc:presence/test.collection/missing",
+			CID:        "presence-cid-missing",
+			DID:        "did:plc:presence",
+			Collection: "test.collection",
+			JSON:       `{"title":"Presence Missing","score":1,"createdAt":"2026-02-01T10:00:00Z","active":true}`,
+			RKey:       "missing",
+		},
+		{
+			URI:        "at://did:plc:presence/test.collection/null",
+			CID:        "presence-cid-null",
+			DID:        "did:plc:presence",
+			Collection: "test.collection",
+			JSON:       `{"title":"Presence Null","score":2,"createdAt":"2026-02-02T10:00:00Z","active":true,"image":null,"contributors":null}`,
+			RKey:       "null",
+		},
+		{
+			URI:        "at://did:plc:presence/test.collection/object-array",
+			CID:        "presence-cid-object-array",
+			DID:        "did:plc:presence",
+			Collection: "test.collection",
+			JSON:       `{"title":"Presence Object Array","score":3,"createdAt":"2026-02-03T10:00:00Z","active":true,"image":{"ref":{"$link":"bafyreiimage"},"mimeType":"image/png","size":1},"contributors":["did:plc:alice"]}`,
+			RKey:       "object-array",
+		},
+		{
+			URI:        "at://did:plc:presence/test.collection/empty-object-array",
+			CID:        "presence-cid-empty-object-array",
+			DID:        "did:plc:presence",
+			Collection: "test.collection",
+			JSON:       `{"title":"Presence Empty Object Array","score":4,"createdAt":"2026-02-04T10:00:00Z","active":true,"image":{},"contributors":[]}`,
+			RKey:       "empty-object-array",
+		},
+	}
+	if err := env.db.Records.BatchInsert(env.ctx, presenceRecords); err != nil {
+		t.Fatalf("Failed to insert presence test records: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		where    string
+		wantURIs []string
+	}{
+		{
+			name:  "image present matches object and empty object",
+			where: `did: {eq: "did:plc:presence"}, image: {isNull: false}`,
+			wantURIs: []string{
+				"at://did:plc:presence/test.collection/object-array",
+				"at://did:plc:presence/test.collection/empty-object-array",
+			},
+		},
+		{
+			name:  "image null matches missing and explicit null",
+			where: `did: {eq: "did:plc:presence"}, image: {isNull: true}`,
+			wantURIs: []string{
+				"at://did:plc:presence/test.collection/missing",
+				"at://did:plc:presence/test.collection/null",
+			},
+		},
+		{
+			name:  "contributors present matches array and empty array",
+			where: `did: {eq: "did:plc:presence"}, contributors: {isNull: false}`,
+			wantURIs: []string{
+				"at://did:plc:presence/test.collection/object-array",
+				"at://did:plc:presence/test.collection/empty-object-array",
+			},
+		},
+		{
+			name:  "contributors null matches missing and explicit null",
+			where: `did: {eq: "did:plc:presence"}, contributors: {isNull: true}`,
+			wantURIs: []string{
+				"at://did:plc:presence/test.collection/missing",
+				"at://did:plc:presence/test.collection/null",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			query := fmt.Sprintf(`{
+				testCollection(where: {%s}) {
+					edges { node { uri } }
+				}
+			}`, tt.where)
+			result := env.runQuery(query)
+			edges := getEdges(t, result, "testCollection")
+			assertEdgeURIs(t, edges, tt.wantURIs)
+		})
 	}
 }
 
@@ -591,13 +710,13 @@ func TestFilterSort_TotalCountOmitted(t *testing.T) {
 	}
 }
 
-// TestFilterSort_MaxPageSize tests that first: 500 is clamped to 100.
+// TestFilterSort_MaxPageSize tests that requests above the max page size are clamped.
 func TestFilterSort_MaxPageSize(t *testing.T) {
 	env := setupFilterTestEnv(t)
 
-	// Insert enough records to test clamping (we have 5, so just verify we get at most 100)
+	// Insert enough records to test clamping (we have 5, so just verify we get at most 1000).
 	query := `{
-		testCollection(first: 500) {
+		testCollection(first: 1500) {
 			edges {
 				node { uri }
 			}
@@ -607,10 +726,10 @@ func TestFilterSort_MaxPageSize(t *testing.T) {
 	result := env.runQuery(query)
 	edges := getEdges(t, result, "testCollection")
 
-	// We only have 5 records, but the query should be clamped to 100 max
-	// Since we have fewer than 100, we get all 5
-	if len(edges) > 100 {
-		t.Errorf("Expected at most 100 records, got %d", len(edges))
+	// We only have 5 records, but the query should be clamped to 1000 max.
+	// Since we have fewer than 1000, we get all 5.
+	if len(edges) > 1000 {
+		t.Errorf("Expected at most 1000 records, got %d", len(edges))
 	}
 
 	// Verify we get all 5 records (since 5 < 100)

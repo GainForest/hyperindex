@@ -21,6 +21,8 @@ export const GET_SETTINGS = gql`
       plcDirectoryUrl
       jetstreamUrl
       oauthSupportedScopes
+      labelerSubscribeEnabled
+      labelerSubscribeUrls
     }
   }
 `;

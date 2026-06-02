@@ -59,7 +59,7 @@ type FieldFilter struct {
 	Field     string      // JSON field name (e.g., "title", "createdAt"). Must be a valid field name.
 	Operator  string      // One of: "eq", "neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith", "isNull"
 	Value     interface{} // The comparison value. For "in", must be []interface{}. For "isNull", must be bool.
-	FieldType string      // Lexicon type: "string", "integer", "number", "boolean", "datetime"
+	FieldType string      // Lexicon type used for SQL casting. Numeric types are cast; complex types are presence-filtered with isNull.
 }
 
 // DIDFilter represents a filter on the did column.
@@ -495,7 +495,10 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 			params = append(params, database.Text(val))
 			placeholderIdx++
 		case "isNull":
-			isNull, _ := f.Value.(bool)
+			isNull, ok := f.Value.(bool)
+			if !ok {
+				return "", nil, fmt.Errorf("isNull filter on field %q must be a boolean, got %T", f.Field, f.Value)
+			}
 			if isNull {
 				conditions = append(conditions, fmt.Sprintf("%s IS NULL", extract))
 			} else {
@@ -517,6 +520,8 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 				params = append(params, toDBValue(v))
 				placeholderIdx++
 			}
+		default:
+			return "", nil, fmt.Errorf("unsupported filter operator %q for field %q", f.Operator, f.Field)
 		}
 	}
 

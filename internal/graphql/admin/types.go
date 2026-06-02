@@ -226,6 +226,14 @@ var SettingsType = graphql.NewObject(graphql.ObjectConfig{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "Space-separated list of supported OAuth scopes",
 		},
+		"labelerSubscribeEnabled": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Boolean),
+			Description: "Whether external labeler websocket subscriptions are enabled for this instance",
+		},
+		"labelerSubscribeUrls": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(graphql.String))),
+			Description: "External labeler websocket URLs configured for subscription",
+		},
 	},
 })
 

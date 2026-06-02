@@ -300,9 +300,39 @@ func TestConfig(t *testing.T) {
 	if config.httpClient == nil || config.httpClient.Timeout != 10*time.Second {
 		t.Fatalf("httpClient timeout = %v, want 10s", config.httpClient)
 	}
-	if len(config.expectations.RequiredNSIDs) != 21 {
-		t.Fatalf("required NSID count = %d, want 21", len(config.expectations.RequiredNSIDs))
+	requiredNSIDs := makeSet(config.expectations.RequiredNSIDs)
+	for _, nsid := range []string{
+		"org.hypercerts.claim.activity",
+		"app.certified.actor.profile",
+	} {
+		if !requiredNSIDs[nsid] {
+			t.Fatalf("required NSIDs missing %q", nsid)
+		}
 	}
+	assertDefaultExpectationsInScope(t, config.expectations)
+}
+
+func assertDefaultExpectationsInScope(t testing.TB, loaded expectations) {
+	t.Helper()
+
+	for _, nsid := range loaded.RequiredNSIDs {
+		assertDefaultExpectationNSIDInScope(t, "requiredNSIDs", nsid)
+	}
+	for nsid := range loaded.TypedQueryFields {
+		assertDefaultExpectationNSIDInScope(t, "typedQueryFields", nsid)
+	}
+	for _, nsid := range loaded.NonRecordNSIDs {
+		assertDefaultExpectationNSIDInScope(t, "nonRecordNSIDs", nsid)
+	}
+}
+
+func assertDefaultExpectationNSIDInScope(t testing.TB, location string, nsid string) {
+	t.Helper()
+
+	if strings.HasPrefix(nsid, "app.certified.") || strings.HasPrefix(nsid, "org.hypercerts.") {
+		return
+	}
+	t.Fatalf("default smoke expectations %s contains out-of-scope NSID %q, want only app.certified.* or org.hypercerts.*", location, nsid)
 }
 
 func TestExpectationsValidationRejectsDataBearingCollectionMissingTypedField(t *testing.T) {

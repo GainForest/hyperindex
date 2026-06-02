@@ -34,6 +34,21 @@ func TestHealthEndpoint(t *testing.T) {
 	smokeLog("✓ Health endpoint is OK")
 }
 
+func TestReadyEndpoint(t *testing.T) {
+	config := loadSmokeConfig(t)
+	response := getRESTObject(t, context.Background(), config, "/ready")
+
+	status, ok := response["status"]
+	if !ok {
+		t.Fatal("REST /ready: missing status field")
+	}
+	if status != "ok" {
+		t.Fatalf("REST /ready: status = %v, want ok", status)
+	}
+
+	smokeLog("✓ Ready endpoint is OK")
+}
+
 func TestStatsEndpoint(t *testing.T) {
 	config := loadSmokeConfig(t)
 	response := getRESTObject(t, context.Background(), config, "/stats")
