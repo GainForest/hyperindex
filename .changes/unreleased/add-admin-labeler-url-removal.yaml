@@ -1,4 +1,0 @@
-kind: added
-body: Add admin settings controls and GraphQL support for removing configured external labeler subscription URLs.
-custom:
-  Affects: operator

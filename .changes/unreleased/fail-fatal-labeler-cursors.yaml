@@ -1,5 +1,0 @@
-kind: changed
-body: >-
-  Fail readiness checks and expose diagnostics when an external labeler subscription reaches a non-retryable cursor error, so operators can reset stuck labeler ingestion instead of serving stale label data silently.
-custom:
-  Affects: operator
