@@ -48,7 +48,7 @@ By default, the suite loads `tests/api-smoke/.env` if the file exists. Copy `tes
 
 By default, the suite loads `tests/api-smoke/expectations.json`. Set `HYPERINDEX_SMOKE_EXPECTATIONS=/path/to/expectations.json` to provide environment-specific expectations for the smoke run.
 
-The default expectations assume the target API started with all listed lexicons loaded. For local full-stack runs, set `LEXICON_DIR` to a directory containing those lexicons or point `HYPERINDEX_SMOKE_EXPECTATIONS` at a smaller environment-specific expectations file.
+The default expectations only assert `app.certified.*` and `org.hypercerts.*` lexicons. They assume the target API started with those lexicons, plus any loader-required helper lexicons, loaded. For local full-stack runs, set `LEXICON_DIR` to a directory containing that lexicon set or point `HYPERINDEX_SMOKE_EXPECTATIONS` at an environment-specific expectations file.
 
 The expectations file is read, decoded, and validated before requests are sent. Expectation load failures include the file path so operators can see which file failed; for example, a missing override reports `read expectations file "/path/to/expectations.json": no such file or directory`.
 
@@ -109,7 +109,7 @@ Because the suite verifies Hyperindex through the public GraphQL API, it cannot 
 
 Public typed GraphQL collection and `ByUri` fields are generated from the lexicons available when the backend starts. After changing which lexicons the backend loads, or after updating smoke expectations for newly loaded lexicons, restart or redeploy the API before expecting schema checks for those typed fields to pass.
 
-Helper, object-only, and query/procedure lexicons listed in `nonRecordNSIDs` are excluded from typed field assertions because the public GraphQL schema should not expose typed collection or `ByUri` query fields for them. Keep that list in `tests/api-smoke/expectations.json` aligned with the loaded lexicon set.
+Helper, object-only, and query/procedure lexicons listed in `nonRecordNSIDs` are excluded from typed field assertions because the public GraphQL schema should not expose typed collection or `ByUri` query fields for them. Keep the default list in `tests/api-smoke/expectations.json` limited to the `app.certified.*` and `org.hypercerts.*` smoke scope.
 
 ## Production data assumptions
 

@@ -1,0 +1,4 @@
+kind: changed
+body: Limit the default API smoke expectations to app.certified and org.hypercerts lexicons so unrelated namespaces are no longer required for smoke runs.
+custom:
+  Affects: operator
