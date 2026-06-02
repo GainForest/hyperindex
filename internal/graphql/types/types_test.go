@@ -574,6 +574,192 @@ func executeGeneratedRecordQuery(
 	return data, result.Errors
 }
 
+func TestObjectBuilder_UnionFieldMalformedValuesReturnNull(t *testing.T) {
+	tests := []struct {
+		name  string
+		image any
+	}{
+		{
+			name: "missing type does not default to first member",
+			image: map[string]any{
+				"uri": "https://example.com/image.png",
+			},
+		},
+		{
+			name: "unknown type does not default to first member",
+			image: map[string]any{
+				"$type": "com.example.defs#missing",
+				"uri":   "https://example.com/image.png",
+			},
+		},
+		{
+			name: "known type missing required fields returns null",
+			image: map[string]any{
+				"$type": "com.example.defs#uri",
+				"href":  "https://example.com/image.png",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotData, gotErrors := executeGeneratedUnionImageQuery(t, tt.image)
+			if len(gotErrors) > 0 {
+				t.Fatalf("union image query returned errors: %v", gotErrors)
+			}
+
+			record, ok := gotData["record"].(map[string]any)
+			if !ok {
+				t.Fatalf("record result = %T, want map[string]any", gotData["record"])
+			}
+			if record["image"] != nil {
+				t.Fatalf("record.image = %#v, want nil", record["image"])
+			}
+		})
+	}
+}
+
+func TestObjectBuilder_RequiredUnionFieldAttachesResolver(t *testing.T) {
+	recordType := generatedUnionImageRecordTypeWithRequired(t, true)
+	field := recordType.Fields()["image"]
+	if field == nil {
+		t.Fatal("image field is missing")
+	}
+	if field.Resolve == nil {
+		t.Fatal("required union field resolver is nil")
+	}
+	if _, ok := field.Type.(*graphql.NonNull); !ok {
+		t.Fatalf("image field type = %T, want *graphql.NonNull", field.Type)
+	}
+}
+
+func TestObjectBuilder_UnionFieldValidTypedValueResolves(t *testing.T) {
+	gotData, gotErrors := executeGeneratedUnionImageQuery(t, map[string]any{
+		"$type": "com.example.defs#smallImage",
+		"image": map[string]any{
+			"ref":      "bafkreiexamplecid",
+			"mimeType": "image/png",
+			"size":     123,
+		},
+	})
+	if len(gotErrors) > 0 {
+		t.Fatalf("union image query returned errors: %v", gotErrors)
+	}
+
+	record, ok := gotData["record"].(map[string]any)
+	if !ok {
+		t.Fatalf("record result = %T, want map[string]any", gotData["record"])
+	}
+	image, ok := record["image"].(map[string]any)
+	if !ok {
+		t.Fatalf("record.image = %T, want map[string]any", record["image"])
+	}
+	if gotTypename := image["__typename"]; gotTypename != "ComExampleDefsSmallImage" {
+		t.Fatalf("record.image.__typename = %v, want ComExampleDefsSmallImage", gotTypename)
+	}
+	blob, ok := image["image"].(map[string]any)
+	if !ok {
+		t.Fatalf("record.image.image = %T, want map[string]any", image["image"])
+	}
+	if gotRef := blob["ref"]; gotRef != "bafkreiexamplecid" {
+		t.Fatalf("record.image.image.ref = %v, want bafkreiexamplecid", gotRef)
+	}
+}
+
+func executeGeneratedUnionImageQuery(t *testing.T, image any) (map[string]any, []gqlerrors.FormattedError) {
+	t.Helper()
+
+	recordType := generatedUnionImageRecordType(t)
+	return executeGeneratedRecordQuery(t, recordType, map[string]any{
+		"uri":   "at://did:example:alice/com.example.test.record/1",
+		"cid":   "bafkreirecordcid",
+		"did":   "did:example:alice",
+		"rkey":  "1",
+		"image": image,
+	}, `{
+		record {
+			image {
+				__typename
+				... on ComExampleDefsUri { uri }
+				... on ComExampleDefsSmallImage { image { ref mimeType size } }
+			}
+		}
+	}`)
+}
+
+func generatedUnionImageRecordType(t *testing.T) *graphql.Object {
+	t.Helper()
+
+	return generatedUnionImageRecordTypeWithRequired(t, false)
+}
+
+func generatedUnionImageRecordTypeWithRequired(t *testing.T, required bool) *graphql.Object {
+	t.Helper()
+
+	registry := lexicon.NewRegistry()
+	registry.Register(&lexicon.Lexicon{
+		ID: "com.example.defs",
+		Defs: lexicon.Defs{
+			Others: map[string]lexicon.Def{
+				"uri": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{
+						Type:           "object",
+						RequiredFields: []string{"uri"},
+						Properties: []lexicon.PropertyEntry{
+							{
+								Name: "uri",
+								Property: lexicon.Property{
+									Type:     lexicon.TypeString,
+									Required: true,
+								},
+							},
+						},
+					},
+				},
+				"smallImage": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{
+						Type:           "object",
+						RequiredFields: []string{"image"},
+						Properties: []lexicon.PropertyEntry{
+							{
+								Name: "image",
+								Property: lexicon.Property{
+									Type:     lexicon.TypeBlob,
+									Required: true,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	mapper := NewMapper()
+	builder := NewObjectBuilder(mapper, registry)
+	recordDef := &lexicon.RecordDef{
+		Type: "record",
+		Key:  "tid",
+		Properties: []lexicon.PropertyEntry{
+			{
+				Name: "image",
+				Property: lexicon.Property{
+					Type:     lexicon.TypeUnion,
+					Required: required,
+					Refs: []string{
+						"com.example.defs#uri",
+						"com.example.defs#smallImage",
+					},
+				},
+			},
+		},
+	}
+
+	return builder.BuildRecordType("com.example.test.record", recordDef)
+}
+
 func TestObjectBuilder_BuildObjectType(t *testing.T) {
 	registry := lexicon.NewRegistry()
 	mapper := NewMapper()

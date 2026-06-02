@@ -1,4 +1,0 @@
-kind: fixed
-body: Fix record-level external label queries so CID-scoped records can hydrate labels without PostgreSQL rejecting the internal lookup key.
-custom:
-  Affects: user

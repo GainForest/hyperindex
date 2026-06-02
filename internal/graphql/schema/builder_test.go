@@ -744,6 +744,73 @@ func TestBuildWhereInput_DidHandledSeparately(t *testing.T) {
 	}
 }
 
+func TestBuildWhereInput_ComplexPropertiesUsePresenceFilter(t *testing.T) {
+	lexiconID := "com.example.whereinput.presence"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "title", Property: lexicon.Property{Type: lexicon.TypeString}},
+					{Name: "createdAt", Property: lexicon.Property{Type: lexicon.TypeString, Format: lexicon.FormatDatetime}},
+					{Name: "contributors", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeString}}},
+					{Name: "image", Property: lexicon.Property{Type: lexicon.TypeBlob}},
+					{Name: "root", Property: lexicon.Property{Type: lexicon.TypeCIDLink}},
+					{Name: "raw", Property: lexicon.Property{Type: lexicon.TypeUnknown}},
+					{Name: "nestedRecord", Property: lexicon.Property{Type: lexicon.TypeRecord}},
+				},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput, ok := builder.whereInputTypes[lexiconID]
+	if !ok {
+		t.Fatal("WhereInput type not found after Build()")
+	}
+
+	inputFields := whereInput.Fields()
+	wantTypes := map[string]string{
+		"did":            "DIDFilterInput",
+		"externalLabels": "ExternalLabelWhereInput",
+		"title":          "StringFilterInput",
+		"createdAt":      "DateTimeFilterInput",
+		"contributors":   "PresenceFilterInput",
+		"image":          "PresenceFilterInput",
+		"root":           "PresenceFilterInput",
+		"raw":            "PresenceFilterInput",
+	}
+	for fieldName, wantType := range wantTypes {
+		field, exists := inputFields[fieldName]
+		if !exists {
+			t.Errorf("WhereInput missing field %q", fieldName)
+			continue
+		}
+		if gotType := field.Type.String(); gotType != wantType {
+			t.Errorf("WhereInput field %q type = %q, want %q", fieldName, gotType, wantType)
+		}
+	}
+
+	if _, exists := inputFields["nestedRecord"]; exists {
+		t.Error("record-typed property should not be filterable")
+	}
+	if imageField, exists := inputFields["image"]; exists {
+		if got := imageField.Description(); !strings.Contains(got, "nested values are not filterable") {
+			t.Errorf("presence field description = %q, want nested-filtering limitation", got)
+		}
+	}
+}
+
 // TestSortFieldValueForRecord verifies that sortFieldValueForRecord extracts the
 // correct sort field value from a record for cursor building.
 func TestSortFieldValueForRecord(t *testing.T) {

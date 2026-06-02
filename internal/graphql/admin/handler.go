@@ -9,6 +9,7 @@ import (
 
 	"github.com/graphql-go/graphql"
 
+	"github.com/GainForest/hyperindex/internal/logsafe"
 	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
@@ -55,6 +56,51 @@ func isValidAdminAPIKey(providedKey, expectedKey string) bool {
 	return subtle.ConstantTimeCompare([]byte(providedKey), []byte(expectedKey)) == 1
 }
 
+func logSafeMutationVariables(variables map[string]interface{}) map[string]interface{} {
+	if variables == nil {
+		return nil
+	}
+
+	redacted := make(map[string]interface{}, len(variables))
+	for key, value := range variables {
+		if isURLVariableName(key) {
+			redacted[key] = logSafeURLVariableValue(value)
+			continue
+		}
+
+		redacted[key] = value
+	}
+
+	return redacted
+}
+
+func isURLVariableName(name string) bool {
+	lowerName := strings.ToLower(name)
+	return lowerName == "url" || strings.HasSuffix(lowerName, "url") || strings.HasSuffix(lowerName, "urls")
+}
+
+func logSafeURLVariableValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case string:
+		return logsafe.URL(typed)
+	case []string:
+		return logsafe.URLs(typed)
+	case []interface{}:
+		redacted := make([]interface{}, len(typed))
+		for i, item := range typed {
+			if rawURL, ok := item.(string); ok {
+				redacted[i] = logsafe.URL(rawURL)
+				continue
+			}
+
+			redacted[i] = item
+		}
+		return redacted
+	default:
+		return value
+	}
+}
+
 // ServeHTTP handles admin GraphQL HTTP requests.
 // CORS is handled by the router-level middleware; not duplicated here.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +123,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Log mutation requests
 	if strings.Contains(params.Query, "mutation") {
-		slog.Info("[admin] Mutation request", "operation", params.OperationName, "variables", params.Variables)
+		slog.Info("[admin] Mutation request", "operation", params.OperationName, "variables", logSafeMutationVariables(params.Variables))
 	}
 
 	// Get authentication info from context (set by middleware) or X-User-DID header

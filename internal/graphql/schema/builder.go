@@ -190,8 +190,9 @@ var externalLabelWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
 })
 
 // buildWhereInputTypes builds per-collection WhereInput GraphQL InputObject types.
-// For each collection lexicon, it creates a WhereInput type with a field for each
-// filterable property (string, integer, number, boolean, datetime) plus metadata fields.
+// For each collection lexicon, it creates a WhereInput type with scalar
+// operators for scalar properties, presence-only filters for complex top-level
+// properties, and explicit metadata filters.
 func (b *Builder) buildWhereInputTypes() {
 	for _, lex := range b.registry.GetCollectionLexicons() {
 		if lex.Defs.Main == nil {
@@ -213,7 +214,7 @@ func (b *Builder) buildWhereInputTypes() {
 			Description: "Filter records by locally ingested external labels before pagination.",
 		}
 
-		// Add a field for each filterable property
+		// Add a field for each filterable property.
 		for _, entry := range lex.Defs.Main.Properties {
 			if entry.Name == "did" {
 				continue // did is handled separately as a metadata filter
@@ -221,13 +222,18 @@ func (b *Builder) buildWhereInputTypes() {
 			if types.ReservedRecordFields[entry.Name] {
 				continue // Skip properties that collide with reserved metadata fields
 			}
-			filterInput := types.FilterInputForLexiconType(entry.Property.Type, entry.Property.Format)
+			filterInput := types.FilterInputForLexiconProperty(entry.Property.Type, entry.Property.Format)
 			if filterInput == nil {
-				continue // Non-filterable type (array, ref, union, blob, unknown, etc.)
+				continue // Non-filterable type, such as record.
+			}
+
+			description := fmt.Sprintf("Filter by %s", entry.Name)
+			if filterInput == types.PresenceFilterInput {
+				description = fmt.Sprintf("Filter by whether %s is missing/null or present; nested values are not filterable", entry.Name)
 			}
 			fields[entry.Name] = &graphql.InputObjectFieldConfig{
 				Type:        filterInput,
-				Description: fmt.Sprintf("Filter by %s", entry.Name),
+				Description: description,
 			}
 		}
 
@@ -454,7 +460,7 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			},
 			"first": &graphql.ArgumentConfig{
 				Type:        graphql.Int,
-				Description: "Number of records to return (default 20, max 100)",
+				Description: "Number of records to return (default 20, max 1000)",
 			},
 			"after": &graphql.ArgumentConfig{
 				Type:        graphql.String,

@@ -1,4 +1,0 @@
-kind: added
-body: Add an opt-in API smoke write-through check so operators can verify ATProto create, update, and delete ingestion for Certified profiles and Hypercert activity claims.
-custom:
-  Affects: operator

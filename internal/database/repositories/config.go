@@ -18,6 +18,10 @@ const (
 	DefaultOAuthSupportedScopes = "atproto transition:generic"
 )
 
+// ConfigKeyLabelerSubscribeURLs stores the comma-separated external labeler
+// websocket URLs managed through the admin UI.
+const ConfigKeyLabelerSubscribeURLs = "labeler_subscribe_urls"
+
 // ConfigRepository handles key-value configuration persistence.
 type ConfigRepository struct {
 	db                   database.Executor

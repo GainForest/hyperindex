@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -25,7 +26,28 @@ const (
 	defaultReconnectInitial = time.Second
 	defaultReconnectCeiling = 60 * time.Second
 	defaultReadLimit        = 4 << 20 // 4 MiB
+
+	fatalCursorFuture   = "FutureCursor"
+	fatalCursorOutdated = "OutdatedCursor"
 )
+
+// FatalCursorError describes a non-retryable labeler cursor error. These
+// errors mean the saved cursor cannot be used with the current labeler stream
+// and require an operator reset instead of another reconnect attempt.
+type FatalCursorError struct {
+	Code    string
+	Message string
+}
+
+func (e *FatalCursorError) Error() string {
+	if e == nil {
+		return "fatal cursor error"
+	}
+	if e.Message == "" {
+		return e.Code
+	}
+	return e.Code + ": " + e.Message
+}
 
 // Config configures external labeler websocket subscriptions.
 type Config struct {
@@ -35,15 +57,27 @@ type Config struct {
 	ReadLimit    int64
 }
 
+type subscriptionRepository interface {
+	EnsureState(context.Context, string) (*repositories.LabelSubscriptionState, error)
+	UpdateConnected(context.Context, string) error
+	UpdateError(context.Context, string, string) error
+	PersistEvent(context.Context, string, int64, []repositories.ExternalLabelInput) error
+	MarkFatalCursor(context.Context, string, string, string) error
+}
+
 // Subscriber manages one external labeler websocket subscription per URL.
 type Subscriber struct {
-	repo   *repositories.ExternalLabelsRepository
+	repo   subscriptionRepository
 	cfg    Config
 	dialer *websocket.Dialer
 }
 
 // NewSubscriber creates a labeler subscriber.
 func NewSubscriber(repo *repositories.ExternalLabelsRepository, cfg Config) *Subscriber {
+	return newSubscriber(repo, cfg)
+}
+
+func newSubscriber(repo subscriptionRepository, cfg Config) *Subscriber {
 	cfg = normalizeConfig(cfg)
 	dialer := *websocket.DefaultDialer
 	return &Subscriber{
@@ -67,6 +101,12 @@ func (s *Subscriber) runSubscription(ctx context.Context, subscriptionURL string
 	for {
 		err := s.runOnce(ctx, subscriptionURL)
 		if ctx.Err() != nil {
+			return
+		}
+
+		var fatalErr *FatalCursorError
+		if errors.As(err, &fatalErr) {
+			slog.Error("Labeler subscription stopped after fatal cursor error", "url", logsafe.URL(subscriptionURL), "error_code", fatalErr.Code, "error", err)
 			return
 		}
 
@@ -103,6 +143,14 @@ func (s *Subscriber) runOnce(ctx context.Context, subscriptionURL string) error 
 	state, err := s.repo.EnsureState(ctx, subscriptionURL)
 	if err != nil {
 		return fmt.Errorf("ensure labeler subscription state: %w", err)
+	}
+	if state.IsFatal() {
+		code := repositories.FatalCursorCode(state.LastError)
+		if code == "" {
+			code = "FatalCursor"
+		}
+		fatal := &FatalCursorError{Code: code, Message: "subscription is marked fatal. Reset subscription cursor and replay labels before labels can resume"}
+		return fmt.Errorf("labeler subscription requires reset: %w", fatal)
 	}
 
 	streamURL, err := buildSubscribeURL(subscriptionURL, state.LastSeq)
@@ -153,6 +201,10 @@ func (s *Subscriber) callbacks(ctx context.Context, subscriptionURL string) *eve
 			return s.handleInfo(ctx, subscriptionURL, evt.Name, evt.Message)
 		},
 		Error: func(evt *events.ErrorFrame) error {
+			if evt.Error == fatalCursorFuture {
+				return s.recordFatalCursorAndReturnError(ctx, subscriptionURL, fatalCursorFuture, evt.Message)
+			}
+
 			errText := evt.Error
 			if evt.Message != "" {
 				errText += ": " + evt.Message
@@ -168,12 +220,8 @@ func (s *Subscriber) handleInfo(ctx context.Context, subscriptionURL, name strin
 		messageText = *message
 	}
 
-	if name == "OutdatedCursor" {
-		errText := "labeler stream info: OutdatedCursor"
-		if messageText != "" {
-			errText += ": " + messageText
-		}
-		return s.recordAndReturnError(ctx, subscriptionURL, fmt.Errorf("%s", errText))
+	if name == fatalCursorOutdated {
+		return s.recordFatalCursorAndReturnError(ctx, subscriptionURL, fatalCursorOutdated, messageText)
 	}
 
 	slog.Info("Labeler stream info", "url", logsafe.URL(subscriptionURL), "name", name, "message", messageText)
@@ -185,6 +233,30 @@ func (s *Subscriber) recordAndReturnError(ctx context.Context, subscriptionURL s
 		slog.Warn("Failed to record labeler subscription error", "url", logsafe.URL(subscriptionURL), "error", updateErr)
 	}
 	return err
+}
+
+func (s *Subscriber) recordFatalCursorAndReturnError(ctx context.Context, subscriptionURL, code, message string) error {
+	fatalErr := &FatalCursorError{Code: code, Message: fatalCursorResetMessage(code, message)}
+	if updateErr := s.repo.MarkFatalCursor(ctx, subscriptionURL, code, fatalErr.Message); updateErr != nil {
+		slog.Warn("Failed to record fatal labeler subscription error", "url", logsafe.URL(subscriptionURL), "error", updateErr)
+		return fmt.Errorf("record fatal labeler subscription error %s: %w", code, updateErr)
+	}
+	return fatalErr
+}
+
+func fatalCursorResetMessage(code, message string) string {
+	base := "Reset subscription cursor and replay labels."
+	message = strings.TrimSpace(message)
+	if message == "" {
+		if code == fatalCursorFuture {
+			return "Cursor is in the future. " + base
+		}
+		return "Cursor is outside retained history. " + base
+	}
+	if !strings.HasSuffix(message, ".") && !strings.HasSuffix(message, "!") && !strings.HasSuffix(message, "?") {
+		message += "."
+	}
+	return message + " " + base
 }
 
 // ConvertLabels converts Indigo label stream labels into repository inputs.

@@ -110,6 +110,22 @@ func TestExecutor_JSONExtract(t *testing.T) {
 	}
 }
 
+func TestExecutor_JSONExtract_InvalidFieldName(t *testing.T) {
+	e := &Executor{}
+
+	invalidFields := []string{"quoted'field", "dotted.field", "semi;colon", "1leadingDigit"}
+	for _, field := range invalidFields {
+		t.Run(field, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("JSONExtract(%q) did not panic for invalid field name", field)
+				}
+			}()
+			_ = e.JSONExtract("json", field)
+		})
+	}
+}
+
 func TestExecutor_JSONExtractPath(t *testing.T) {
 	e := &Executor{}
 
@@ -151,6 +167,22 @@ func TestExecutor_JSONExtractPath(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("Executor.JSONExtractPath(%q, %v) = %q, want %q", tt.column, tt.path, got, tt.want)
 			}
+		})
+	}
+}
+
+func TestExecutor_JSONExtractPath_InvalidFieldName(t *testing.T) {
+	e := &Executor{}
+
+	invalidFields := []string{"quoted'field", "dotted.field", "semi;colon", "1leadingDigit"}
+	for _, field := range invalidFields {
+		t.Run(field, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("JSONExtractPath(%q) did not panic for invalid field name", field)
+				}
+			}()
+			_ = e.JSONExtractPath("json", []string{"safe", field})
 		})
 	}
 }

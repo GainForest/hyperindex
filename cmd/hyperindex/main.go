@@ -78,7 +78,7 @@ type backgroundServices struct {
 	jsCancel           context.CancelFunc
 	tapConsumer        *tap.Consumer
 	tapCancel          context.CancelFunc
-	tapAdminClient     *tap.AdminClient // reused for health checks; nil when TAP_ENABLED=false
+	tapAdminClient     *tap.AdminClient // reused for stats checks; nil when TAP_ENABLED=false
 	labelerCancel      context.CancelFunc
 }
 
@@ -249,9 +249,9 @@ func populateActivityIfEmpty(ctx context.Context, svc *services) {
 }
 
 // setupRouter creates the chi router with middleware and basic HTTP endpoints
-// (health, stats, root info, XRPC placeholder).
-// bg is passed so that health/stats handlers can access the Tap admin client
-// once it is wired up by startTap (after setupRouter returns).
+// (health, readiness, stats, root info, XRPC placeholder).
+// bg is passed so that stats handlers can access the Tap admin client once it
+// is wired up by startTap (after setupRouter returns).
 func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -275,18 +275,47 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 		AllowAdminAPIKeyAuth: allowAdminAPIKeyAuth,
 	}))
 
-	// Health check — reflects hyperindex's own health only.
-	// Tap liveness is intentionally excluded: if Tap is temporarily unreachable
-	// (restart, deploy, network blip) hyperindex itself is still healthy and
-	// should not be restarted by Railway's health check. Tap status is
-	// available via GET /stats for observability.
+	// Health check reports process liveness only. Dependency readiness and
+	// deterministic labeler cursor failures are exposed via GET /ready.
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]string{
+		payload := map[string]any{
 			"status": "ok",
 			"time":   time.Now().UTC().Format(time.RFC3339),
-		})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(payload)
+	})
+
+	// Readiness check reports whether dependencies that should gate traffic are
+	// currently usable. Detailed non-blocking observability lives in GET /stats.
+	r.Get("/ready", func(w http.ResponseWriter, req *http.Request) {
+		payload := map[string]any{
+			"status": "ok",
+			"time":   time.Now().UTC().Format(time.RFC3339),
+		}
+		statusCode := http.StatusOK
+
+		if err := databaseReady(req.Context(), svc); err != nil {
+			statusCode = http.StatusServiceUnavailable
+			payload["status"] = "not_ready"
+			payload["databaseError"] = err.Error()
+		} else {
+			labelerDiagnostics, labelerFatal, labelerErr := configuredLabelerDiagnostics(req.Context(), cfg, svc.config, svc.externalLabels)
+			if labelerErr != nil {
+				statusCode = http.StatusServiceUnavailable
+				payload["status"] = "not_ready"
+				payload["labelersError"] = labelerErr.Error()
+			} else if labelerFatal {
+				statusCode = http.StatusServiceUnavailable
+				payload["status"] = "not_ready"
+				payload["labelers"] = labelerDiagnostics
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(statusCode)
+		_ = json.NewEncoder(w).Encode(payload)
 	})
 
 	// Stats endpoint
@@ -335,6 +364,16 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 			stats["tap"] = tapInfo
 		}
 
+		if cfg.LabelerSubscribeEnabled {
+			labelerDiagnostics, _, err := configuredLabelerDiagnostics(reqCtx, cfg, svc.config, svc.externalLabels)
+			if err != nil {
+				stats["labelers"] = []map[string]any{}
+				stats["labelersError"] = err.Error()
+			} else {
+				stats["labelers"] = labelerDiagnostics
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(stats)
 	})
@@ -365,6 +404,22 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 	return r
 }
 
+func databaseReady(ctx context.Context, svc *services) error {
+	if svc == nil || svc.db == nil {
+		return errors.New("database executor is unavailable")
+	}
+
+	db := svc.db.DB()
+	if db == nil {
+		return errors.New("database connection is unavailable")
+	}
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping database: %w", err)
+	}
+
+	return nil
+}
+
 func applyTapSidecarHealth(
 	reqCtx context.Context,
 	tapInfo map[string]any,
@@ -381,6 +436,78 @@ func applyTapSidecarHealth(
 	}
 
 	tapInfo["sidecar"] = "ok"
+}
+
+func configuredLabelerSubscribeURLs(ctx context.Context, cfg *config.Config, repo *repositories.ConfigRepository) []string {
+	if cfg == nil {
+		return nil
+	}
+	if repo != nil {
+		if value, err := repo.Get(ctx, repositories.ConfigKeyLabelerSubscribeURLs); err == nil {
+			return config.ParseLabelerSubscribeURLs(value)
+		}
+	}
+
+	return cfg.LabelerSubscribeURLList()
+}
+
+func configuredLabelerDiagnostics(ctx context.Context, cfg *config.Config, configRepo *repositories.ConfigRepository, repo *repositories.ExternalLabelsRepository) ([]map[string]any, bool, error) {
+	if cfg == nil || !cfg.LabelerSubscribeEnabled {
+		return nil, false, nil
+	}
+
+	urls := configuredLabelerSubscribeURLs(ctx, cfg, configRepo)
+	if len(urls) == 0 {
+		return nil, false, nil
+	}
+	if repo == nil {
+		return nil, false, fmt.Errorf("external label subscriptions are enabled but the external label repository is unavailable")
+	}
+
+	states, err := repo.ListStates(ctx, urls)
+	if err != nil {
+		return nil, false, fmt.Errorf("list external label subscription states: %w", err)
+	}
+
+	diagnostics := make([]map[string]any, 0, len(states))
+	fatal := false
+	for _, state := range states {
+		if state.IsFatal() {
+			fatal = true
+		}
+		diagnostics = append(diagnostics, labelerDiagnostic(state))
+	}
+
+	return diagnostics, fatal, nil
+}
+
+func labelerDiagnostic(state repositories.LabelSubscriptionState) map[string]any {
+	diagnostic := map[string]any{
+		"url":     state.URL,
+		"status":  state.Status(),
+		"lastSeq": state.LastSeq,
+	}
+
+	if code := repositories.FatalCursorCode(state.LastError); code != "" {
+		diagnostic["lastErrorCode"] = code
+	}
+	if state.LastError != nil {
+		diagnostic["lastError"] = *state.LastError
+	}
+	if state.LastConnectedAt != nil {
+		diagnostic["lastConnectedAt"] = state.LastConnectedAt.UTC().Format(time.RFC3339)
+	}
+	if state.LastEventAt != nil {
+		diagnostic["lastEventAt"] = state.LastEventAt.UTC().Format(time.RFC3339)
+	}
+	if !state.CreatedAt.IsZero() {
+		diagnostic["createdAt"] = state.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if !state.UpdatedAt.IsZero() {
+		diagnostic["updatedAt"] = state.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+
+	return diagnostic
 }
 
 // setupOAuth registers all OAuth 2.0 endpoints (discovery, authorization flow,
@@ -481,6 +608,8 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 		slog.Error("Failed to create admin GraphQL handler", "error", err)
 		return nil
 	}
+
+	adminHandler.Resolver().SetLabelerSubscribeConfig(cfg.LabelerSubscribeEnabled, cfg.LabelerSubscribeURLs)
 
 	// Wire up backfill callbacks for the admin UI
 	configureBackfillCallbacks(adminHandler, cfg, svc)
@@ -685,7 +814,7 @@ func startWorkers(svc *services, bg *backgroundServices) {
 }
 
 func startLabelerSubscribers(cfg *config.Config, svc *services, bg *backgroundServices) {
-	urls := cfg.LabelerSubscribeURLList()
+	urls := configuredLabelerSubscribeURLs(context.Background(), cfg, svc.config)
 	if !cfg.LabelerSubscribeEnabled || len(urls) == 0 {
 		if cfg.LabelerSubscribeEnabled && len(urls) == 0 {
 			slog.Info("Labeler subscriptions disabled (LABELER_SUBSCRIBE_URLS empty)")
@@ -857,7 +986,7 @@ func startTap(
 		}
 	}()
 
-	// Create a shared admin client for health checks and backfill callbacks.
+	// Create a shared admin client for stats checks and backfill callbacks.
 	tapHTTPURL := strings.Replace(strings.Replace(tapURL, "ws://", "http://", 1), "wss://", "https://", 1)
 	adminClient := tap.NewAdminClient(tapHTTPURL, cfg.TapAdminPassword)
 	bg.tapAdminClient = adminClient
