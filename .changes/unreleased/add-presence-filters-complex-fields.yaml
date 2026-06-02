@@ -1,4 +1,4 @@
 kind: added
-body: Add presence-only GraphQL filters for complex top-level lexicon fields.
+body: Add presence-only GraphQL filters for complex top-level lexicon fields and make malformed typed union values resolve to null instead of surfacing GraphQL errors.
 custom:
   Affects: user

@@ -710,13 +710,13 @@ func TestFilterSort_TotalCountOmitted(t *testing.T) {
 	}
 }
 
-// TestFilterSort_MaxPageSize tests that first: 500 is clamped to 100.
+// TestFilterSort_MaxPageSize tests that requests above the max page size are clamped.
 func TestFilterSort_MaxPageSize(t *testing.T) {
 	env := setupFilterTestEnv(t)
 
-	// Insert enough records to test clamping (we have 5, so just verify we get at most 100)
+	// Insert enough records to test clamping (we have 5, so just verify we get at most 1000).
 	query := `{
-		testCollection(first: 500) {
+		testCollection(first: 1500) {
 			edges {
 				node { uri }
 			}
@@ -726,10 +726,10 @@ func TestFilterSort_MaxPageSize(t *testing.T) {
 	result := env.runQuery(query)
 	edges := getEdges(t, result, "testCollection")
 
-	// We only have 5 records, but the query should be clamped to 100 max
-	// Since we have fewer than 100, we get all 5
-	if len(edges) > 100 {
-		t.Errorf("Expected at most 100 records, got %d", len(edges))
+	// We only have 5 records, but the query should be clamped to 1000 max.
+	// Since we have fewer than 1000, we get all 5.
+	if len(edges) > 1000 {
+		t.Errorf("Expected at most 1000 records, got %d", len(edges))
 	}
 
 	// Verify we get all 5 records (since 5 < 100)

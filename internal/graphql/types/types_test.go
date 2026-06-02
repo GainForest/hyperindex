@@ -619,6 +619,20 @@ func TestObjectBuilder_UnionFieldMalformedValuesReturnNull(t *testing.T) {
 	}
 }
 
+func TestObjectBuilder_RequiredUnionFieldAttachesResolver(t *testing.T) {
+	recordType := generatedUnionImageRecordTypeWithRequired(t, true)
+	field := recordType.Fields()["image"]
+	if field == nil {
+		t.Fatal("image field is missing")
+	}
+	if field.Resolve == nil {
+		t.Fatal("required union field resolver is nil")
+	}
+	if _, ok := field.Type.(*graphql.NonNull); !ok {
+		t.Fatalf("image field type = %T, want *graphql.NonNull", field.Type)
+	}
+}
+
 func TestObjectBuilder_UnionFieldValidTypedValueResolves(t *testing.T) {
 	gotData, gotErrors := executeGeneratedUnionImageQuery(t, map[string]any{
 		"$type": "com.example.defs#smallImage",
@@ -676,6 +690,12 @@ func executeGeneratedUnionImageQuery(t *testing.T, image any) (map[string]any, [
 func generatedUnionImageRecordType(t *testing.T) *graphql.Object {
 	t.Helper()
 
+	return generatedUnionImageRecordTypeWithRequired(t, false)
+}
+
+func generatedUnionImageRecordTypeWithRequired(t *testing.T, required bool) *graphql.Object {
+	t.Helper()
+
 	registry := lexicon.NewRegistry()
 	registry.Register(&lexicon.Lexicon{
 		ID: "com.example.defs",
@@ -726,7 +746,8 @@ func generatedUnionImageRecordType(t *testing.T) *graphql.Object {
 			{
 				Name: "image",
 				Property: lexicon.Property{
-					Type: lexicon.TypeUnion,
+					Type:     lexicon.TypeUnion,
+					Required: required,
 					Refs: []string{
 						"com.example.defs#uri",
 						"com.example.defs#smallImage",

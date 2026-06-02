@@ -543,7 +543,7 @@ query {
 |----------|------|----------|-------------|
 | \`query\` | String! | Yes | Search text (minimum 3 characters) |
 | \`collection\` | String | No | Restrict search to a collection NSID |
-| \`first\` | Int | No | Page size (default 20, max 100) |
+| \`first\` | Int | No | Page size (default 20, max 1000) |
 | \`after\` | String | No | Cursor for pagination |
 
 Search is case-insensitive and matches against the full JSON content of records.
@@ -563,7 +563,7 @@ Hyperindex uses Relay-style cursor-based pagination.
 | \`last\` | Int | Number of items from the end |
 | \`before\` | String | Cursor to start before |
 
-**Note:** The maximum page size is 100. Requests with \`first\` or \`last\` greater than 100 are silently clamped. You cannot use \`first\`/\`after\` and \`last\`/\`before\` simultaneously — doing so returns a GraphQL error.
+**Note:** The maximum page size is 1000. Requests with \`first\` or \`last\` greater than 1000 are silently clamped. You cannot use \`first\`/\`after\` and \`last\`/\`before\` simultaneously — doing so returns a GraphQL error.
 
 ### totalCount
 

@@ -187,9 +187,7 @@ func (b *ObjectBuilder) buildField(contextLexiconID, name string, prop *lexicon.
 	}
 
 	if prop.Type == lexicon.TypeUnion && !unionHasPrimitives && len(unionMembers) > 0 {
-		if _, ok := fieldType.(*graphql.Union); ok {
-			field.Resolve = resolveUnionField(name, unionMembers)
-		}
+		field.Resolve = resolveUnionField(name, unionMembers)
 	}
 	if prop.Type == lexicon.TypeCIDLink {
 		field.Resolve = resolveCIDLinkField(name)

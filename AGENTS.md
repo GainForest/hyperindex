@@ -108,6 +108,7 @@ Run verification based on what changed.
 - Usually skip fragments for:
   - docs-only changes
   - tests-only changes
+  - API smoke test or smoke expectation changes
   - internal refactors with no externally meaningful behavior change
 - Prefer `make changie-new`.
 - When writing the fragment, use the local **`writing-changie`** skill.
