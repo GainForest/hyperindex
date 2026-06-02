@@ -448,6 +448,8 @@ Presence filtering is top-level only. It does not support nested filters such as
 
 \`isNull: true\` matches records where the top-level JSON field is missing or explicitly \`null\`. \`isNull: false\` matches records where the field is present and non-null. Empty arrays \`[]\`, empty objects \`{}\`, and empty strings \`""\` count as present.
 
+Presence filtering does not guarantee a complex value conforms to the generated typed GraphQL field. Nullable union fields with unknown \`$type\` values or missing required top-level fields resolve to \`null\` instead of being coerced to another union member.
+
 The generic \`records(collection: ...)\` query is unchanged and does not accept generated \`where\` filters.
 
 To discover generated where inputs, introspect the collection input object with \`inputFields\`:

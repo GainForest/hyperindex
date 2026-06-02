@@ -156,12 +156,15 @@ func (b *ObjectBuilder) buildRecordFields(lexiconID string, def *lexicon.RecordD
 // buildField builds a single GraphQL field from a property.
 func (b *ObjectBuilder) buildField(contextLexiconID, name string, prop *lexicon.Property, required bool) *graphql.Field {
 	var fieldType graphql.Output
+	var unionMembers []unionMember
+	var unionHasPrimitives bool
 
 	switch prop.Type {
 	case lexicon.TypeRef:
 		fieldType = b.resolveRefType(contextLexiconID, prop.Ref)
 	case lexicon.TypeUnion:
-		fieldType = b.buildUnionType(contextLexiconID, name, prop.Refs)
+		unionMembers, unionHasPrimitives = b.resolveUnionMembers(contextLexiconID, prop.Refs)
+		fieldType = b.buildUnionTypeFromMembers(contextLexiconID, name, unionMembers, unionHasPrimitives)
 	case lexicon.TypeArray:
 		itemType := b.resolveArrayItemType(contextLexiconID, prop.Items)
 		fieldType = graphql.NewList(graphql.NewNonNull(itemType))
@@ -183,6 +186,11 @@ func (b *ObjectBuilder) buildField(contextLexiconID, name string, prop *lexicon.
 		Description: prop.Description,
 	}
 
+	if prop.Type == lexicon.TypeUnion && !unionHasPrimitives && len(unionMembers) > 0 {
+		if _, ok := fieldType.(*graphql.Union); ok {
+			field.Resolve = resolveUnionField(name, unionMembers)
+		}
+	}
 	if prop.Type == lexicon.TypeCIDLink {
 		field.Resolve = resolveCIDLinkField(name)
 	}
@@ -247,6 +255,84 @@ func sourceMapValue(source any, name string) any {
 	return sourceMap[name]
 }
 
+type unionMember struct {
+	ref        string
+	objectType *graphql.Object
+	objectDef  *lexicon.ObjectDef
+	recordDef  *lexicon.RecordDef
+}
+
+func resolveUnionField(name string, members []unionMember) graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		value := sourceMapValue(p.Source, name)
+		if value == nil {
+			return nil, nil
+		}
+
+		if resolveUnionMemberForValue(value, members) == nil {
+			return nil, nil
+		}
+
+		return value, nil
+	}
+}
+
+func resolveUnionMemberForValue(value any, members []unionMember) *unionMember {
+	data, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	typeVal, ok := data["$type"].(string)
+	if !ok || typeVal == "" {
+		return nil
+	}
+
+	for i := range members {
+		if !members[i].matchesType(typeVal) {
+			continue
+		}
+		if !members[i].hasRequiredFields(data) {
+			return nil
+		}
+
+		return &members[i]
+	}
+
+	return nil
+}
+
+func (m unionMember) matchesType(typeVal string) bool {
+	return typeVal == m.ref || refToTypeName(typeVal) == m.objectType.Name()
+}
+
+func (m unionMember) hasRequiredFields(data map[string]any) bool {
+	for _, fieldName := range m.requiredFieldNames() {
+		value, ok := data[fieldName]
+		if !ok || value == nil {
+			return false
+		}
+	}
+
+	return true
+}
+
+func (m unionMember) requiredFieldNames() []string {
+	if m.objectDef != nil {
+		return m.objectDef.RequiredFields
+	}
+	if m.recordDef == nil {
+		return nil
+	}
+
+	required := m.recordDef.RequiredProperties()
+	fieldNames := make([]string, 0, len(required))
+	for _, entry := range required {
+		fieldNames = append(fieldNames, entry.Name)
+	}
+	return fieldNames
+}
+
 // resolveRefType resolves a ref to a GraphQL type.
 func (b *ObjectBuilder) resolveRefType(contextLexiconID, ref string) graphql.Output {
 	if ref == "" {
@@ -289,9 +375,14 @@ func (b *ObjectBuilder) buildUnionType(contextLexiconID, fieldName string, refs 
 		return graphql.String
 	}
 
+	members, hasPrimitives := b.resolveUnionMembers(contextLexiconID, refs)
+	return b.buildUnionTypeFromMembers(contextLexiconID, fieldName, members, hasPrimitives)
+}
+
+func (b *ObjectBuilder) resolveUnionMembers(contextLexiconID string, refs []string) ([]unionMember, bool) {
 	// Handle string-type refs (primitive unions)
-	// These are refs to primitive types like "contributorIdentity" which is just a string
-	var objectTypes []*graphql.Object
+	// These are refs to primitive types like "contributorIdentity" which is just a string.
+	members := make([]unionMember, 0, len(refs))
 	hasPrimitives := false
 
 	for _, ref := range refs {
@@ -302,7 +393,7 @@ func (b *ObjectBuilder) buildUnionType(contextLexiconID, fieldName string, refs 
 
 		resolved, ok := b.registry.ResolveRef(ref, contextLexiconID)
 		if !ok {
-			// Check if it's a primitive type ref (like #contributorIdentity -> string)
+			// Check if it's a primitive type ref (like #contributorIdentity -> string).
 			hasPrimitives = true
 			continue
 		}
@@ -310,64 +401,69 @@ func (b *ObjectBuilder) buildUnionType(contextLexiconID, fieldName string, refs 
 		switch def := resolved.(type) {
 		case *lexicon.ObjectDef:
 			objType := b.BuildObjectType(fullRef, def)
-			objectTypes = append(objectTypes, objType)
+			members = append(members, unionMember{
+				ref:        fullRef,
+				objectType: objType,
+				objectDef:  def,
+			})
 		case *lexicon.RecordDef:
 			resolvedLexiconID := lexicon.IDFromRef(fullRef)
 			objType := b.BuildRecordType(resolvedLexiconID, def)
-			objectTypes = append(objectTypes, objType)
+			members = append(members, unionMember{
+				ref:        fullRef,
+				objectType: objType,
+				recordDef:  def,
+			})
 		default:
 			hasPrimitives = true
 		}
 	}
 
-	// If we only have primitives, return JSON scalar
-	if len(objectTypes) == 0 {
+	return members, hasPrimitives
+}
+
+func (b *ObjectBuilder) buildUnionTypeFromMembers(
+	contextLexiconID string,
+	fieldName string,
+	members []unionMember,
+	hasPrimitives bool,
+) graphql.Output {
+	// If we only have primitives, return JSON scalar.
+	if len(members) == 0 {
 		return JSONScalar
 	}
 
-	// If we have a mix, use JSON as fallback for now
-	// (proper handling would need interface types)
+	// If we have a mix, use JSON as fallback for now.
+	// Proper handling would need interface types.
 	if hasPrimitives {
 		return JSONScalar
 	}
 
-	// Create union name from context and field
+	// Create union name from context and field.
 	unionName := lexicon.ToTypeName(contextLexiconID) + capitalizeFirst(fieldName) + "Union"
 
-	// Check if union already exists
+	// Check if union already exists.
 	if u, ok := b.mapper.GetUnionType(unionName); ok {
 		return u
 	}
 
-	// Build union type
+	objectTypes := make([]*graphql.Object, 0, len(members))
+	for _, member := range members {
+		objectTypes = append(objectTypes, member.objectType)
+	}
+
+	// Build union type.
 	union := graphql.NewUnion(graphql.UnionConfig{
 		Name:        unionName,
 		Description: fmt.Sprintf("Union type for %s.%s", contextLexiconID, fieldName),
 		Types:       objectTypes,
 		ResolveType: func(p graphql.ResolveTypeParams) *graphql.Object {
-			// Resolve based on $type field in the data
-			data, ok := p.Value.(map[string]interface{})
-			if !ok {
-				if len(objectTypes) > 0 {
-					return objectTypes[0]
-				}
+			member := resolveUnionMemberForValue(p.Value, members)
+			if member == nil {
 				return nil
 			}
-			typeVal, hasType := data["$type"].(string)
-			if hasType {
-				// Find matching object type
-				for _, objType := range objectTypes {
-					// Match by type name
-					if refToTypeName(typeVal) == objType.Name() {
-						return objType
-					}
-				}
-			}
-			// Default to first type
-			if len(objectTypes) > 0 {
-				return objectTypes[0]
-			}
-			return nil
+
+			return member.objectType
 		},
 	})
 

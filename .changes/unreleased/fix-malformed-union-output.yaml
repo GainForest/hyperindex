@@ -1,0 +1,4 @@
+kind: fixed
+body: Fix typed GraphQL union fields so malformed values resolve to null instead of producing errors by defaulting to the wrong union member.
+custom:
+  Affects: user
