@@ -2,6 +2,7 @@ package repositories_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -383,6 +384,76 @@ func TestExternalLabelsRepositoryGetBySubjectsReturnsBatchedActiveLabels(t *test
 	assertExternalLabelVals(t, labelsBySubject[recordOneSubject.Key()], []string{"high-quality"})
 	assertExternalLabelVals(t, labelsBySubject[accountSubject.Key()], []string{"high-quality"})
 	assertExternalLabelVals(t, labelsBySubject[recordTwoSubject.Key()], nil)
+}
+
+func TestExternalLabelsRepositoryGetBySubjectsBatchesLargeSubjectSets(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	repo := db.ExternalLabels
+	ctx := context.Background()
+
+	const subjectCount = 1000
+	subjects := make([]repositories.LabelSubject, 0, subjectCount)
+	labelInputs := []repositories.ExternalLabelInput{}
+	filterValues := make([]string, 0, 5)
+	labeledIndexes := map[int]string{
+		0:   "first-batch-start",
+		249: "first-batch-end",
+		250: "second-batch-start",
+		501: "third-batch",
+		999: "last-subject",
+	}
+
+	for i := range subjectCount {
+		uri := fmt.Sprintf("at://did:plc:repo/app.example.record/%04d", i)
+		subjects = append(subjects, repositories.LabelSubject{URI: uri})
+		if val, ok := labeledIndexes[i]; ok {
+			filterValues = append(filterValues, val)
+			labelInputs = append(labelInputs, repositories.ExternalLabelInput{
+				LabelIndex: int64(len(labelInputs)),
+				Src:        "did:plc:labeler",
+				URI:        uri,
+				Val:        val,
+				Cts:        fmt.Sprintf("2025-01-02T03:04:%02dZ", len(labelInputs)),
+				RawJSON:    `{}`,
+			})
+			labelInputs = append(labelInputs, repositories.ExternalLabelInput{
+				LabelIndex: int64(len(labelInputs)),
+				Src:        "did:plc:other-labeler",
+				URI:        uri,
+				Val:        "excluded",
+				Cts:        fmt.Sprintf("2025-01-02T03:04:%02dZ", len(labelInputs)),
+				RawJSON:    `{}`,
+			})
+		}
+	}
+
+	persistExternalLabelEvent(t, repo, 1, labelInputs)
+
+	labelsBySubject, err := repo.GetBySubjects(ctx, subjects, repositories.ExternalLabelFilter{
+		Sources:    []string{"did:plc:labeler"},
+		Values:     filterValues,
+		ActiveOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("GetBySubjects() error = %v", err)
+	}
+	if len(labelsBySubject) != subjectCount {
+		t.Fatalf("labelsBySubject len = %d, want %d", len(labelsBySubject), subjectCount)
+	}
+
+	labelledSubjectCount := 0
+	for _, labels := range labelsBySubject {
+		if len(labels) > 0 {
+			labelledSubjectCount++
+		}
+	}
+	if labelledSubjectCount != len(labeledIndexes) {
+		t.Fatalf("labelled subject count = %d, want %d", labelledSubjectCount, len(labeledIndexes))
+	}
+	for index, val := range labeledIndexes {
+		assertExternalLabelVals(t, labelsBySubject[subjects[index].Key()], []string{val})
+	}
+	assertExternalLabelVals(t, labelsBySubject[subjects[123].Key()], nil)
 }
 
 func TestExternalLabelsRepositoryGetBySubjectsActiveExcludesLatestNegation(t *testing.T) {
