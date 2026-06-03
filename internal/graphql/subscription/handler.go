@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,8 +53,8 @@ type Handler struct {
 
 // NewHandler creates a new subscription handler.
 // allowedOrigins controls which origins may open WebSocket connections.
-// Pass []string{"*"} to allow all origins (development only).
-// Pass nil or empty slice to enforce same-origin policy.
+// Pass []string{"*"} to allow all origins for public subscription APIs.
+// Pass nil or an empty slice to accept same-origin browser connections only.
 func NewHandler(schema *graphql.Schema, pubsub *PubSub, allowedOrigins []string) *Handler {
 	return &Handler{
 		schema: schema,
@@ -66,15 +68,9 @@ func NewHandler(schema *graphql.Schema, pubsub *PubSub, allowedOrigins []string)
 
 // makeOriginChecker returns a CheckOrigin function based on the allowed origins list.
 func makeOriginChecker(allowedOrigins []string) func(r *http.Request) bool {
-	// No origins configured or explicitly set to "*": allow all origins.
-	// This matches the CORS middleware default behavior. To restrict origins,
-	// set ALLOWED_ORIGINS to a comma-separated list of specific origins.
-	if len(allowedOrigins) == 0 || (len(allowedOrigins) == 1 && allowedOrigins[0] == "*") {
-		if len(allowedOrigins) == 0 {
-			slog.Warn("WebSocket CheckOrigin allows all origins (ALLOWED_ORIGINS not configured)")
-		} else {
-			slog.Warn("WebSocket CheckOrigin allows all origins (ALLOWED_ORIGINS=\"*\")")
-		}
+	allowedSet, allowAll := normalizeWebSocketOrigins(allowedOrigins)
+	if allowAll {
+		slog.Warn("WebSocket CheckOrigin allows all origins")
 		return func(r *http.Request) bool {
 			return true
 		}
@@ -82,19 +78,44 @@ func makeOriginChecker(allowedOrigins []string) func(r *http.Request) bool {
 
 	return func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
-		if origin == "" {
-			return true // Same-origin requests don't send Origin header
+		if origin == "" || isSameOriginWebSocketRequest(r) {
+			return true
 		}
-		for _, allowed := range allowedOrigins {
-			if origin == allowed {
-				return true
-			}
+		if _, ok := allowedSet[origin]; ok {
+			return true
 		}
 		slog.Warn("WebSocket connection rejected: origin not allowed",
 			"origin", origin,
 			"allowed_origins", allowedOrigins)
 		return false
 	}
+}
+
+func normalizeWebSocketOrigins(origins []string) (map[string]struct{}, bool) {
+	allowedSet := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed == "" {
+			continue
+		}
+		if trimmed == "*" {
+			return nil, true
+		}
+		allowedSet[trimmed] = struct{}{}
+	}
+	return allowedSet, false
+}
+
+func isSameOriginWebSocketRequest(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	parsedOrigin, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return parsedOrigin.Host == r.Host
 }
 
 // ServeHTTP upgrades HTTP to WebSocket and handles subscriptions.

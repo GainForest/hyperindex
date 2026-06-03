@@ -13,6 +13,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/buildinfo"
 	"github.com/GainForest/hyperindex/internal/config"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
@@ -40,6 +41,115 @@ func TestRootEndpointReturnsBuildInfoVersion(t *testing.T) {
 	if body["version"] != buildinfo.Version {
 		t.Fatalf("version = %q, want buildinfo.Version %q", body["version"], buildinfo.Version)
 	}
+}
+
+func TestAdminGraphQLCORSUsesRestrictedOrigins(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	cfg := &config.Config{
+		ExternalBaseURL:     "https://api.example",
+		AdminAPIKey:         "admin-secret-123",
+		AdminAllowedOrigins: "https://admin.example",
+	}
+	r := setupRouter(cfg, labelerTestServices(db), &backgroundServices{})
+	setupAdmin(r, cfg, labelerTestServices(db))
+
+	t.Run("allowed admin origin", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodOptions, "/admin/graphql", nil)
+		req.Header.Set("Origin", "https://admin.example")
+		req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		rec := httptest.NewRecorder()
+
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("OPTIONS /admin/graphql status = %d, want %d", rec.Code, http.StatusNoContent)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "https://admin.example" {
+			t.Fatalf("Access-Control-Allow-Origin = %q, want admin origin", got)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "X-Admin-API-Key") {
+			t.Fatalf("Access-Control-Allow-Headers = %q, want X-Admin-API-Key", got)
+		}
+	})
+
+	t.Run("unknown admin origin", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodOptions, "/admin/graphql", nil)
+		req.Header.Set("Origin", "https://evil.example")
+		req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		rec := httptest.NewRecorder()
+
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("OPTIONS /admin/graphql status = %d, want %d", rec.Code, http.StatusNoContent)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Fatalf("Access-Control-Allow-Origin = %q, want empty", got)
+		}
+	})
+}
+
+func TestPublicGraphQLCORSAllowsAllOriginsByDefault(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	cfg := &config.Config{ExternalBaseURL: "https://api.example"}
+	r := setupRouter(cfg, labelerTestServices(db), &backgroundServices{})
+	setupGraphQL(r, cfg, labelerTestServices(db), subscription.NewPubSub())
+
+	req := httptest.NewRequest(http.MethodOptions, "/graphql", nil)
+	req.Header.Set("Origin", "https://any-frontend.example")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	rec := httptest.NewRecorder()
+
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS /graphql status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want *", got)
+	}
+}
+
+func TestOAuthEndpointsUsePublicCORS(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	cfg := &config.Config{ExternalBaseURL: "https://api.example"}
+	r := setupRouter(cfg, labelerTestServices(db), &backgroundServices{})
+	setupOAuth(r, cfg, labelerTestServices(db), &backgroundServices{})
+
+	t.Run("preflight for token endpoint", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodOptions, "/oauth/token", nil)
+		req.Header.Set("Origin", "https://frontend.example")
+		req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		req.Header.Set("Access-Control-Request-Headers", "content-type,dpop")
+		rec := httptest.NewRecorder()
+
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("OPTIONS /oauth/token status = %d, want %d", rec.Code, http.StatusNoContent)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+			t.Fatalf("Access-Control-Allow-Origin = %q, want *", got)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "DPoP") {
+			t.Fatalf("Access-Control-Allow-Headers = %q, want DPoP", got)
+		}
+	})
+
+	t.Run("actual discovery response", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+		req.Header.Set("Origin", "https://frontend.example")
+		rec := httptest.NewRecorder()
+
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET discovery status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+			t.Fatalf("Access-Control-Allow-Origin = %q, want *", got)
+		}
+	})
 }
 
 func TestHealthIgnoresLabelerReadiness(t *testing.T) {
@@ -309,12 +419,18 @@ func labelerTestConfig(url string) *config.Config {
 
 func labelerTestServices(db *testutil.TestDB) *services {
 	return &services{
-		db:             db.Executor,
-		records:        db.Records,
-		actors:         db.Actors,
-		lexicons:       db.Lexicons,
-		config:         db.Config,
-		externalLabels: db.ExternalLabels,
+		db:               db.Executor,
+		records:          db.Records,
+		actors:           db.Actors,
+		lexicons:         db.Lexicons,
+		config:           db.Config,
+		activity:         db.Activity,
+		oauthClients:     db.OAuthClients,
+		labels:           db.Labels,
+		externalLabels:   db.ExternalLabels,
+		labelDefinitions: db.LabelDefinitions,
+		labelPreferences: db.LabelPreferences,
+		reports:          db.Reports,
 	}
 }
 

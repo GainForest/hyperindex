@@ -6,37 +6,28 @@ import (
 	"strings"
 )
 
-// CORSConfig holds CORS middleware configuration.
+// CORSConfig holds CORS middleware configuration for one route group.
 type CORSConfig struct {
-	// AllowedOrigins is a list of origins that are allowed to make cross-origin requests.
-	// If empty, defaults to "*" (all origins allowed — suitable for development only).
+	// AllowedOrigins is the list of browser origins that may make cross-origin requests.
+	// Use []string{"*"} to allow every origin. An empty list sends no CORS origin
+	// headers, which keeps browser access same-origin unless another middleware adds them.
 	AllowedOrigins []string
 
-	// AllowedHeaders is the list of request headers allowed in CORS requests.
-	// "Content-Type" and "Authorization" are always included.
+	// AllowedHeaders is the list of additional request headers allowed in CORS requests.
+	// "Content-Type", "Authorization", and "DPoP" are always included.
 	AllowedHeaders []string
 
-	// AllowAdminAPIKeyAuth controls whether X-User-DID is included in allowed headers.
+	// AllowAdminAPIKeyAuth includes admin proxy headers in preflight responses.
+	// Enable this only for admin routes that intentionally accept X-Admin-API-Key
+	// and X-User-DID from browser clients.
 	AllowAdminAPIKeyAuth bool
 }
 
-// CORSMiddleware returns an HTTP middleware that handles CORS headers and preflight requests.
-// It uses the configured allowed origins instead of hardcoding "*".
+// CORSMiddleware returns an HTTP middleware that handles CORS headers and
+// preflight requests for a single route group.
 func CORSMiddleware(cfg CORSConfig) func(http.Handler) http.Handler {
-	// Build allowed origins set for O(1) lookup
-	allowedSet := make(map[string]bool, len(cfg.AllowedOrigins))
-	for _, origin := range cfg.AllowedOrigins {
-		allowedSet[strings.TrimSpace(origin)] = true
-	}
-	allowAll := len(cfg.AllowedOrigins) == 0
-
-	// Build allowed headers
-	headers := []string{"Content-Type", "Authorization", "DPoP"}
-	headers = append(headers, cfg.AllowedHeaders...)
-	if cfg.AllowAdminAPIKeyAuth {
-		headers = append(headers, "X-User-DID")
-	}
-	allowedHeaders := strings.Join(headers, ", ")
+	allowedSet, allowAll := normalizeAllowedOrigins(cfg.AllowedOrigins)
+	allowedHeaders := strings.Join(allowedRequestHeaders(cfg), ", ")
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,17 +35,18 @@ func CORSMiddleware(cfg CORSConfig) func(http.Handler) http.Handler {
 
 			if allowAll {
 				w.Header().Set("Access-Control-Allow-Origin", "*")
-			} else if origin != "" && allowedSet[origin] {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Vary", "Origin")
+			} else if origin != "" {
+				addVaryHeader(w.Header(), "Origin")
+				if _, ok := allowedSet[origin]; ok {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+				}
 			}
 
 			w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", allowedHeaders)
 			w.Header().Set("Access-Control-Max-Age", "86400")
 
-			// Handle preflight
-			if r.Method == "OPTIONS" {
+			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -62,4 +54,58 @@ func CORSMiddleware(cfg CORSConfig) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func normalizeAllowedOrigins(origins []string) (map[string]struct{}, bool) {
+	allowedSet := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed == "" {
+			continue
+		}
+		if trimmed == "*" {
+			return nil, true
+		}
+		allowedSet[trimmed] = struct{}{}
+	}
+	return allowedSet, false
+}
+
+func allowedRequestHeaders(cfg CORSConfig) []string {
+	headers := []string{"Content-Type", "Authorization", "DPoP"}
+	headers = append(headers, cfg.AllowedHeaders...)
+	if cfg.AllowAdminAPIKeyAuth {
+		headers = append(headers, "X-Admin-API-Key", "X-User-DID")
+	}
+	return uniqueHeaderNames(headers)
+}
+
+func uniqueHeaderNames(headers []string) []string {
+	unique := make([]string, 0, len(headers))
+	seen := make(map[string]struct{}, len(headers))
+	for _, header := range headers {
+		trimmed := strings.TrimSpace(header)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, trimmed)
+	}
+	return unique
+}
+
+func addVaryHeader(header http.Header, value string) {
+	current := header.Values("Vary")
+	for _, entry := range current {
+		for _, part := range strings.Split(entry, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), value) {
+				return
+			}
+		}
+	}
+	header.Add("Vary", value)
 }

@@ -1,0 +1,5 @@
+kind: fixed
+body: Split CORS configuration so public GraphQL allows browser clients by default while admin GraphQL requires explicit trusted origins.
+time: 2026-06-03T11:42:23.428959884+06:00
+custom:
+    Affects: operator

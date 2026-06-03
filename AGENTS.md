@@ -87,7 +87,7 @@ Run verification based on what changed.
 - `TAP_ENABLED=true` switches record ingestion to Tap mode.
 - `LABELER_SUBSCRIBE_ENABLED=true` with `LABELER_SUBSCRIBE_URLS` starts optional external `com.atproto.label.subscribeLabels` ingestion.
 - Migrations run automatically on startup.
-- Be careful with `ALLOWED_ORIGINS`: current code allows all origins when unset, even if older prose suggests stricter defaults.
+- CORS origin config is split by route group: `PUBLIC_ALLOWED_ORIGINS` controls public GraphQL/OAuth browser access and defaults to `*`; `ADMIN_ALLOWED_ORIGINS` must list trusted admin frontend origins explicitly and rejects wildcard `*`. Deprecated `ALLOWED_ORIGINS` is only a compatibility fallback for explicit admin origins.
 
 ## Changie fragments
 
