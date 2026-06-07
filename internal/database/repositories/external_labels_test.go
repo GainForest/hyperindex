@@ -2,6 +2,7 @@ package repositories_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -24,6 +25,9 @@ func TestExternalLabelsRepositoryEnsureState(t *testing.T) {
 	}
 	if state.LastSeq != 0 {
 		t.Fatalf("LastSeq = %d, want 0", state.LastSeq)
+	}
+	if state.Status() != repositories.LabelSubscriptionStatusPending {
+		t.Fatalf("Status() = %q, want %q", state.Status(), repositories.LabelSubscriptionStatusPending)
 	}
 	if state.LabelerDID != nil {
 		t.Fatalf("LabelerDID = %q, want nil", *state.LabelerDID)
@@ -77,6 +81,12 @@ func TestExternalLabelsRepositoryPersistEvent(t *testing.T) {
 	}
 	if state.LastSeq != 42 {
 		t.Fatalf("LastSeq = %d, want 42", state.LastSeq)
+	}
+	if state.Status() != repositories.LabelSubscriptionStatusConnected {
+		t.Fatalf("Status() = %q, want %q", state.Status(), repositories.LabelSubscriptionStatusConnected)
+	}
+	if state.LastError != nil {
+		t.Fatalf("successful event should clear error state: %+v", state)
 	}
 	if state.LastEventAt == nil || state.LastEventAt.IsZero() {
 		t.Fatalf("LastEventAt should be set: %+v", state)
@@ -220,7 +230,7 @@ func TestExternalLabelsRepositoryUpdateError(t *testing.T) {
 	ctx := context.Background()
 	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
 
-	if err := repo.UpdateError(ctx, url, "FutureCursor: requested cursor is too new"); err != nil {
+	if err := repo.UpdateError(ctx, url, "temporary websocket failure"); err != nil {
 		t.Fatalf("UpdateError() error = %v", err)
 	}
 
@@ -228,8 +238,112 @@ func TestExternalLabelsRepositoryUpdateError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetState() error = %v", err)
 	}
-	if state.LastError == nil || *state.LastError != "FutureCursor: requested cursor is too new" {
-		t.Fatalf("LastError = %v, want FutureCursor", state.LastError)
+	if state.Status() != repositories.LabelSubscriptionStatusError {
+		t.Fatalf("Status() = %q, want %q", state.Status(), repositories.LabelSubscriptionStatusError)
+	}
+	if state.LastError == nil || *state.LastError != "temporary websocket failure" {
+		t.Fatalf("LastError = %v, want temporary websocket failure", state.LastError)
+	}
+	if state.IsFatal() {
+		t.Fatalf("retryable error should not be fatal: %+v", state)
+	}
+}
+
+func TestExternalLabelsRepositoryMarkFatalCursor(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	repo := db.ExternalLabels
+	ctx := context.Background()
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+
+	if err := repo.UpdateLastSeq(ctx, url, 56428); err != nil {
+		t.Fatalf("UpdateLastSeq() error = %v", err)
+	}
+	if err := repo.MarkFatalCursor(ctx, url, "FutureCursor", "Cursor is in the future. Reset subscription cursor and replay labels."); err != nil {
+		t.Fatalf("MarkFatalCursor() error = %v", err)
+	}
+
+	state, err := repo.GetState(ctx, url)
+	if err != nil {
+		t.Fatalf("GetState() error = %v", err)
+	}
+	if !state.IsFatal() {
+		t.Fatalf("IsFatal() = false, want true: %+v", state)
+	}
+	if state.Status() != repositories.LabelSubscriptionStatusFatal {
+		t.Fatalf("Status() = %q, want %q", state.Status(), repositories.LabelSubscriptionStatusFatal)
+	}
+	if state.LastSeq != 56428 {
+		t.Fatalf("LastSeq = %d, want 56428", state.LastSeq)
+	}
+	if got := repositories.FatalCursorCode(state.LastError); got != "FutureCursor" {
+		t.Fatalf("FatalCursorCode() = %q, want FutureCursor", got)
+	}
+	if state.LastError == nil || !strings.HasPrefix(*state.LastError, "FATAL_CURSOR FutureCursor:") || !strings.Contains(*state.LastError, "Reset subscription cursor and replay labels") {
+		t.Fatalf("LastError = %v, want fatal reset marker", state.LastError)
+	}
+}
+
+func TestExternalLabelsRepositoryListStatesIncludesConfiguredMissingURLs(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	repo := db.ExternalLabels
+	ctx := context.Background()
+	storedURL := "wss://stored.example/xrpc/com.atproto.label.subscribeLabels"
+	missingURL := "wss://missing.example/xrpc/com.atproto.label.subscribeLabels"
+
+	if err := repo.MarkFatalCursor(ctx, storedURL, "OutdatedCursor", "Cursor is too old. Reset subscription cursor and replay labels."); err != nil {
+		t.Fatalf("MarkFatalCursor() error = %v", err)
+	}
+
+	states, err := repo.ListStates(ctx, []string{missingURL, storedURL})
+	if err != nil {
+		t.Fatalf("ListStates() error = %v", err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("ListStates() len = %d, want 2", len(states))
+	}
+	if states[0].URL != missingURL || states[0].Status() != repositories.LabelSubscriptionStatusPending {
+		t.Fatalf("missing URL state = %+v, want pending %q", states[0], missingURL)
+	}
+	if states[1].URL != storedURL || !states[1].IsFatal() {
+		t.Fatalf("stored URL state = %+v, want fatal %q", states[1], storedURL)
+	}
+}
+
+func TestExternalLabelsRepositoryFatalStateIsStickyUntilExplicitReset(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	repo := db.ExternalLabels
+	ctx := context.Background()
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+
+	if err := repo.UpdateLastSeq(ctx, url, 56428); err != nil {
+		t.Fatalf("UpdateLastSeq() error = %v", err)
+	}
+	if err := repo.MarkFatalCursor(ctx, url, "FutureCursor", "Cursor is in the future. Reset subscription cursor and replay labels."); err != nil {
+		t.Fatalf("MarkFatalCursor() error = %v", err)
+	}
+
+	if err := repo.UpdateConnected(ctx, url); err != nil {
+		t.Fatalf("UpdateConnected() error = %v", err)
+	}
+	if err := repo.UpdateError(ctx, url, "temporary websocket timeout"); err != nil {
+		t.Fatalf("UpdateError() error = %v", err)
+	}
+	if err := repo.UpdateLastSeq(ctx, url, 56429); err != nil {
+		t.Fatalf("UpdateLastSeq() error = %v", err)
+	}
+
+	state, err := repo.GetState(ctx, url)
+	if err != nil {
+		t.Fatalf("GetState() error = %v", err)
+	}
+	if !state.IsFatal() {
+		t.Fatalf("IsFatal() = false, want true after non-fatal updates: %+v", state)
+	}
+	if state.LastSeq != 56428 {
+		t.Fatalf("LastSeq = %d, want fatal cursor preserved at 56428", state.LastSeq)
+	}
+	if got := repositories.FatalCursorCode(state.LastError); got != "FutureCursor" {
+		t.Fatalf("FatalCursorCode() = %q, want FutureCursor", got)
 	}
 }
 
@@ -270,6 +384,76 @@ func TestExternalLabelsRepositoryGetBySubjectsReturnsBatchedActiveLabels(t *test
 	assertExternalLabelVals(t, labelsBySubject[recordOneSubject.Key()], []string{"high-quality"})
 	assertExternalLabelVals(t, labelsBySubject[accountSubject.Key()], []string{"high-quality"})
 	assertExternalLabelVals(t, labelsBySubject[recordTwoSubject.Key()], nil)
+}
+
+func TestExternalLabelsRepositoryGetBySubjectsBatchesLargeSubjectSets(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	repo := db.ExternalLabels
+	ctx := context.Background()
+
+	const subjectCount = 1000
+	subjects := make([]repositories.LabelSubject, 0, subjectCount)
+	labelInputs := []repositories.ExternalLabelInput{}
+	filterValues := make([]string, 0, 5)
+	labeledIndexes := map[int]string{
+		0:   "first-batch-start",
+		249: "first-batch-end",
+		250: "second-batch-start",
+		501: "third-batch",
+		999: "last-subject",
+	}
+
+	for i := range subjectCount {
+		uri := fmt.Sprintf("at://did:plc:repo/app.example.record/%04d", i)
+		subjects = append(subjects, repositories.LabelSubject{URI: uri})
+		if val, ok := labeledIndexes[i]; ok {
+			filterValues = append(filterValues, val)
+			labelInputs = append(labelInputs, repositories.ExternalLabelInput{
+				LabelIndex: int64(len(labelInputs)),
+				Src:        "did:plc:labeler",
+				URI:        uri,
+				Val:        val,
+				Cts:        fmt.Sprintf("2025-01-02T03:04:%02dZ", len(labelInputs)),
+				RawJSON:    `{}`,
+			})
+			labelInputs = append(labelInputs, repositories.ExternalLabelInput{
+				LabelIndex: int64(len(labelInputs)),
+				Src:        "did:plc:other-labeler",
+				URI:        uri,
+				Val:        "excluded",
+				Cts:        fmt.Sprintf("2025-01-02T03:04:%02dZ", len(labelInputs)),
+				RawJSON:    `{}`,
+			})
+		}
+	}
+
+	persistExternalLabelEvent(t, repo, 1, labelInputs)
+
+	labelsBySubject, err := repo.GetBySubjects(ctx, subjects, repositories.ExternalLabelFilter{
+		Sources:    []string{"did:plc:labeler"},
+		Values:     filterValues,
+		ActiveOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("GetBySubjects() error = %v", err)
+	}
+	if len(labelsBySubject) != subjectCount {
+		t.Fatalf("labelsBySubject len = %d, want %d", len(labelsBySubject), subjectCount)
+	}
+
+	labelledSubjectCount := 0
+	for _, labels := range labelsBySubject {
+		if len(labels) > 0 {
+			labelledSubjectCount++
+		}
+	}
+	if labelledSubjectCount != len(labeledIndexes) {
+		t.Fatalf("labelled subject count = %d, want %d", labelledSubjectCount, len(labeledIndexes))
+	}
+	for index, val := range labeledIndexes {
+		assertExternalLabelVals(t, labelsBySubject[subjects[index].Key()], []string{val})
+	}
+	assertExternalLabelVals(t, labelsBySubject[subjects[123].Key()], nil)
 }
 
 func TestExternalLabelsRepositoryGetBySubjectsActiveExcludesLatestNegation(t *testing.T) {

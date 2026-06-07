@@ -149,6 +149,10 @@ LABELER_SUBSCRIBE_URLS=wss://hyperlabel-proxy-test.up.railway.app/xrpc/com.atpro
 | `LABELER_SUBSCRIBE_RECONNECT_MIN` | Minimum reconnect backoff | `1s` |
 | `LABELER_SUBSCRIBE_RECONNECT_MAX` | Maximum reconnect backoff | `60s` |
 
+Admins can remove a configured labeler URL from the Settings page or with the `removeLabelerSubscribeUrl` admin GraphQL mutation. Removal writes a persisted override for the subscription URL list; restart Hyperindex to stop any subscription goroutine that was already running for that URL.
+
+If a labeler returns `FutureCursor` or `OutdatedCursor`, Hyperindex records a `FATAL_CURSOR ...` marker in `label_subscription_state.last_error`, stops retrying that labeler, and returns `503` from `/ready`. `/health` remains a liveness-only endpoint for process checks. Use `/stats` to see the affected labeler URL, `status: "fatal"`, `lastErrorCode`, and reset guidance. Repair requires resetting the saved cursor and replaying or purging labels as needed, then clearing `last_error`; because the subscription goroutine stops, restart Hyperindex after repair.
+
 #### Legacy Mode: Jetstream + Backfill
 
 > **Note:** Jetstream+Backfill mode is the legacy ingestion path. It lacks cryptographic verification and ordering guarantees. Use Tap (above) for new deployments.
@@ -324,13 +328,22 @@ Typed collection queries accept a `where` argument with per-field filters:
 
 | Operator | Types | Example |
 |----------|-------|---------|
-| `eq` | All | `{ title: { eq: "Hello" } }` |
-| `neq` | All | `{ status: { neq: "draft" } }` |
+| `eq` | String, Int, Float, Boolean, DateTime | `{ title: { eq: "Hello" } }` |
+| `neq` | String, Int, Float, DateTime | `{ status: { neq: "draft" } }` |
 | `gt`, `lt`, `gte`, `lte` | Int, Float, DateTime | `{ score: { gt: 5, lte: 100 } }` |
-| `in` | String, Int, Float | `{ type: { in: ["post", "reply"] } }` |
+| `in` | String, Int | `{ type: { in: ["post", "reply"] } }` |
 | `contains` | String | `{ text: { contains: "forest" } }` |
 | `startsWith` | String | `{ name: { startsWith: "Gain" } }` |
-| `isNull` | All | `{ optionalField: { isNull: true } }` |
+| `isNull` | Scalar fields and complex top-level fields | `{ optionalField: { isNull: true } }` |
+
+Complex top-level fields such as arrays, refs, unions, objects, blobs, bytes, unknown values, and CID links support presence filtering only:
+
+```graphql
+where: {
+  image: { isNull: false }
+  contributors: { isNull: false }
+}
+```
 
 Every `where` input also includes a `did` field for filtering by author DID.
 
@@ -364,8 +377,9 @@ Default sort is `indexed_at DESC` (newest first). Available sort fields are gene
 | `/admin/graphql` | Admin GraphQL API |
 | `/graphiql` | GraphQL playground (public API) |
 | `/graphiql/admin` | GraphQL playground (admin API) |
-| `/health` | Health check |
-| `/stats` | Server statistics |
+| `/health` | Liveness check for the running process |
+| `/ready` | Readiness check for database and configured labeler diagnostics |
+| `/stats` | Server statistics and diagnostics |
 | `/.well-known/oauth-authorization-server` | OAuth 2.0 server metadata |
 | `/oauth/authorize` | OAuth authorization endpoint |
 | `/oauth/token` | OAuth token endpoint |
@@ -452,6 +466,7 @@ The admin API at `/admin/graphql` provides:
 - `triggerBackfill` - Full network backfill
 - `populateActivity` - Populate activity from existing records
 - `updateSettings` - Update server settings
+- `removeLabelerSubscribeUrl` - Remove a configured external labeler subscription URL
 - `resetAll` - Clear all data (requires confirmation)
 
 ## Architecture

@@ -361,6 +361,28 @@ func TestHandleGraphiQL(t *testing.T) {
 		}
 	})
 
+	t.Run("body contains official GraphiQL explorer plugin", func(t *testing.T) {
+		handler := HandleGraphiQL(baseCfg)
+		req := httptest.NewRequest(http.MethodGet, "/graphiql", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		body := rec.Body.String()
+		if !strings.Contains(body, "@graphiql/plugin-explorer") {
+			t.Error("response body does not load the official GraphiQL explorer plugin")
+		}
+		if !strings.Contains(body, "explorerPlugin()") {
+			t.Error("response body does not wire the GraphiQL explorer plugin")
+		}
+		if !strings.Contains(body, "visiblePlugin: 'GraphiQL Explorer'") {
+			t.Error("response body does not open the GraphiQL explorer plugin")
+		}
+		if strings.Contains(body, "Schema Builder") {
+			t.Error("response body should not contain the custom Schema Builder panel")
+		}
+	})
+
 	t.Run("subscription endpoint included when configured", func(t *testing.T) {
 		cfg := GraphiQLConfig{
 			Endpoint:             "/graphql",

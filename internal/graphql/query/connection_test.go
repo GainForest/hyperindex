@@ -54,9 +54,9 @@ func TestClampPageSize(t *testing.T) {
 			want:  MaxPageSize,
 		},
 		{
-			name:  "200 returns max",
+			name:  "200 returns 200",
 			input: 200,
-			want:  MaxPageSize,
+			want:  200,
 		},
 	}
 

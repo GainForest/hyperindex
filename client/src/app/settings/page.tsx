@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
 import { GET_SETTINGS, GET_OAUTH_CLIENTS, GET_PURGE_ACTOR_PREVIEW } from "@/lib/graphql/queries";
-import { UPDATE_SETTINGS, RESET_ALL, PURGE_ACTOR } from "@/lib/graphql/mutations";
+import { REMOVE_LABELER_SUBSCRIBE_URL, UPDATE_SETTINGS, RESET_ALL, PURGE_ACTOR } from "@/lib/graphql/mutations";
 import { useAuth, useAdminSession } from "@/lib/auth";
 import {
   Button,
@@ -62,6 +62,7 @@ export default function SettingsPage() {
   const settings = settingsData?.settings;
   const oauthClients = oauthData?.oauthClients ?? [];
   const adminDids = settings?.adminDids ?? [];
+  const labelerSubscribeUrls = settings?.labelerSubscribeUrls ?? [];
 
   const { data: adminProfiles = [], isFetching: isFetchingAdminProfiles } = useQuery({
     queryKey: ["admin-profiles", adminDids],
@@ -115,6 +116,7 @@ export default function SettingsPage() {
   const [purgeDid, setPurgeDid] = useState("");
   const [purgeConfirm, setPurgeConfirm] = useState("");
   const [resetConfirmation, setResetConfirmation] = useState("");
+  const [removingLabelerUrl, setRemovingLabelerUrl] = useState<string | null>(null);
   const [alert, setAlert] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
   const normalizedPurgeDid = purgeDid.trim();
@@ -141,6 +143,25 @@ export default function SettingsPage() {
     },
     onError: (error: Error) => {
       setAlert({ type: "error", message: error.message });
+    },
+  });
+
+  // Remove labeler subscription mutation
+  const removeLabelerMutation = useMutation({
+    mutationFn: (url: string) =>
+      graphqlClient.request(REMOVE_LABELER_SUBSCRIBE_URL, { url }),
+    onMutate: (url: string) => {
+      setRemovingLabelerUrl(url);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      setAlert({ type: "success", message: "Labeler URL removed. Restart Hyperindex to stop any already-running subscription." });
+    },
+    onError: (error: Error) => {
+      setAlert({ type: "error", message: error.message });
+    },
+    onSettled: () => {
+      setRemovingLabelerUrl(null);
     },
   });
 
@@ -193,6 +214,10 @@ export default function SettingsPage() {
     if (resetConfirmation === "RESET") {
       resetMutation.mutate("RESET");
     }
+  };
+
+  const handleRemoveLabelerUrl = (url: string) => {
+    removeLabelerMutation.mutate(url);
   };
 
   const handlePurgeActor = () => {
@@ -294,6 +319,52 @@ export default function SettingsPage() {
               Save Settings
             </Button>
           </div>
+        </div>
+      </div>
+
+      {/* External Labelers */}
+      <div className="space-y-4">
+        <h3 className="font-[family-name:var(--font-syne)] text-xl" style={{ color: "var(--foreground)" }}>
+          External Labelers
+        </h3>
+        <div className="rounded-xl border p-6 space-y-4" style={{ backgroundColor: "var(--card)", borderColor: "var(--border)" }}>
+          <div>
+            <p className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
+              Configured labeler subscription URLs
+            </p>
+            <p className="mt-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
+              Removing a URL updates the persisted configuration. Restart Hyperindex to stop any subscription that is already running.
+            </p>
+          </div>
+
+          {!settings?.labelerSubscribeEnabled ? (
+            <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
+              External labeler subscriptions are disabled for this instance.
+            </p>
+          ) : labelerSubscribeUrls.length === 0 ? (
+            <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
+              No external labeler URLs configured.
+            </p>
+          ) : (
+            <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+              {labelerSubscribeUrls.map((url) => (
+                <li key={url} className="flex flex-col gap-3 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+                  <code className="break-all text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
+                    {url}
+                  </code>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => handleRemoveLabelerUrl(url)}
+                    loading={removingLabelerUrl === url}
+                    disabled={removingLabelerUrl !== null && removingLabelerUrl !== url}
+                  >
+                    Remove
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </div>
 

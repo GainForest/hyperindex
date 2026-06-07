@@ -1,0 +1,5 @@
+kind: fixed
+body: Fix external label hydration for large GraphQL pages so requests for 1,000 records with labels no longer hit SQLite query limits.
+time: 2026-06-03T11:39:57.662487923+06:00
+custom:
+    Affects: user

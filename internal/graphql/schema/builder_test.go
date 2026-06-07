@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/language/ast"
+	"github.com/graphql-go/graphql/language/parser"
 
 	"github.com/GainForest/hyperindex/internal/database/migrations"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
@@ -741,6 +743,73 @@ func TestBuildWhereInput_DidHandledSeparately(t *testing.T) {
 	// "title" must still appear.
 	if _, exists := inputFields["title"]; !exists {
 		t.Error("non-colliding property 'title' is missing from WhereInput")
+	}
+}
+
+func TestBuildWhereInput_ComplexPropertiesUsePresenceFilter(t *testing.T) {
+	lexiconID := "com.example.whereinput.presence"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "title", Property: lexicon.Property{Type: lexicon.TypeString}},
+					{Name: "createdAt", Property: lexicon.Property{Type: lexicon.TypeString, Format: lexicon.FormatDatetime}},
+					{Name: "contributors", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeString}}},
+					{Name: "image", Property: lexicon.Property{Type: lexicon.TypeBlob}},
+					{Name: "root", Property: lexicon.Property{Type: lexicon.TypeCIDLink}},
+					{Name: "raw", Property: lexicon.Property{Type: lexicon.TypeUnknown}},
+					{Name: "nestedRecord", Property: lexicon.Property{Type: lexicon.TypeRecord}},
+				},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput, ok := builder.whereInputTypes[lexiconID]
+	if !ok {
+		t.Fatal("WhereInput type not found after Build()")
+	}
+
+	inputFields := whereInput.Fields()
+	wantTypes := map[string]string{
+		"did":            "DIDFilterInput",
+		"externalLabels": "ExternalLabelWhereInput",
+		"title":          "StringFilterInput",
+		"createdAt":      "DateTimeFilterInput",
+		"contributors":   "PresenceFilterInput",
+		"image":          "PresenceFilterInput",
+		"root":           "PresenceFilterInput",
+		"raw":            "PresenceFilterInput",
+	}
+	for fieldName, wantType := range wantTypes {
+		field, exists := inputFields[fieldName]
+		if !exists {
+			t.Errorf("WhereInput missing field %q", fieldName)
+			continue
+		}
+		if gotType := field.Type.String(); gotType != wantType {
+			t.Errorf("WhereInput field %q type = %q, want %q", fieldName, gotType, wantType)
+		}
+	}
+
+	if _, exists := inputFields["nestedRecord"]; exists {
+		t.Error("record-typed property should not be filterable")
+	}
+	if imageField, exists := inputFields["image"]; exists {
+		if got := imageField.Description(); !strings.Contains(got, "nested values are not filterable") {
+			t.Errorf("presence field description = %q, want nested-filtering limitation", got)
+		}
 	}
 }
 
@@ -1500,6 +1569,187 @@ func TestExternalLabelsGraphQLRootAndRecordHydration(t *testing.T) {
 	}
 }
 
+func TestExternalLabelsGraphQLHydratesLargePages(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx, wantLabelsByURI := setupExternalLabelsLargePageGraphQLTestDB(t)
+
+	query := `{
+		comExampleLabelRecord(first: 1000) {
+			edges {
+				node {
+					uri
+					externalLabels { val }
+				}
+			}
+			pageInfo { hasNextPage }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	conn := data["comExampleLabelRecord"].(map[string]interface{})
+	edges := conn["edges"].([]interface{})
+	if len(edges) != 1000 {
+		t.Fatalf("edges length = %d, want 1000", len(edges))
+	}
+	pageInfo := conn["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false {
+		t.Fatalf("hasNextPage = %v, want false", pageInfo["hasNextPage"])
+	}
+
+	gotLabelsByURI := make(map[string]string)
+	for _, edge := range edges {
+		node := edge.(map[string]interface{})["node"].(map[string]interface{})
+		labels := node["externalLabels"].([]interface{})
+		if len(labels) == 0 {
+			continue
+		}
+		if len(labels) > 1 {
+			t.Fatalf("externalLabels for %s length = %d, want at most 1", node["uri"], len(labels))
+		}
+		gotLabelsByURI[node["uri"].(string)] = labels[0].(map[string]interface{})["val"].(string)
+	}
+
+	if len(gotLabelsByURI) != len(wantLabelsByURI) {
+		t.Fatalf("labeled URI count = %d, want %d; got labels %v", len(gotLabelsByURI), len(wantLabelsByURI), gotLabelsByURI)
+	}
+	for uri, wantVal := range wantLabelsByURI {
+		if gotLabelsByURI[uri] != wantVal {
+			t.Fatalf("label for %s = %q, want %q; got labels %v", uri, gotLabelsByURI[uri], wantVal, gotLabelsByURI)
+		}
+	}
+}
+
+func TestExternalLabelsGraphQLHydratesHistoryOnly(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx := setupExternalLabelsGraphQLTestDB(t)
+
+	query := `{
+		comExampleLabelRecord(first: 1) {
+			edges {
+				node {
+					history: externalLabels(activeOnly: false, values: ["draft"]) { val neg }
+				}
+			}
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	node := firstConnectionNode(t, data["comExampleLabelRecord"], "comExampleLabelRecord")
+	historyLabels := node["history"].([]interface{})
+	if len(historyLabels) != 2 {
+		t.Fatalf("history length = %d, want 2: %v", len(historyLabels), historyLabels)
+	}
+	if got := historyLabels[0].(map[string]interface{})["neg"]; got != true {
+		t.Fatalf("history[0].neg = %v, want latest negation first", got)
+	}
+	if got := historyLabels[1].(map[string]interface{})["neg"]; got != false {
+		t.Fatalf("history[1].neg = %v, want older positive second", got)
+	}
+}
+
+func TestExternalLabelHydrationRequirementsForSelection(t *testing.T) {
+	tests := []struct {
+		name      string
+		query     string
+		variables map[string]interface{}
+		want      externalLabelHydrationRequirements
+	}{
+		{
+			name:  "default active labels",
+			query: `{ records(collection: "x", first: 1) { edges { node { externalLabels { val } } } } }`,
+			want:  externalLabelHydrationRequirements{active: true},
+		},
+		{
+			name:  "history labels",
+			query: `{ records(collection: "x", first: 1) { edges { node { externalLabels(activeOnly: false) { val } } } } }`,
+			want:  externalLabelHydrationRequirements{history: true},
+		},
+		{
+			name:  "active and history aliases",
+			query: `{ records(collection: "x", first: 1) { edges { node { active: externalLabels { val } history: externalLabels(activeOnly: false) { val } } } } }`,
+			want:  externalLabelHydrationRequirements{active: true, history: true},
+		},
+		{
+			name:      "activeOnly variable false",
+			query:     `query Labels($activeOnly: Boolean) { records(collection: "x", first: 1) { edges { node { externalLabels(activeOnly: $activeOnly) { val } } } } }`,
+			variables: map[string]interface{}{"activeOnly": false},
+			want:      externalLabelHydrationRequirements{history: true},
+		},
+		{
+			name:      "unknown variable hydrates both to preserve correctness",
+			query:     `query Labels($activeOnly: Boolean) { records(collection: "x", first: 1) { edges { node { externalLabels(activeOnly: $activeOnly) { val } } } } }`,
+			variables: map[string]interface{}{},
+			want:      externalLabelHydrationRequirements{active: true, history: true},
+		},
+		{
+			name: "fragment selection",
+			query: `{
+				records(collection: "x", first: 1) {
+					edges { node { ...RecordLabels } }
+				}
+			}
+			fragment RecordLabels on GenericRecord {
+				externalLabels(activeOnly: false) { val }
+			}`,
+			want: externalLabelHydrationRequirements{history: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := resolveParamsForQueryField(t, tt.query, tt.variables)
+			got := externalLabelHydrationRequirementsForPath(params, "edges", "node", "externalLabels")
+			if got != tt.want {
+				t.Fatalf("requirements = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func resolveParamsForQueryField(t testing.TB, query string, variables map[string]interface{}) graphql.ResolveParams {
+	t.Helper()
+
+	document, err := parser.Parse(parser.ParseParams{Source: query})
+	if err != nil {
+		t.Fatalf("parse query: %v", err)
+	}
+
+	fragments := make(map[string]ast.Definition)
+	var fieldASTs []*ast.Field
+	for _, definition := range document.Definitions {
+		switch typedDefinition := definition.(type) {
+		case *ast.OperationDefinition:
+			for _, selection := range typedDefinition.SelectionSet.Selections {
+				field, ok := selection.(*ast.Field)
+				if ok {
+					fieldASTs = append(fieldASTs, field)
+				}
+			}
+		case *ast.FragmentDefinition:
+			fragments[typedDefinition.Name.Value] = typedDefinition
+		}
+	}
+	if len(fieldASTs) == 0 {
+		t.Fatal("parsed query has no root field selections")
+	}
+
+	return graphql.ResolveParams{Info: graphql.ResolveInfo{
+		FieldASTs:      fieldASTs,
+		Fragments:      fragments,
+		VariableValues: variables,
+	}}
+}
+
 func TestExternalLabelsGraphQLByURIHydration(t *testing.T) {
 	schema := buildExternalLabelsTestSchema(t)
 	ctx := setupExternalLabelsGraphQLTestDB(t)
@@ -1764,6 +2014,63 @@ func buildExternalLabelsTestSchema(t *testing.T) *graphql.Schema {
 		t.Fatalf("buildExternalLabelsTestSchema: failed to build schema: %v", err)
 	}
 	return schema
+}
+
+func setupExternalLabelsLargePageGraphQLTestDB(t *testing.T) (context.Context, map[string]string) {
+	t.Helper()
+
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	records := db.Records
+	externalLabels := db.ExternalLabels
+
+	const recordCount = 1000
+	allRecords := make([]*repositories.Record, 0, recordCount)
+	labelInputs := []repositories.ExternalLabelInput{}
+	wantLabelsByURI := make(map[string]string)
+	labeledIndexes := map[int]string{
+		0:   "first-record",
+		250: "second-batch-record",
+		999: "last-record",
+	}
+
+	for i := range recordCount {
+		rkey := fmt.Sprintf("rkey%04d", i)
+		uri := "at://did:plc:test/com.example.label.record/" + rkey
+		cid := fmt.Sprintf("bafyrecord%04d", i)
+		allRecords = append(allRecords, &repositories.Record{
+			URI:        uri,
+			CID:        cid,
+			DID:        "did:plc:test",
+			Collection: "com.example.label.record",
+			JSON:       fmt.Sprintf(`{"text":"hello %04d"}`, i),
+			RKey:       rkey,
+		})
+		if val, ok := labeledIndexes[i]; ok {
+			wantLabelsByURI[uri] = val
+			labelInputs = append(labelInputs, repositories.ExternalLabelInput{
+				LabelIndex: int64(len(labelInputs)),
+				Src:        "did:plc:labeler",
+				URI:        uri,
+				CID:        stringPtr(cid),
+				Val:        val,
+				Cts:        fmt.Sprintf("2025-01-02T03:04:%02dZ", len(labelInputs)),
+				RawJSON:    `{}`,
+			})
+		}
+	}
+
+	if err := records.BatchInsert(ctx, allRecords); err != nil {
+		t.Fatalf("setupExternalLabelsLargePageGraphQLTestDB: failed to insert records: %v", err)
+	}
+
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := externalLabels.PersistEvent(ctx, url, 1, labelInputs); err != nil {
+		t.Fatalf("setupExternalLabelsLargePageGraphQLTestDB: failed to persist labels: %v", err)
+	}
+
+	repos := &resolver.Repositories{Records: records, ExternalLabels: externalLabels}
+	return resolver.WithRepositories(ctx, repos), wantLabelsByURI
 }
 
 func setupExternalLabelsGraphQLTestDB(t *testing.T) context.Context {

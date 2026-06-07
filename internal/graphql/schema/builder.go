@@ -197,8 +197,9 @@ var externalLabelWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
 })
 
 // buildWhereInputTypes builds per-collection WhereInput GraphQL InputObject types.
-// For each collection lexicon, it creates a WhereInput type with a field for each
-// filterable property (string, integer, number, boolean, datetime) plus metadata fields.
+// For each collection lexicon, it creates a WhereInput type with scalar
+// operators for scalar properties, presence-only filters for complex top-level
+// properties, and explicit metadata filters.
 func (b *Builder) buildWhereInputTypes() {
 	for _, lex := range b.registry.GetCollectionLexicons() {
 		if lex.Defs.Main == nil {
@@ -220,7 +221,7 @@ func (b *Builder) buildWhereInputTypes() {
 			Description: "Filter records by locally ingested external labels before pagination.",
 		}
 
-		// Add a field for each filterable property
+		// Add a field for each filterable property.
 		for _, entry := range lex.Defs.Main.Properties {
 			if entry.Name == "did" {
 				continue // did is handled separately as a metadata filter
@@ -228,13 +229,18 @@ func (b *Builder) buildWhereInputTypes() {
 			if types.ReservedRecordFields[entry.Name] {
 				continue // Skip properties that collide with reserved metadata fields
 			}
-			filterInput := types.FilterInputForLexiconType(entry.Property.Type, entry.Property.Format)
+			filterInput := types.FilterInputForLexiconProperty(entry.Property.Type, entry.Property.Format)
 			if filterInput == nil {
-				continue // Non-filterable type (array, ref, union, blob, unknown, etc.)
+				continue // Non-filterable type, such as record.
+			}
+
+			description := fmt.Sprintf("Filter by %s", entry.Name)
+			if filterInput == types.PresenceFilterInput {
+				description = fmt.Sprintf("Filter by whether %s is missing/null or present; nested values are not filterable", entry.Name)
 			}
 			fields[entry.Name] = &graphql.InputObjectFieldConfig{
 				Type:        filterInput,
-				Description: fmt.Sprintf("Filter by %s", entry.Name),
+				Description: description,
 			}
 		}
 
@@ -468,7 +474,7 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			},
 			"first": &graphql.ArgumentConfig{
 				Type:        graphql.Int,
-				Description: "Number of records to return (default 20, max 100)",
+				Description: "Number of records to return (default 20, max 1000)",
 			},
 			"after": &graphql.ArgumentConfig{
 				Type:        graphql.String,
@@ -773,10 +779,6 @@ func isFieldPathSelected(p graphql.ResolveParams, fieldPath ...string) bool {
 	return false
 }
 
-func isExternalLabelsSelected(p graphql.ResolveParams, fieldPath ...string) bool {
-	return isFieldPathSelected(p, fieldPath...)
-}
-
 func selectionSetHasFieldPath(info graphql.ResolveInfo, selectionSet *ast.SelectionSet, fieldPath []string, visitedFragments map[string]bool) bool {
 	if selectionSet == nil || len(fieldPath) == 0 {
 		return false
@@ -816,27 +818,124 @@ func selectionSetHasFieldPath(info graphql.ResolveInfo, selectionSet *ast.Select
 	return false
 }
 
+type externalLabelHydrationRequirements struct {
+	active  bool
+	history bool
+}
+
+func (r externalLabelHydrationRequirements) any() bool {
+	return r.active || r.history
+}
+
+func (r *externalLabelHydrationRequirements) merge(other externalLabelHydrationRequirements) {
+	r.active = r.active || other.active
+	r.history = r.history || other.history
+}
+
 type externalLabelHydration struct {
 	active  map[string][]repositories.ExternalLabel
 	history map[string][]repositories.ExternalLabel
 }
 
 func (b *Builder) hydrateExternalLabelsForConnection(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record) (*externalLabelHydration, error) {
-	if !isExternalLabelsSelected(p, "edges", "node", "externalLabels") {
+	requirements := externalLabelHydrationRequirementsForPath(p, "edges", "node", "externalLabels")
+	if !requirements.any() {
 		return nil, nil
 	}
-	return b.hydrateExternalLabelsForRecords(p, repos, records)
+	return b.hydrateExternalLabelsForRecords(p, repos, records, requirements)
 }
 
 func (b *Builder) hydrateExternalLabelsForSingleRecord(p graphql.ResolveParams, repos *resolver.Repositories, rec *repositories.Record) (*externalLabelHydration, error) {
-	if !isExternalLabelsSelected(p, "externalLabels") {
+	requirements := externalLabelHydrationRequirementsForPath(p, "externalLabels")
+	if !requirements.any() {
 		return nil, nil
 	}
-	return b.hydrateExternalLabelsForRecords(p, repos, []*repositories.Record{rec})
+	return b.hydrateExternalLabelsForRecords(p, repos, []*repositories.Record{rec}, requirements)
 }
 
-func (b *Builder) hydrateExternalLabelsForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record) (*externalLabelHydration, error) {
-	if repos == nil || repos.ExternalLabels == nil || len(records) == 0 {
+func externalLabelHydrationRequirementsForPath(p graphql.ResolveParams, fieldPath ...string) externalLabelHydrationRequirements {
+	var requirements externalLabelHydrationRequirements
+	for _, field := range p.Info.FieldASTs {
+		requirements.merge(selectionSetExternalLabelHydrationRequirements(p.Info, field.SelectionSet, fieldPath, map[string]bool{}))
+	}
+	return requirements
+}
+
+func selectionSetExternalLabelHydrationRequirements(info graphql.ResolveInfo, selectionSet *ast.SelectionSet, fieldPath []string, visitedFragments map[string]bool) externalLabelHydrationRequirements {
+	if selectionSet == nil || len(fieldPath) == 0 {
+		return externalLabelHydrationRequirements{}
+	}
+
+	var requirements externalLabelHydrationRequirements
+	for _, selection := range selectionSet.Selections {
+		switch selected := selection.(type) {
+		case *ast.Field:
+			if selected.Name == nil || selected.Name.Value != fieldPath[0] {
+				continue
+			}
+			if len(fieldPath) == 1 {
+				requirements.merge(externalLabelHydrationRequirementsForField(info, selected))
+				continue
+			}
+			requirements.merge(selectionSetExternalLabelHydrationRequirements(info, selected.SelectionSet, fieldPath[1:], visitedFragments))
+		case *ast.InlineFragment:
+			requirements.merge(selectionSetExternalLabelHydrationRequirements(info, selected.SelectionSet, fieldPath, visitedFragments))
+		case *ast.FragmentSpread:
+			if selected.Name == nil || visitedFragments[selected.Name.Value] {
+				continue
+			}
+			fragment, ok := info.Fragments[selected.Name.Value].(*ast.FragmentDefinition)
+			if !ok {
+				continue
+			}
+			visitedFragments[selected.Name.Value] = true
+			requirements.merge(selectionSetExternalLabelHydrationRequirements(info, fragment.SelectionSet, fieldPath, visitedFragments))
+		}
+	}
+	return requirements
+}
+
+func externalLabelHydrationRequirementsForField(info graphql.ResolveInfo, field *ast.Field) externalLabelHydrationRequirements {
+	activeOnly, known := externalLabelActiveOnlyArgument(info, field)
+	if !known {
+		return externalLabelHydrationRequirements{active: true, history: true}
+	}
+	if activeOnly {
+		return externalLabelHydrationRequirements{active: true}
+	}
+	return externalLabelHydrationRequirements{history: true}
+}
+
+func externalLabelActiveOnlyArgument(info graphql.ResolveInfo, field *ast.Field) (bool, bool) {
+	for _, arg := range field.Arguments {
+		if arg.Name == nil || arg.Name.Value != "activeOnly" {
+			continue
+		}
+		switch value := arg.Value.(type) {
+		case *ast.BooleanValue:
+			return value.Value, true
+		case *ast.Variable:
+			if value.Name == nil {
+				return false, false
+			}
+			variableValue, ok := info.VariableValues[value.Name.Value]
+			if !ok {
+				return false, false
+			}
+			if variableValue == nil {
+				return true, true
+			}
+			activeOnly, ok := variableValue.(bool)
+			return activeOnly, ok
+		default:
+			return false, false
+		}
+	}
+	return true, true
+}
+
+func (b *Builder) hydrateExternalLabelsForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record, requirements externalLabelHydrationRequirements) (*externalLabelHydration, error) {
+	if repos == nil || repos.ExternalLabels == nil || len(records) == 0 || !requirements.any() {
 		return nil, nil
 	}
 
@@ -845,14 +944,22 @@ func (b *Builder) hydrateExternalLabelsForRecords(p graphql.ResolveParams, repos
 		subjects = append(subjects, repositories.LabelSubject{URI: rec.URI, CID: rec.CID})
 	}
 
-	activeLabelsBySubject, err := repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{ActiveOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("failed to hydrate active external labels: %w", err)
+	var activeLabelsBySubject map[string][]repositories.ExternalLabel
+	if requirements.active {
+		var err error
+		activeLabelsBySubject, err = repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{ActiveOnly: true})
+		if err != nil {
+			return nil, fmt.Errorf("failed to hydrate active external labels: %w", err)
+		}
 	}
 
-	historyLabelsBySubject, err := repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{ActiveOnly: false})
-	if err != nil {
-		return nil, fmt.Errorf("failed to hydrate historical external labels: %w", err)
+	var historyLabelsBySubject map[string][]repositories.ExternalLabel
+	if requirements.history {
+		var err error
+		historyLabelsBySubject, err = repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{ActiveOnly: false})
+		if err != nil {
+			return nil, fmt.Errorf("failed to hydrate historical external labels: %w", err)
+		}
 	}
 
 	return &externalLabelHydration{
@@ -882,19 +989,19 @@ func (b *Builder) hydrateCertifiedProfilesForConnection(p graphql.ResolveParams,
 	if !isFieldPathSelected(p, "edges", "node", "certifiedProfileData") {
 		return nil, nil
 	}
-	includeExternalLabels := isFieldPathSelected(p, "edges", "node", "certifiedProfileData", "externalLabels")
-	return b.hydrateCertifiedProfilesForRecords(p, repos, records, includeExternalLabels)
+	externalLabelRequirements := externalLabelHydrationRequirementsForPath(p, "edges", "node", "certifiedProfileData", "externalLabels")
+	return b.hydrateCertifiedProfilesForRecords(p, repos, records, externalLabelRequirements)
 }
 
 func (b *Builder) hydrateCertifiedProfileForSingleRecord(p graphql.ResolveParams, repos *resolver.Repositories, rec *repositories.Record) (*certifiedProfileHydration, error) {
 	if !isFieldPathSelected(p, "certifiedProfileData") {
 		return nil, nil
 	}
-	includeExternalLabels := isFieldPathSelected(p, "certifiedProfileData", "externalLabels")
-	return b.hydrateCertifiedProfilesForRecords(p, repos, []*repositories.Record{rec}, includeExternalLabels)
+	externalLabelRequirements := externalLabelHydrationRequirementsForPath(p, "certifiedProfileData", "externalLabels")
+	return b.hydrateCertifiedProfilesForRecords(p, repos, []*repositories.Record{rec}, externalLabelRequirements)
 }
 
-func (b *Builder) hydrateCertifiedProfilesForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record, includeExternalLabels bool) (*certifiedProfileHydration, error) {
+func (b *Builder) hydrateCertifiedProfilesForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record, externalLabelRequirements externalLabelHydrationRequirements) (*certifiedProfileHydration, error) {
 	if repos == nil || repos.Records == nil || len(records) == 0 {
 		return nil, nil
 	}
@@ -925,8 +1032,8 @@ func (b *Builder) hydrateCertifiedProfilesForRecords(p graphql.ResolveParams, re
 	}
 
 	var profileLabelHydration *externalLabelHydration
-	if includeExternalLabels {
-		profileLabelHydration, err = b.hydrateExternalLabelsForRecords(p, repos, profileRecords)
+	if externalLabelRequirements.any() {
+		profileLabelHydration, err = b.hydrateExternalLabelsForRecords(p, repos, profileRecords, externalLabelRequirements)
 		if err != nil {
 			return nil, fmt.Errorf("failed to hydrate certified profile external labels: %w", err)
 		}
