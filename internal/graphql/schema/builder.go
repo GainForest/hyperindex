@@ -16,6 +16,7 @@ import (
 	"github.com/graphql-go/graphql/language/ast"
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/certifiedprofiles"
 	"github.com/GainForest/hyperindex/internal/graphql/externallabels"
 	"github.com/GainForest/hyperindex/internal/graphql/query"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
@@ -35,6 +36,9 @@ type Builder struct {
 	connectionTypes map[string]*graphql.Object      // lexiconID -> connection type
 	sortFieldEnums  map[string]*graphql.Enum        // lexiconID -> sort field enum
 	whereInputTypes map[string]*graphql.InputObject // lexiconID -> where input type
+
+	genericRecordType       *graphql.Object
+	genericRecordConnection *graphql.Object
 }
 
 // NewBuilder creates a new schema builder.
@@ -59,7 +63,10 @@ func (b *Builder) Build() (*graphql.Schema, error) {
 	// Phase 2: Build all record types
 	b.buildRecordTypes()
 
-	// Phase 2b: Build per-collection WhereInput types
+	// Phase 2b: Build GenericRecord types now that generated record types are available.
+	b.buildGenericRecordTypes()
+
+	// Phase 2c: Build per-collection WhereInput types
 	b.buildWhereInputTypes()
 
 	// Phase 3: Build connection types
@@ -393,11 +400,11 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 	})
 }
 
-// Generic record type for the records query
-var genericRecordType = graphql.NewObject(graphql.ObjectConfig{
-	Name:        "GenericRecord",
-	Description: "A generic AT Protocol record",
-	Fields: graphql.Fields{
+// buildGenericRecordTypes builds the GenericRecord connection types. This runs
+// after generated record types so GenericRecord can reference virtual fields that
+// point at generated types, such as certifiedProfileData.
+func (b *Builder) buildGenericRecordTypes() {
+	fields := graphql.Fields{
 		"uri": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "AT-URI of the record",
@@ -423,27 +430,34 @@ var genericRecordType = graphql.NewObject(graphql.ObjectConfig{
 			Description: "The record data as JSON",
 		},
 		"externalLabels": externallabels.Field(),
-	},
-})
+	}
+	if profileType, ok := b.recordTypes[certifiedprofiles.CollectionID]; ok {
+		fields["certifiedProfileData"] = certifiedprofiles.Field(profileType)
+	}
 
-// Generic record edge for pagination
-var genericRecordEdgeType = graphql.NewObject(graphql.ObjectConfig{
-	Name: "GenericRecordEdge",
-	Fields: graphql.Fields{
-		"cursor": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
-		"node":   &graphql.Field{Type: genericRecordType},
-	},
-})
+	b.genericRecordType = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "GenericRecord",
+		Description: "A generic AT Protocol record",
+		Fields:      fields,
+	})
 
-// Generic record connection for pagination
-var genericRecordConnectionType = graphql.NewObject(graphql.ObjectConfig{
-	Name: "GenericRecordConnection",
-	Fields: graphql.Fields{
-		"edges":      &graphql.Field{Type: graphql.NewList(genericRecordEdgeType)},
-		"pageInfo":   &graphql.Field{Type: query.PageInfoType},
-		"totalCount": &graphql.Field{Type: graphql.Int, Description: "Total number of items (if known)"},
-	},
-})
+	genericRecordEdgeType := graphql.NewObject(graphql.ObjectConfig{
+		Name: "GenericRecordEdge",
+		Fields: graphql.Fields{
+			"cursor": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+			"node":   &graphql.Field{Type: b.genericRecordType},
+		},
+	})
+
+	b.genericRecordConnection = graphql.NewObject(graphql.ObjectConfig{
+		Name: "GenericRecordConnection",
+		Fields: graphql.Fields{
+			"edges":      &graphql.Field{Type: graphql.NewList(genericRecordEdgeType)},
+			"pageInfo":   &graphql.Field{Type: query.PageInfoType},
+			"totalCount": &graphql.Field{Type: graphql.Int, Description: "Total number of items (if known)"},
+		},
+	})
+}
 
 // buildQueryType builds the root Query type with fields for each collection.
 func (b *Builder) buildQueryType() *graphql.Object {
@@ -451,7 +465,7 @@ func (b *Builder) buildQueryType() *graphql.Object {
 
 	// Add generic records query that works for any collection
 	fields["records"] = &graphql.Field{
-		Type:        genericRecordConnectionType,
+		Type:        b.genericRecordConnection,
 		Description: "Query records from any collection (useful for collections without lexicon schemas)",
 		Args: graphql.FieldConfigArgument{
 			"collection": &graphql.ArgumentConfig{
@@ -488,7 +502,7 @@ func (b *Builder) buildQueryType() *graphql.Object {
 
 	// Add search query for cross-collection text search
 	fields["search"] = &graphql.Field{
-		Type:        genericRecordConnectionType,
+		Type:        b.genericRecordConnection,
 		Description: "Search records by text content",
 		Args: graphql.FieldConfigArgument{
 			"query": &graphql.ArgumentConfig{
@@ -756,6 +770,54 @@ func isTotalCountRequested(p graphql.ResolveParams) bool {
 	return false
 }
 
+func isFieldPathSelected(p graphql.ResolveParams, fieldPath ...string) bool {
+	for _, field := range p.Info.FieldASTs {
+		if selectionSetHasFieldPath(p.Info, field.SelectionSet, fieldPath, map[string]bool{}) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectionSetHasFieldPath(info graphql.ResolveInfo, selectionSet *ast.SelectionSet, fieldPath []string, visitedFragments map[string]bool) bool {
+	if selectionSet == nil || len(fieldPath) == 0 {
+		return false
+	}
+
+	for _, selection := range selectionSet.Selections {
+		switch selected := selection.(type) {
+		case *ast.Field:
+			if selected.Name == nil || selected.Name.Value != fieldPath[0] {
+				continue
+			}
+			if len(fieldPath) == 1 {
+				return true
+			}
+			if selectionSetHasFieldPath(info, selected.SelectionSet, fieldPath[1:], visitedFragments) {
+				return true
+			}
+		case *ast.InlineFragment:
+			if selectionSetHasFieldPath(info, selected.SelectionSet, fieldPath, visitedFragments) {
+				return true
+			}
+		case *ast.FragmentSpread:
+			if selected.Name == nil || visitedFragments[selected.Name.Value] {
+				continue
+			}
+			fragment, ok := info.Fragments[selected.Name.Value].(*ast.FragmentDefinition)
+			if !ok {
+				continue
+			}
+			visitedFragments[selected.Name.Value] = true
+			if selectionSetHasFieldPath(info, fragment.SelectionSet, fieldPath, visitedFragments) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 type externalLabelHydrationRequirements struct {
 	active  bool
 	history bool
@@ -919,6 +981,103 @@ func attachExternalLabels(node interface{}, rec *repositories.Record, hydration 
 	nodeMap[externallabels.HistorySourceKey] = hydration.history[subject.Key()]
 }
 
+type certifiedProfileHydration struct {
+	byDID map[string]map[string]interface{}
+}
+
+func (b *Builder) hydrateCertifiedProfilesForConnection(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record) (*certifiedProfileHydration, error) {
+	if !isFieldPathSelected(p, "edges", "node", "certifiedProfileData") {
+		return nil, nil
+	}
+	externalLabelRequirements := externalLabelHydrationRequirementsForPath(p, "edges", "node", "certifiedProfileData", "externalLabels")
+	return b.hydrateCertifiedProfilesForRecords(p, repos, records, externalLabelRequirements)
+}
+
+func (b *Builder) hydrateCertifiedProfileForSingleRecord(p graphql.ResolveParams, repos *resolver.Repositories, rec *repositories.Record) (*certifiedProfileHydration, error) {
+	if !isFieldPathSelected(p, "certifiedProfileData") {
+		return nil, nil
+	}
+	externalLabelRequirements := externalLabelHydrationRequirementsForPath(p, "certifiedProfileData", "externalLabels")
+	return b.hydrateCertifiedProfilesForRecords(p, repos, []*repositories.Record{rec}, externalLabelRequirements)
+}
+
+func (b *Builder) hydrateCertifiedProfilesForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record, externalLabelRequirements externalLabelHydrationRequirements) (*certifiedProfileHydration, error) {
+	if repos == nil || repos.Records == nil || len(records) == 0 {
+		return nil, nil
+	}
+	if _, ok := b.recordTypes[certifiedprofiles.CollectionID]; !ok {
+		return nil, nil
+	}
+
+	urisByDID := make(map[string]string, len(records))
+	uris := make([]string, 0, len(records))
+	for _, rec := range records {
+		if rec == nil || rec.DID == "" {
+			continue
+		}
+		if _, exists := urisByDID[rec.DID]; exists {
+			continue
+		}
+		uri := certifiedProfileURI(rec.DID)
+		urisByDID[rec.DID] = uri
+		uris = append(uris, uri)
+	}
+	if len(uris) == 0 {
+		return &certifiedProfileHydration{byDID: map[string]map[string]interface{}{}}, nil
+	}
+
+	profileRecords, err := repos.Records.GetByURIs(p.Context, uris)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch certified profiles: %w", err)
+	}
+
+	var profileLabelHydration *externalLabelHydration
+	if externalLabelRequirements.any() {
+		profileLabelHydration, err = b.hydrateExternalLabelsForRecords(p, repos, profileRecords, externalLabelRequirements)
+		if err != nil {
+			return nil, fmt.Errorf("failed to hydrate certified profile external labels: %w", err)
+		}
+	}
+
+	profilesByDID := make(map[string]map[string]interface{}, len(profileRecords))
+	for _, profileRecord := range profileRecords {
+		var data map[string]interface{}
+		if err := json.Unmarshal([]byte(profileRecord.JSON), &data); err != nil {
+			slog.Warn("Skipping certified profile with invalid JSON", "uri", profileRecord.URI, "error", err)
+			continue
+		}
+		data["uri"] = profileRecord.URI
+		data["cid"] = profileRecord.CID
+		data["did"] = profileRecord.DID
+		data["rkey"] = profileRecord.RKey
+		b.coerceRequiredFields(data, certifiedprofiles.CollectionID)
+		attachExternalLabels(data, profileRecord, profileLabelHydration)
+		profilesByDID[profileRecord.DID] = data
+	}
+
+	return &certifiedProfileHydration{byDID: profilesByDID}, nil
+}
+
+func attachCertifiedProfileData(node interface{}, rec *repositories.Record, hydration *certifiedProfileHydration) {
+	if hydration == nil || rec == nil {
+		return
+	}
+	nodeMap, ok := node.(map[string]interface{})
+	if !ok {
+		return
+	}
+	profile, ok := hydration.byDID[rec.DID]
+	if !ok || profile == nil {
+		nodeMap[certifiedprofiles.SourceKey] = nil
+		return
+	}
+	nodeMap[certifiedprofiles.SourceKey] = profile
+}
+
+func certifiedProfileURI(did string) string {
+	return "at://" + did + "/" + certifiedprofiles.CollectionID + "/" + certifiedprofiles.RKey
+}
+
 // buildSortAwareCursor builds a sort-aware cursor string for a record.
 // directSortCols mirrors the repository's directSortColumns set.
 var directSortCols = map[string]bool{
@@ -1040,6 +1199,10 @@ func (b *Builder) resolveRecordConnection(
 		if err != nil {
 			return nil, err
 		}
+		certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, records)
+		if err != nil {
+			return nil, err
+		}
 
 		// Build edges
 		edges := make([]interface{}, 0, len(records))
@@ -1057,6 +1220,7 @@ func (b *Builder) resolveRecordConnection(
 				continue
 			}
 			attachExternalLabels(node, rec, labelsBySubject)
+			attachCertifiedProfileData(node, rec, certifiedProfiles)
 
 			cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
 			if startCursor == "" {
@@ -1123,6 +1287,10 @@ func (b *Builder) resolveRecordConnection(
 	if err != nil {
 		return nil, err
 	}
+	certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, records)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build edges with sort-aware cursors
 	edges := make([]interface{}, 0, len(records))
@@ -1140,6 +1308,7 @@ func (b *Builder) resolveRecordConnection(
 			continue
 		}
 		attachExternalLabels(node, rec, labelsBySubject)
+		attachCertifiedProfileData(node, rec, certifiedProfiles)
 
 		cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
 		if startCursor == "" {
@@ -1271,6 +1440,10 @@ func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 		if err != nil {
 			return nil, err
 		}
+		certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, records)
+		if err != nil {
+			return nil, err
+		}
 
 		edges := make([]interface{}, 0, len(records))
 		var startCursor, endCursor string
@@ -1297,6 +1470,7 @@ func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 				"value":      value,
 			}
 			attachExternalLabels(node, rec, labelsBySubject)
+			attachCertifiedProfileData(node, rec, certifiedProfiles)
 
 			edges = append(edges, map[string]interface{}{
 				"cursor": cursor,
@@ -1420,7 +1594,12 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 		if err != nil {
 			return nil, err
 		}
+		certifiedProfiles, err := b.hydrateCertifiedProfileForSingleRecord(p, repos, rec)
+		if err != nil {
+			return nil, err
+		}
 		attachExternalLabels(data, rec, labelsBySubject)
+		attachCertifiedProfileData(data, rec, certifiedProfiles)
 
 		return data, nil
 	}
