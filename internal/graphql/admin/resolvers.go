@@ -33,7 +33,7 @@ type Repositories struct {
 	Lexicons         *repositories.LexiconsRepository
 	Config           *repositories.ConfigRepository
 	OAuthClients     *repositories.OAuthClientsRepository
-	Activity         *repositories.JetstreamActivityRepository
+	Activity         *repositories.IndexingActivityRepository
 	Labels           *repositories.LabelsRepository
 	LabelDefinitions *repositories.LabelDefinitionsRepository
 	LabelPreferences *repositories.LabelPreferencesRepository

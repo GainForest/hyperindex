@@ -30,7 +30,7 @@ package config
 ## Naming conventions
 
 - **Packages:** lowercase, single word (`lexicon`, `oauth`, `backfill`)
-- **Files:** lowercase with underscores (`did_resolver.go`, `jetstream_activity.go`)
+- **Files:** lowercase with underscores (`did_resolver.go`, `indexing_activity.go`)
 - **Types:** PascalCase (`Executor`, `RecordFetcher`, `WhereClause`)
 - **Interfaces:** Noun or -er suffix (`Executor`, `Fetcher`, `Resolver`)
 - **Constants:** PascalCase exported, camelCase private

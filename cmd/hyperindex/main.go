@@ -61,7 +61,7 @@ type services struct {
 	actors           *repositories.ActorsRepository
 	lexicons         *repositories.LexiconsRepository
 	config           *repositories.ConfigRepository
-	activity         *repositories.JetstreamActivityRepository
+	activity         *repositories.IndexingActivityRepository
 	oauthClients     *repositories.OAuthClientsRepository
 	labels           *repositories.LabelsRepository
 	externalLabels   *repositories.ExternalLabelsRepository
@@ -172,7 +172,7 @@ func run() error {
 }
 
 // initServices connects to the database, runs migrations, and creates all
-// repository instances. JetstreamActivityRepository is created once here
+// repository instances. IndexingActivityRepository is created once here
 // instead of being duplicated across multiple call sites.
 func initServices(cfg *config.Config) (*services, error) {
 	db, err := server.ConnectDatabase(cfg.DatabaseURL)
@@ -193,7 +193,7 @@ func initServices(cfg *config.Config) (*services, error) {
 		actors:           repositories.NewActorsRepository(db),
 		lexicons:         repositories.NewLexiconsRepository(db),
 		config:           repositories.NewConfigRepository(db),
-		activity:         repositories.NewJetstreamActivityRepository(db),
+		activity:         repositories.NewIndexingActivityRepository(db),
 		oauthClients:     repositories.NewOAuthClientsRepository(db),
 		labels:           repositories.NewLabelsRepository(db),
 		externalLabels:   repositories.NewExternalLabelsRepository(db),
@@ -1087,7 +1087,7 @@ func loadLexiconsFromDir(dir string, registry *lexicon.Registry) error {
 func populateActivityFromRecords(
 	ctx context.Context,
 	recordsRepo *repositories.RecordsRepository,
-	activityRepo *repositories.JetstreamActivityRepository,
+	activityRepo *repositories.IndexingActivityRepository,
 ) (int64, error) {
 	var count int64
 	_, err := recordsRepo.IterateAll(ctx, 1000, func(rec *repositories.Record) error {

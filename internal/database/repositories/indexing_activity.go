@@ -3,13 +3,15 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/GainForest/hyperindex/internal/database"
 )
 
-// ActivityEntry represents a jetstream activity log entry.
+// ActivityEntry represents an indexing activity log entry.
 type ActivityEntry struct {
 	ID           int64
 	Timestamp    time.Time
@@ -31,18 +33,19 @@ type ActivityBucket struct {
 	Deletes   int64
 }
 
-// JetstreamActivityRepository handles jetstream activity persistence.
-type JetstreamActivityRepository struct {
+// IndexingActivityRepository handles indexing activity persistence.
+type IndexingActivityRepository struct {
 	db database.Executor
 }
 
-// NewJetstreamActivityRepository creates a new jetstream activity repository.
-func NewJetstreamActivityRepository(db database.Executor) *JetstreamActivityRepository {
-	return &JetstreamActivityRepository{db: db}
+// NewIndexingActivityRepository creates a new indexing activity repository.
+func NewIndexingActivityRepository(db database.Executor) *IndexingActivityRepository {
+	return &IndexingActivityRepository{db: db}
 }
 
-// LogActivity logs a new activity entry with 'pending' status and returns the ID.
-func (r *JetstreamActivityRepository) LogActivity(
+// LogActivity logs a new indexing activity entry with pending status and returns the ID.
+// The eventJSON argument must be valid JSON; empty input and literal JSON null are stored as `{}` for events without a record payload.
+func (r *IndexingActivityRepository) LogActivity(
 	ctx context.Context,
 	timestamp time.Time,
 	operation, collection, did, rkey, eventJSON string,
@@ -50,8 +53,9 @@ func (r *JetstreamActivityRepository) LogActivity(
 	return r.LogActivityWithStatus(ctx, timestamp, operation, collection, did, rkey, eventJSON, "pending")
 }
 
-// LogActivityWithStatus logs a new activity entry with a custom status and returns the ID.
-func (r *JetstreamActivityRepository) LogActivityWithStatus(
+// LogActivityWithStatus logs a new indexing activity entry with a custom status and returns the ID.
+// The eventJSON argument must be valid JSON; empty input and literal JSON null are stored as `{}` for events without a record payload.
+func (r *IndexingActivityRepository) LogActivityWithStatus(
 	ctx context.Context,
 	timestamp time.Time,
 	operation, collection, did, rkey, eventJSON, status string,
@@ -62,10 +66,15 @@ func (r *JetstreamActivityRepository) LogActivityWithStatus(
 	// Always store in UTC for consistency
 	utcTime := timestamp.UTC()
 
+	normalizedEventJSON, err := normalizeActivityEventJSON(eventJSON)
+	if err != nil {
+		return 0, err
+	}
+
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
 		timestampStr = utcTime.Format(time.RFC3339)
-		sqlStr = fmt.Sprintf(`INSERT INTO jetstream_activity 
+		sqlStr = fmt.Sprintf(`INSERT INTO indexing_activity 
 			(timestamp, operation, collection, did, rkey, status, event_json)
 			VALUES (%s, %s, %s, %s, %s, %s, %s)
 			RETURNING id`,
@@ -73,7 +82,7 @@ func (r *JetstreamActivityRepository) LogActivityWithStatus(
 			r.db.Placeholder(4), r.db.Placeholder(5), r.db.Placeholder(6), r.db.Placeholder(7))
 	default:
 		timestampStr = utcTime.Format("2006-01-02 15:04:05")
-		sqlStr = fmt.Sprintf(`INSERT INTO jetstream_activity 
+		sqlStr = fmt.Sprintf(`INSERT INTO indexing_activity 
 			(timestamp, operation, collection, did, rkey, status, event_json)
 			VALUES (%s, %s, %s, %s, %s, %s, %s)`,
 			r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3),
@@ -87,7 +96,7 @@ func (r *JetstreamActivityRepository) LogActivityWithStatus(
 		database.Text(did),
 		database.Text(rkey),
 		database.Text(status),
-		database.Text(eventJSON),
+		database.Text(normalizedEventJSON),
 	}
 
 	if r.db.Dialect() == database.PostgreSQL {
@@ -104,13 +113,13 @@ func (r *JetstreamActivityRepository) LogActivityWithStatus(
 }
 
 // UpdateStatus updates the status and optional error message of an activity entry.
-func (r *JetstreamActivityRepository) UpdateStatus(
+func (r *IndexingActivityRepository) UpdateStatus(
 	ctx context.Context,
 	id int64,
 	status string,
 	errorMessage *string,
 ) error {
-	sqlStr := fmt.Sprintf(`UPDATE jetstream_activity 
+	sqlStr := fmt.Sprintf(`UPDATE indexing_activity 
 		SET status = %s, error_message = %s 
 		WHERE id = %s`,
 		r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3))
@@ -126,18 +135,18 @@ func (r *JetstreamActivityRepository) UpdateStatus(
 }
 
 // GetRecentActivity returns activity entries from the last N hours.
-func (r *JetstreamActivityRepository) GetRecentActivity(ctx context.Context, hours int) ([]ActivityEntry, error) {
+func (r *IndexingActivityRepository) GetRecentActivity(ctx context.Context, hours int) ([]ActivityEntry, error) {
 	var sqlStr string
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
 		sqlStr = fmt.Sprintf(`SELECT id, timestamp, operation, collection, did, rkey, status, error_message, event_json
-			FROM jetstream_activity
+			FROM indexing_activity
 			WHERE timestamp >= NOW() - INTERVAL '%d hours'
 			ORDER BY timestamp DESC
 			LIMIT 1000`, hours)
 	default:
 		sqlStr = fmt.Sprintf(`SELECT id, timestamp, operation, collection, did, rkey, status, error_message, event_json
-			FROM jetstream_activity
+			FROM indexing_activity
 			WHERE timestamp >= datetime('now', '-%d hours')
 			ORDER BY timestamp DESC
 			LIMIT 1000`, hours)
@@ -153,14 +162,14 @@ func (r *JetstreamActivityRepository) GetRecentActivity(ctx context.Context, hou
 }
 
 // CleanupOldActivity deletes activity entries older than the specified hours.
-func (r *JetstreamActivityRepository) CleanupOldActivity(ctx context.Context, hours int) error {
+func (r *IndexingActivityRepository) CleanupOldActivity(ctx context.Context, hours int) error {
 	var sqlStr string
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
-		sqlStr = fmt.Sprintf(`DELETE FROM jetstream_activity 
+		sqlStr = fmt.Sprintf(`DELETE FROM indexing_activity 
 			WHERE timestamp < NOW() - INTERVAL '%d hours'`, hours)
 	default:
-		sqlStr = fmt.Sprintf(`DELETE FROM jetstream_activity 
+		sqlStr = fmt.Sprintf(`DELETE FROM indexing_activity 
 			WHERE timestamp < datetime('now', '-%d hours')`, hours)
 	}
 
@@ -169,7 +178,7 @@ func (r *JetstreamActivityRepository) CleanupOldActivity(ctx context.Context, ho
 }
 
 // GetActivityBuckets returns aggregated activity data for the specified time range.
-func (r *JetstreamActivityRepository) GetActivityBuckets(ctx context.Context, timeRange string) ([]ActivityBucket, error) {
+func (r *IndexingActivityRepository) GetActivityBuckets(ctx context.Context, timeRange string) ([]ActivityBucket, error) {
 	var sqlStr string
 
 	switch timeRange {
@@ -212,7 +221,7 @@ func (r *JetstreamActivityRepository) GetActivityBuckets(ctx context.Context, ti
 	return buckets, rows.Err()
 }
 
-func (r *JetstreamActivityRepository) buildBucketQuery(hours, minutes int) string {
+func (r *IndexingActivityRepository) buildBucketQuery(hours, minutes int) string {
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
 		return fmt.Sprintf(`SELECT 
@@ -222,7 +231,7 @@ func (r *JetstreamActivityRepository) buildBucketQuery(hours, minutes int) strin
 			COUNT(*) FILTER (WHERE operation = 'create') as creates,
 			COUNT(*) FILTER (WHERE operation = 'update') as updates,
 			COUNT(*) FILTER (WHERE operation = 'delete') as deletes
-		FROM jetstream_activity
+		FROM indexing_activity
 		WHERE timestamp >= NOW() - INTERVAL '%d hours'
 		GROUP BY bucket
 		ORDER BY bucket ASC`, minutes, minutes, hours)
@@ -235,7 +244,7 @@ func (r *JetstreamActivityRepository) buildBucketQuery(hours, minutes int) strin
 			SUM(CASE WHEN operation = 'create' THEN 1 ELSE 0 END) as creates,
 			SUM(CASE WHEN operation = 'update' THEN 1 ELSE 0 END) as updates,
 			SUM(CASE WHEN operation = 'delete' THEN 1 ELSE 0 END) as deletes
-		FROM jetstream_activity
+		FROM indexing_activity
 		WHERE timestamp >= datetime('now', '-%d hours')
 		GROUP BY bucket
 		ORDER BY bucket ASC`, minutes, minutes, hours)
@@ -243,19 +252,30 @@ func (r *JetstreamActivityRepository) buildBucketQuery(hours, minutes int) strin
 }
 
 // DeleteAll removes all activity entries.
-func (r *JetstreamActivityRepository) DeleteAll(ctx context.Context) error {
-	_, err := r.db.Exec(ctx, "DELETE FROM jetstream_activity", nil)
+func (r *IndexingActivityRepository) DeleteAll(ctx context.Context) error {
+	_, err := r.db.Exec(ctx, "DELETE FROM indexing_activity", nil)
 	return err
 }
 
 // GetCount returns the total number of activity entries.
-func (r *JetstreamActivityRepository) GetCount(ctx context.Context) (int64, error) {
+func (r *IndexingActivityRepository) GetCount(ctx context.Context) (int64, error) {
 	var count int64
-	err := r.db.QueryRow(ctx, "SELECT COUNT(*) FROM jetstream_activity", nil, &count)
+	err := r.db.QueryRow(ctx, "SELECT COUNT(*) FROM indexing_activity", nil, &count)
 	return count, err
 }
 
-// Helper function to scan activity entries from rows
+func normalizeActivityEventJSON(eventJSON string) (string, error) {
+	trimmed := strings.TrimSpace(eventJSON)
+	if trimmed == "" || trimmed == "null" {
+		return "{}", nil
+	}
+	if !json.Valid([]byte(trimmed)) {
+		return "", fmt.Errorf("activity event_json must be valid JSON, got %q; pass a valid JSON payload or an empty string for delete events", trimmed)
+	}
+	return trimmed, nil
+}
+
+// scanActivityEntries scans indexing activity entries from rows.
 func scanActivityEntries(rows *sql.Rows) ([]ActivityEntry, error) {
 	var entries []ActivityEntry
 	for rows.Next() {

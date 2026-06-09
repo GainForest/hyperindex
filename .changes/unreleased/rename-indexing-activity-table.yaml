@@ -1,0 +1,5 @@
+kind: breaking
+body: Rename the activity log table to `indexing_activity`. Operators with direct SQL or monitoring against `jetstream_activity` should update those references; delete activity events now store empty or JSON null payloads as `{}` so PostgreSQL JSONB inserts succeed.
+time: 2026-06-09T13:59:25.936122113+06:00
+custom:
+    Affects: operator

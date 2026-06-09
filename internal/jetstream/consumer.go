@@ -34,7 +34,7 @@ type Consumer struct {
 	recordsRepo  *repositories.RecordsRepository
 	actorsRepo   *repositories.ActorsRepository
 	configRepo   *repositories.ConfigRepository
-	activityRepo *repositories.JetstreamActivityRepository
+	activityRepo *repositories.IndexingActivityRepository
 
 	// Pub/sub for GraphQL subscriptions
 	pubsub *subscription.PubSub
@@ -71,7 +71,7 @@ func NewConsumer(
 	recordsRepo *repositories.RecordsRepository,
 	actorsRepo *repositories.ActorsRepository,
 	configRepo *repositories.ConfigRepository,
-	activityRepo *repositories.JetstreamActivityRepository,
+	activityRepo *repositories.IndexingActivityRepository,
 	pubsub *subscription.PubSub,
 ) *Consumer {
 	if config.CursorFlushInterval == 0 {
