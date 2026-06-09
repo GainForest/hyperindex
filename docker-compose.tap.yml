@@ -1,10 +1,8 @@
-version: "3.8"
-
 services:
   tap:
     image: ghcr.io/bluesky-social/indigo/tap:latest
     ports:
-      - "127.0.0.1:2480:2480"
+      - "127.0.0.1:${TAP_HOST_PORT:-2480}:2480"
     volumes:
       - tap-data:/data
     environment:
@@ -18,7 +16,7 @@ services:
   hyperindex:
     build: .
     ports:
-      - "8080:8080"
+      - "${HYPERINDEX_HOST_PORT:-8080}:8080"
     depends_on:
       - tap
     environment:

@@ -1,4 +1,4 @@
-.PHONY: help build run test test-coverage smoke-api lint fmt clean dev db-migrate db-rollback db-status db-create-migration docker docker-run tools generate hooks-install changie-new
+.PHONY: help build run test test-coverage smoke-api smoke-tap-local lint fmt clean dev db-migrate db-rollback db-status db-create-migration docker docker-run tools generate hooks-install changie-new
 
 GO_TOOLCHAIN := GOTOOLCHAIN=go1.26.0
 VERSION ?= 0.1.0-dev
@@ -14,6 +14,7 @@ help:
 	@echo "  make build        - Build the binary"
 	@echo "  make test         - Run all tests"
 	@echo "  make smoke-api    - Run API smoke tests"
+	@echo "  make smoke-tap-local - Run isolated local Tap Docker stack and smoke tests"
 	@echo "  make lint         - Run linter"
 	@echo "  make tools        - Install development tools (including Changie)"
 	@echo "  make changie-new  - Create a new changelog fragment"
@@ -59,6 +60,10 @@ test-coverage:
 # Run post-deploy API smoke tests
 smoke-api:
 	@bash -c 'printf "Running Hyperindex API smoke checks...\n"; go test -v -tags=api_smoke ./tests/api-smoke -count=1 2>&1 | awk '\''!($$0 ~ /^=== (RUN|PAUSE|CONT)[[:space:]]/ || $$0 ~ /^[[:space:]]*--- PASS:/ || $$0 == "PASS" || $$0 ~ /^ok[[:space:]]+github\.com\/GainForest\/hyperindex\/tests\/api-smoke([[:space:]]|$$)/) { print; fflush() }'\''; status="$${PIPESTATUS[0]}"; if [ "$${status}" -eq 0 ]; then printf "✓ API smoke checks passed\n"; fi; exit "$${status}"'
+
+# Run an isolated local Tap Docker stack and API smoke tests (requires Docker)
+smoke-tap-local:
+	@scripts/smoke-tap-local.sh
 
 # Run linter (requires golangci-lint)
 lint:

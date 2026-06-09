@@ -24,6 +24,7 @@
 - `make run` — build and run backend
 - `make dev` — run backend with hot reload (`air` required)
 - `make test` — run Go tests with `-race`
+- `make smoke-tap-local` — run a full isolated local Tap Docker stack and API smoke tests using `app.certified.actor.profile` as the Tap signal collection and `app.certified.*,org.hypercerts.*` as Tap collection filters
 - `go test -v -run TestName ./...` — run a single Go test by name
 - `go test -v ./path/to/package/...` — run one Go package
 - `go test -v -race -tags=integration ./internal/integration/...` — run integration tests
