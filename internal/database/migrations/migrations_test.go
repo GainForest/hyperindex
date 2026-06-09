@@ -2,9 +2,15 @@ package migrations_test
 
 import (
 	"context"
+	"fmt"
+	"net/url"
+	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/GainForest/hyperindex/internal/database/migrations"
+	"github.com/GainForest/hyperindex/internal/database/postgres"
 	"github.com/GainForest/hyperindex/internal/database/sqlite"
 )
 
@@ -35,7 +41,7 @@ func TestMigrations_Run(t *testing.T) {
 		"actor",
 		"config",
 		"lexicon",
-		"jetstream_activity",
+		"indexing_activity",
 		"label",
 		"report",
 		"label_definition",
@@ -54,7 +60,19 @@ func TestMigrations_Run(t *testing.T) {
 		}
 	}
 
+	var oldActivityTableCount int
+	if err := exec.DB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='jetstream_activity'",
+	).Scan(&oldActivityTableCount); err != nil {
+		t.Fatalf("failed to check old activity table name: %v", err)
+	}
+	if oldActivityTableCount != 0 {
+		t.Errorf("old activity table count = %d, want 0 after indexing_activity rename", oldActivityTableCount)
+	}
+
 	expectedIndexes := []string{
+		"idx_indexing_activity_timestamp",
+		"idx_indexing_activity_rkey",
 		"idx_external_label_active_lookup",
 	}
 
@@ -67,6 +85,51 @@ func TestMigrations_Run(t *testing.T) {
 			t.Errorf("expected index %q to exist, but got error: %v", index, err)
 		}
 	}
+}
+
+func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
+	databaseURL, ok := safePostgresTestDatabaseURL(t)
+	if !ok {
+		t.Skip("PostgreSQL migration rename test requires DATABASE_URL pointing at a postgres database named test or ending with _test/-test")
+	}
+
+	ctx := context.Background()
+	adminExec, err := postgres.NewExecutor(databaseURL)
+	if err != nil {
+		t.Fatalf("failed to create postgres admin executor: %v", err)
+	}
+	t.Cleanup(func() { _ = adminExec.Close() })
+
+	schemaName := fmt.Sprintf("hyperindex_migration_test_%d", time.Now().UnixNano())
+	quotedSchemaName := quotePostgresIdentifier(schemaName)
+	if _, err := adminExec.DB().ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", quotedSchemaName)); err != nil {
+		t.Fatalf("failed to create postgres test schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = adminExec.DB().ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", quotedSchemaName))
+	})
+
+	schemaURL, err := postgresURLWithSearchPath(databaseURL, schemaName)
+	if err != nil {
+		t.Fatalf("failed to build postgres schema URL: %v", err)
+	}
+
+	exec, err := postgres.NewExecutor(schemaURL)
+	if err != nil {
+		t.Fatalf("failed to create postgres schema executor: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Close() })
+
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	assertPostgresTableCount(ctx, t, exec, schemaName, "indexing_activity", 1)
+	assertPostgresTableCount(ctx, t, exec, schemaName, "jetstream_activity", 0)
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "indexing_activity_pkey")
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_indexing_activity_timestamp")
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_indexing_activity_rkey")
+	assertPostgresSequenceExists(ctx, t, exec, schemaName, "indexing_activity_id_seq")
 }
 
 func TestMigrations_RunIdempotent(t *testing.T) {
@@ -133,5 +196,94 @@ func TestMigrations_Rollback(t *testing.T) {
 
 	if countAfter != countBefore-1 {
 		t.Errorf("expected %d migrations after rollback, got %d", countBefore-1, countAfter)
+	}
+}
+
+func safePostgresTestDatabaseURL(t *testing.T) (string, bool) {
+	t.Helper()
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if !strings.HasPrefix(databaseURL, "postgres://") && !strings.HasPrefix(databaseURL, "postgresql://") {
+		return "", false
+	}
+
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatalf("DATABASE_URL is not a valid URL: %v", err)
+	}
+	databaseName := strings.TrimPrefix(parsed.Path, "/")
+	if !isSafePostgresTestDatabaseName(databaseName) {
+		return "", false
+	}
+
+	return databaseURL, true
+}
+
+func isSafePostgresTestDatabaseName(databaseName string) bool {
+	name := strings.ToLower(strings.TrimSpace(databaseName))
+	return name == "test" || strings.HasSuffix(name, "_test") || strings.HasSuffix(name, "-test")
+}
+
+func postgresURLWithSearchPath(databaseURL, schemaName string) (string, error) {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		return "", err
+	}
+
+	query := parsed.Query()
+	query.Set("search_path", schemaName)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
+func quotePostgresIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+}
+
+func assertPostgresTableCount(ctx context.Context, t *testing.T, exec *postgres.Executor, schemaName, tableName string, want int) {
+	t.Helper()
+
+	var count int
+	if err := exec.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2`,
+		schemaName,
+		tableName,
+	).Scan(&count); err != nil {
+		t.Fatalf("failed to count postgres table %q: %v", tableName, err)
+	}
+	if count != want {
+		t.Errorf("postgres table %q count = %d, want %d", tableName, count, want)
+	}
+}
+
+func assertPostgresIndexExists(ctx context.Context, t *testing.T, exec *postgres.Executor, schemaName, indexName string) {
+	t.Helper()
+
+	var count int
+	if err := exec.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pg_indexes WHERE schemaname = $1 AND indexname = $2`,
+		schemaName,
+		indexName,
+	).Scan(&count); err != nil {
+		t.Fatalf("failed to count postgres index %q: %v", indexName, err)
+	}
+	if count != 1 {
+		t.Errorf("postgres index %q count = %d, want 1", indexName, count)
+	}
+}
+
+func assertPostgresSequenceExists(ctx context.Context, t *testing.T, exec *postgres.Executor, schemaName, sequenceName string) {
+	t.Helper()
+
+	var count int
+	if err := exec.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM information_schema.sequences WHERE sequence_schema = $1 AND sequence_name = $2`,
+		schemaName,
+		sequenceName,
+	).Scan(&count); err != nil {
+		t.Fatalf("failed to count postgres sequence %q: %v", sequenceName, err)
+	}
+	if count != 1 {
+		t.Errorf("postgres sequence %q count = %d, want 1", sequenceName, count)
 	}
 }

@@ -15,7 +15,7 @@ import (
 type IndexHandler struct {
 	records  *repositories.RecordsRepository
 	actors   *repositories.ActorsRepository
-	activity *repositories.JetstreamActivityRepository // reuse existing activity repo
+	activity *repositories.IndexingActivityRepository // records indexing activity
 	pubsub   *subscription.PubSub
 }
 
@@ -23,7 +23,7 @@ type IndexHandler struct {
 func NewIndexHandler(
 	records *repositories.RecordsRepository,
 	actors *repositories.ActorsRepository,
-	activity *repositories.JetstreamActivityRepository,
+	activity *repositories.IndexingActivityRepository,
 	pubsub *subscription.PubSub,
 ) *IndexHandler {
 	return &IndexHandler{

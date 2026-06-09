@@ -9,13 +9,13 @@ import (
 	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
-func setupActivityTest(t *testing.T) *repositories.JetstreamActivityRepository {
+func setupActivityTest(t *testing.T) *repositories.IndexingActivityRepository {
 	t.Helper()
 	db := testutil.SetupTestDB(t)
 	return db.Activity
 }
 
-func TestJetstreamActivity_LogActivity(t *testing.T) {
+func TestIndexingActivity_LogActivity(t *testing.T) {
 	repo := setupActivityTest(t)
 	ctx := context.Background()
 
@@ -36,7 +36,73 @@ func TestJetstreamActivity_LogActivity(t *testing.T) {
 	}
 }
 
-func TestJetstreamActivity_LogActivityWithStatus(t *testing.T) {
+func TestIndexingActivity_LogActivity_NormalizesEmptyEventJSON(t *testing.T) {
+	repo := setupActivityTest(t)
+	ctx := context.Background()
+
+	id, err := repo.LogActivity(ctx, time.Now(), "delete", "app.bsky.feed.post", "did:plc:test1", "abc123", "")
+	if err != nil {
+		t.Fatalf("LogActivity() error = %v", err)
+	}
+	if id <= 0 {
+		t.Errorf("LogActivity() returned id = %d, want > 0", id)
+	}
+
+	entries, err := repo.GetRecentActivity(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetRecentActivity() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("GetRecentActivity() returned %d entries, want 1", len(entries))
+	}
+	if entries[0].EventJSON != "{}" {
+		t.Errorf("EventJSON = %q, want %q", entries[0].EventJSON, "{}")
+	}
+}
+
+func TestIndexingActivity_LogActivity_NormalizesNullEventJSON(t *testing.T) {
+	repo := setupActivityTest(t)
+	ctx := context.Background()
+
+	id, err := repo.LogActivity(ctx, time.Now(), "delete", "app.bsky.feed.post", "did:plc:test1", "abc123", "null")
+	if err != nil {
+		t.Fatalf("LogActivity() error = %v", err)
+	}
+	if id <= 0 {
+		t.Errorf("LogActivity() returned id = %d, want > 0", id)
+	}
+
+	entries, err := repo.GetRecentActivity(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetRecentActivity() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("GetRecentActivity() returned %d entries, want 1", len(entries))
+	}
+	if entries[0].EventJSON != "{}" {
+		t.Errorf("EventJSON = %q, want %q", entries[0].EventJSON, "{}")
+	}
+}
+
+func TestIndexingActivity_LogActivity_RejectsInvalidEventJSON(t *testing.T) {
+	repo := setupActivityTest(t)
+	ctx := context.Background()
+
+	_, err := repo.LogActivity(ctx, time.Now(), "create", "app.bsky.feed.post", "did:plc:test1", "abc123", "not-json")
+	if err == nil {
+		t.Fatal("LogActivity() error = nil, want invalid JSON error")
+	}
+
+	count, countErr := repo.GetCount(ctx)
+	if countErr != nil {
+		t.Fatalf("GetCount() error = %v", countErr)
+	}
+	if count != 0 {
+		t.Errorf("GetCount() = %d, want 0 after rejected invalid event JSON", count)
+	}
+}
+
+func TestIndexingActivity_LogActivityWithStatus(t *testing.T) {
 	repo := setupActivityTest(t)
 	ctx := context.Background()
 
@@ -61,7 +127,7 @@ func TestJetstreamActivity_LogActivityWithStatus(t *testing.T) {
 	}
 }
 
-func TestJetstreamActivity_UpdateStatus(t *testing.T) {
+func TestIndexingActivity_UpdateStatus(t *testing.T) {
 	repo := setupActivityTest(t)
 	ctx := context.Background()
 
@@ -94,7 +160,7 @@ func TestJetstreamActivity_UpdateStatus(t *testing.T) {
 	}
 }
 
-func TestJetstreamActivity_GetRecentActivity(t *testing.T) {
+func TestIndexingActivity_GetRecentActivity(t *testing.T) {
 	repo := setupActivityTest(t)
 	ctx := context.Background()
 
@@ -117,7 +183,7 @@ func TestJetstreamActivity_GetRecentActivity(t *testing.T) {
 	}
 }
 
-func TestJetstreamActivity_GetActivityBuckets(t *testing.T) {
+func TestIndexingActivity_GetActivityBuckets(t *testing.T) {
 	repo := setupActivityTest(t)
 	ctx := context.Background()
 
@@ -150,7 +216,7 @@ func TestJetstreamActivity_GetActivityBuckets(t *testing.T) {
 	}
 }
 
-func TestJetstreamActivity_CleanupOldActivity(t *testing.T) {
+func TestIndexingActivity_CleanupOldActivity(t *testing.T) {
 	repo := setupActivityTest(t)
 	ctx := context.Background()
 
@@ -175,7 +241,7 @@ func TestJetstreamActivity_CleanupOldActivity(t *testing.T) {
 	}
 }
 
-func TestJetstreamActivity_GetCount(t *testing.T) {
+func TestIndexingActivity_GetCount(t *testing.T) {
 	repo := setupActivityTest(t)
 	ctx := context.Background()
 
@@ -205,7 +271,7 @@ func TestJetstreamActivity_GetCount(t *testing.T) {
 	}
 }
 
-func TestJetstreamActivity_DeleteAll(t *testing.T) {
+func TestIndexingActivity_DeleteAll(t *testing.T) {
 	repo := setupActivityTest(t)
 	ctx := context.Background()
 

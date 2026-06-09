@@ -292,7 +292,7 @@ var ActivityBucketType = graphql.NewObject(graphql.ObjectConfig{
 // ActivityEntryType represents a single activity log entry.
 var ActivityEntryType = graphql.NewObject(graphql.ObjectConfig{
 	Name:        "ActivityEntry",
-	Description: "A single jetstream activity log entry",
+	Description: "A single indexing activity log entry",
 	Fields: graphql.Fields{
 		"id": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.Int),

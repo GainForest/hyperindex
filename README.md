@@ -497,7 +497,7 @@ Legacy mode: Jetstream + Backfill ─────────→ Records DB
 - **Jetstream Consumer** - Legacy real-time AT Protocol event ingestion
 - **Backfill Worker** - Legacy historical import from relays
 - **GraphQL Schema Builder** - Generates schema from Lexicons
-- **Activity Tracker** - Logs record indexing activity for monitoring
+- **Activity Tracker** - Logs record indexing activity for monitoring in the `indexing_activity` table
 
 ## Development
 

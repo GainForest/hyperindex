@@ -11,7 +11,7 @@ import (
 
 // ActivityCleanupWorker periodically cleans up old activity entries.
 type ActivityCleanupWorker struct {
-	activity     *repositories.JetstreamActivityRepository
+	activity     *repositories.IndexingActivityRepository
 	interval     time.Duration
 	retentionHrs int
 	stop         chan struct{}
@@ -19,7 +19,7 @@ type ActivityCleanupWorker struct {
 }
 
 // NewActivityCleanupWorker creates a new activity cleanup worker.
-func NewActivityCleanupWorker(activity *repositories.JetstreamActivityRepository) *ActivityCleanupWorker {
+func NewActivityCleanupWorker(activity *repositories.IndexingActivityRepository) *ActivityCleanupWorker {
 	return &ActivityCleanupWorker{
 		activity:     activity,
 		interval:     time.Hour, // Run every hour
