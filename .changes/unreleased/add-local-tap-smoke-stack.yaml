@@ -1,0 +1,4 @@
+kind: added
+body: Add a local Tap smoke-test workflow that starts an isolated Docker stack with the Hypercerts, Certified, and helper lexicons mounted into the backend schema.
+custom:
+  Affects: developer

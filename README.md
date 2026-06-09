@@ -123,6 +123,16 @@ TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.ym
 
 Tap Docker deployments also require `ADMIN_API_KEY` in `.env` because Hyperindex requires admin authentication at startup. `TAP_COLLECTION_FILTERS` is read by the Tap sidecar only; legacy `JETSTREAM_COLLECTIONS` remains part of Jetstream mode and is not used as a Tap filtering fallback.
 
+**Local isolated Tap smoke stack (requires Docker):**
+
+Use this when you want to test current local changes against Tap with the Hypercerts/Certified lexicon set mounted into the backend container:
+
+```bash
+make smoke-tap-local
+```
+
+The target starts a fresh Docker Compose project with Tap and Hyperindex, mounts `testdata/lexicons` into the backend so the listed lexicons are present in the generated GraphQL schema, uses `TAP_SIGNAL_COLLECTION=app.certified.actor.profile`, uses `TAP_COLLECTION_FILTERS=app.certified.*,org.hypercerts.*`, waits 20 seconds for Tap discovery/backfill to warm up after Hyperindex is ready, runs the API smoke suite against `http://127.0.0.1:8080` with `tests/api-smoke/expectations/local-tap.json`, retries every 15 seconds while Tap catches up, and then stops the stack. The filters use Tap's `.*` wildcard syntax for NSID prefixes. Set `HYPERINDEX_LOCAL_TAP_KEEP=1` to leave the stack running for debugging, or `HYPERINDEX_LOCAL_TAP_HOST_PORT=18080` if port 8080 is already in use.
+
 #### Optional: External Labeler Streams
 
 Hyperindex can subscribe to external ATProto labeler streams using `com.atproto.label.subscribeLabels` and persist raw label events locally. This is independent of Tap or Jetstream record ingestion: Tap/Jetstream store records, while labeler subscriptions store external labels.

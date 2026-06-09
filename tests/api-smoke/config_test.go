@@ -312,6 +312,28 @@ func TestConfig(t *testing.T) {
 	assertDefaultExpectationsInScope(t, config.expectations)
 }
 
+func TestLocalTapExpectations(t *testing.T) {
+	loaded, err := loadExpectations(filepath.Join(apiSmokePackageDir(t), "expectations", "local-tap.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requiredNSIDs := makeSet(loaded.RequiredNSIDs)
+	for _, nsid := range []string{
+		"app.bsky.richtext.facet",
+		"app.certified.graph.follow",
+		"com.atproto.repo.strongRef",
+		"pub.leaflet.pages.linearDocument",
+	} {
+		if !requiredNSIDs[nsid] {
+			t.Fatalf("local Tap expectations missing required NSID %q", nsid)
+		}
+	}
+	if got := loaded.TypedQueryFields["app.certified.graph.follow"]; got != "appCertifiedGraphFollow" {
+		t.Fatalf("local Tap expectations typed field for app.certified.graph.follow = %q, want appCertifiedGraphFollow", got)
+	}
+}
+
 func assertDefaultExpectationsInScope(t testing.TB, loaded expectations) {
 	t.Helper()
 
