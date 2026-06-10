@@ -90,6 +90,12 @@ Run verification based on what changed.
 - Migrations run automatically on startup.
 - Be careful with `ALLOWED_ORIGINS`: current code allows all origins when unset, even if older prose suggests stricter defaults.
 
+## Documentation and agent skills
+
+- When public GraphQL behavior, hosted endpoint guidance, production schema, consumer examples, or API docs change, update the local Hyperindex skill too:
+  - `.agents/skills/hyperindex/SKILL.md`
+  - `.agents/skills/hyperindex/references/schema-reference.md`
+
 ## Changie fragments
 
 **Critical:** Do not skip Changie for externally meaningful changes. Release notes are produced from `.changes/unreleased/*.yaml`, not commit messages, so missing fragments mean the change will be absent from the curated changelog.
