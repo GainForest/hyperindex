@@ -1,5 +1,5 @@
 ---
-name: hyperindex-consumer
+name: hyperindex
 description: Query the Hypercerts Hyperindex GraphQL indexer for ATProto hypercert records. Use when consumers need GraphQL queries, filters, pagination, sorting, or workflows for org.hypercerts.* and app.certified.* records on api.indexer.hypercerts.dev or dev.api.indexer.hypercerts.dev.
 compatibility: Requires network access to the Hyperindex GraphQL endpoint. Examples target the current ATProto Hypercerts schema exposed by api.indexer.hypercerts.dev/graphql.
 allowed-tools: bash read fetch_content
@@ -9,7 +9,7 @@ metadata:
   staging_endpoint: https://dev.api.indexer.hypercerts.dev/graphql
 ---
 
-# Hyperindex Consumer Queries
+# Hyperindex Queries
 
 Use this skill when helping consumers read Hypercerts records from the hosted Hyperindex GraphQL API.
 
