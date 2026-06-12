@@ -40,7 +40,7 @@ The current production indexer is ATProto-first. Do **not** explain it using old
 - Production: `https://api.indexer.hypercerts.dev/graphql`
 - Staging: `https://dev.api.indexer.hypercerts.dev/graphql`
 
-Use production by default for consumer examples. `api.indexer.hypercerts.dev` is the production endpoint and currently exposes external label queries, label-aware filters, presence filters, and typed queries for the collections above. Staging may expose schema changes earlier or have different indexed data; introspect it before giving staging-specific answers.
+Use production by default for consumer examples. `api.indexer.hypercerts.dev` is the production endpoint and currently exposes presence filters and typed queries for the collections above. Staging may expose schema changes earlier; because ATProto data is network-wide, do not describe staging as a separate dataset unless you have verified an environment-specific indexing difference.
 
 ## Before answering
 
@@ -108,16 +108,15 @@ If a workflow needs nested matching, use one of these patterns:
 
 ## External labeler filtering
 
-Production exposes locally ingested external ATProto labels and can filter records by those labels before pagination.
+Use external label filtering only after confirming that the target endpoint exposes external label support.
 
-Endpoint status tested on 2026-06-10:
+Supported schemas expose:
 
-- Production supports external label queries and filters: `https://api.indexer.hypercerts.dev/graphql`
 - Root query: `externalLabels(subjects: ..., sources: ..., values: ..., activeOnly: ...)`
 - Record field: `externalLabels(sources: ..., values: ..., activeOnly: ...)`
 - Typed predicates: `where.externalLabels.has` and `where.externalLabels.none`
 
-Current production activity labels are available from source DID `did:plc:antf7bsm6f4ohkqfdckefyt7`. Use this tested pattern to get `high-quality` activity claims:
+Use this pattern to get `high-quality` activity claims from source DID `did:plc:antf7bsm6f4ohkqfdckefyt7`:
 
 ```graphql
 query HighQualityActivityClaimsByLabeler($labeler: String!, $after: String) {
@@ -172,8 +171,6 @@ Variables:
 ```json
 { "labeler": "did:plc:antf7bsm6f4ohkqfdckefyt7", "after": null }
 ```
-
-Test result on production: the query returned high-quality `org.hypercerts.claim.activity` records, including `Building food systems and native forests in Mangaroa` and `Hypercerts for Land Stewards`.
 
 To combine label filtering with author filtering, add a normal DID filter beside `externalLabels`:
 
