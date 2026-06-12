@@ -52,7 +52,7 @@ Use production by default for consumer examples. `api.indexer.hypercerts.dev` is
 6. Use `search(query: ..., collection: ...)` when the caller needs to match a nested URI/string inside JSON. Typed `where` inputs only support scalar comparisons and top-level presence checks for complex fields.
 
 Detailed schema reference: [references/schema-reference.md](references/schema-reference.md)
-Consumer-facing documentation page: [`docs/hyperindex-consumer-guide.md`](../../../docs/hyperindex-consumer-guide.md)
+Consumer-facing documentation page: [`docs/hyperindex.md`](../../../docs/hyperindex.md)
 
 ## GraphQL request shape
 
