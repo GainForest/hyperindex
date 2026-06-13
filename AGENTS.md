@@ -102,7 +102,7 @@ Run verification based on what changed.
 
 - Release notes are produced from `.changes/unreleased/*.yaml`, not commit history.
 - Prefer `make changie-new` when creating a fragment.
-- When writing a fragment, use the local **`writing-changie`** skill and follow `docs/changelog-workflow.md`.
+- Follow `docs/changelog-workflow.md` directly; there is no separate Changie skill.
 
 ## Keeping this file current
 
