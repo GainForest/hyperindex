@@ -98,32 +98,11 @@ Run verification based on what changed.
 
 ## Changie fragments
 
-**Critical:** Do not skip Changie for externally meaningful changes. Release notes are produced from `.changes/unreleased/*.yaml`, not commit messages, so missing fragments mean the change will be absent from the curated changelog.
+`docs/changelog-workflow.md` is the source of truth for when to add or skip Changie fragments, how to write them, and how maintainers run releases. Read it before adding or intentionally skipping a fragment.
 
-- If your change affects any of the following, add a Changie fragment unless the change is docs-only or purely internal:
-  - end users
-  - operators/deployers
-  - contributors
-  - people forking or reusing this codebase
-- This applies whether the change is in Go or frontend code.
-- Good candidates include:
-  - user-visible behavior changes
-  - GraphQL/API changes
-  - config or deployment changes
-  - migration/runtime behavior changes
-  - contributor workflow changes that matter to downstream users or forks
-- Usually skip fragments for:
-  - docs-only changes
-  - tests-only changes
-  - API smoke test or smoke expectation changes
-  - internal refactors with no externally meaningful behavior change
-- Prefer `make changie-new`.
-- When writing the fragment, use the local **`writing-changie`** skill.
-- `Affects` must be one of:
-  - `user`
-  - `operator`
-  - `developer`
-- Maintainers should follow `docs/changelog-workflow.md` for the release execution runbook.
+- Release notes are produced from `.changes/unreleased/*.yaml`, not commit history.
+- Prefer `make changie-new` when creating a fragment.
+- When writing a fragment, use the local **`writing-changie`** skill and follow `docs/changelog-workflow.md`.
 
 ## Keeping this file current
 
