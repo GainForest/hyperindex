@@ -180,31 +180,9 @@ If you are doing Go-heavy work, `docs/agents-go-reference.md` may also be useful
 
 ## Changelog fragments
 
-This repository uses **Changie** for release notes.
+This repository uses **Changie** for release notes. Release notes come from `.changes/unreleased/*.yaml`, not commit history.
 
-Release notes come from:
-
-- `.changes/unreleased/*.yaml`
-
-Add a changelog fragment for changes that affect:
-
-- end users
-- operators or deployers
-- contributors or downstream developers
-
-You can usually skip a fragment for:
-
-- docs-only changes
-- tests-only changes
-- internal refactors with no meaningful external impact
-
-Create a fragment with:
-
-```bash
-make changie-new
-```
-
-For more detail, see [`docs/changelog-workflow.md`](./docs/changelog-workflow.md).
+[`docs/changelog-workflow.md`](./docs/changelog-workflow.md) is the source of truth for when to add or skip fragments, install the tooling, write fragments, and batch or publish releases. Check that document before adding or intentionally skipping a fragment.
 
 ## Pull requests
 

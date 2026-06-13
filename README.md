@@ -523,48 +523,7 @@ make build
 
 We use [Changie](https://github.com/miniscruff/changie) for release-note fragments.
 
-```bash
-go install github.com/miniscruff/changie@v1.24.0
-make tools
-make changie-new
-```
-
-- Add a changelog fragment for user-facing changes, operator-facing changes, bug fixes, and other work that should appear in the next release notes.
-- You do not need a fragment for docs-only edits, tests-only changes, or internal refactors that do not affect behavior.
-- Maintainers run **Prepare release notes PR** on `main` to batch pending fragments and open or update a release PR.
-- After the release PR is merged, maintainers run **Publish release tag and GitHub Release** on `main` to create the `vX.Y.Z` tag and publish the matching GitHub Release from the generated `.changes` version file.
-- See `docs/changelog-workflow.md` for the full maintainer runbook, token requirements, and validation workflow details.
-
-Recommended fragment kinds:
-
-- `added` — new functionality
-- `breaking` — behavior or interface changes that require users, operators, or developers to adapt
-- `changed` — changed behavior, enhancements, or workflow changes
-- `deprecated` — functionality that still works now but should be migrated away from
-- `removed` — functionality removed
-- `fixed` — bug fixes
-- `security` — security-relevant fixes or hardening worth calling out
-
-### Affects and body guidance
-
-`Affects` describes who or what the change impacts most. Use the smallest audience that still fits the change.
-
-Recommended values:
-
-- `user` — changes that affect product behavior, APIs, queries, or UX
-- `operator` — changes that affect deployment, configuration, monitoring, or runtime behavior
-- `developer` — changes that affect contributor workflows, tooling, tests, or documentation
-
-Write the release-note body as a short description of the impact, not the implementation. Good bodies explain what changed, why it matters, and what readers should expect. Bad bodies focus on internal code paths, file names, or implementation details instead of the visible effect.
-
-### Release PR automation
-
-- Merge feature PRs with their Changie fragments into `main`.
-- Run **Prepare release notes PR** from GitHub Actions on `main` and choose `auto`, `patch`, `minor`, or `major` batching.
-- If unreleased fragments exist, the workflow runs `go build ./...`, `go test ./...`, `changie batch <release_type>`, and `changie merge`, then creates or updates a PR from `release/changelog` back into `main` for review.
-- Merge the generated release PR after reviewing the versioned `.changes` file and `CHANGELOG.md` diff.
-- Run **Publish release tag and GitHub Release** on `main` after the PR is merged.
-- Publish uses the latest generated `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` release file as the GitHub Release notes body; newer unreleased fragments for the next cycle do not block publishing that prepared version.
+[`docs/changelog-workflow.md`](./docs/changelog-workflow.md) is the source of truth for when to add or skip fragments, install the tooling, write fragments, and batch or publish releases. Check that document before adding or intentionally skipping a fragment.
 
 ### Local pre-commit linting
 
