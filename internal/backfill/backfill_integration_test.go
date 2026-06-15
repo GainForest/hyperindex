@@ -360,6 +360,9 @@ func fetchCARRecordsForDID(ctx context.Context, t *testing.T, client *Client, di
 		return data, nil
 	}
 	if len(records) == 0 {
+		if failFast {
+			t.Fatalf("GetRepo(%s, %s) returned no records for %s", data.PDS, did, collection)
+		}
 		t.Logf("GetRepo(%s, %s) returned no records for %s", data.PDS, did, collection)
 	}
 	return data, records
