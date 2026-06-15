@@ -7,13 +7,21 @@ package backfill
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/GainForest/hyperindex/internal/testutil"
+	"github.com/bluesky-social/indigo/atproto/atdata"
 )
 
 const (
-	// HypercertsActivityCollection is the collection we're testing.
+	// HypercertsActivityCollection is the collection used by the legacy integration tests.
 	HypercertsActivityCollection = "org.hypercerts.claim.activity"
+
+	// CertifiedActorProfileCollection is the default collection used for CAR backfill tests.
+	CertifiedActorProfileCollection = "app.certified.actor.profile"
 
 	// TestTimeout is the timeout for integration tests.
 	TestTimeout = 2 * time.Minute
@@ -200,4 +208,159 @@ func TestBackfillClient_EndToEnd(t *testing.T) {
 	if totalRecords == 0 {
 		t.Error("Expected to fetch at least some records in end-to-end test")
 	}
+}
+
+// TestGetRepo_CARRecordsConvertToATProtoJSON exercises the CAR-based backfill
+// path and verifies raw record CBOR is converted to canonical AT Protocol JSON.
+func TestGetRepo_CARRecordsConvertToATProtoJSON(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), TestTimeout)
+	defer cancel()
+
+	client := NewClient("", "")
+	collection := backfillIntegrationCollection()
+	_, records := findRepoWithCARRecords(ctx, t, client, collection)
+
+	jsonStr, err := CBORToJSON(records[0].Value)
+	if err != nil {
+		t.Fatalf("CBORToJSON() failed for %s: %v", records[0].URI, err)
+	}
+	if !json.Valid([]byte(jsonStr)) {
+		t.Fatalf("CBORToJSON() returned invalid JSON: %s", jsonStr)
+	}
+	if _, err := atdata.UnmarshalJSON([]byte(jsonStr)); err != nil {
+		t.Fatalf("CBORToJSON() returned JSON outside the AT Protocol data model: %v\n%s", err, jsonStr)
+	}
+}
+
+// TestBackfillActor_CARPathInsertsRecords exercises the database-backed actor
+// backfill flow, including CAR fetch, CBOR conversion, CID dedupe, and inserts.
+func TestBackfillActor_CARPathInsertsRecords(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), TestTimeout)
+	defer cancel()
+
+	client := NewClient("", "")
+	collection := backfillIntegrationCollection()
+	data, _ := findRepoWithCARRecords(ctx, t, client, collection)
+
+	db := testutil.SetupTestDB(t)
+	cfg := DefaultConfig()
+	cfg.Collections = []string{collection}
+	cfg.MaxHTTPConcurrent = 2
+	cfg.MaxPDSWorkers = 1
+	cfg.MaxConcurrentPerPDS = 1
+	cfg.MaxConcurrentRepos = 1
+
+	backfiller := NewBackfiller(cfg, db.Records, db.Actors, db.Activity)
+	defer backfiller.Close()
+
+	inserted, err := backfiller.BackfillActor(ctx, data.DID)
+	if err != nil {
+		t.Fatalf("BackfillActor(%q) failed: %v", data.DID, err)
+	}
+	if inserted == 0 {
+		t.Fatalf("BackfillActor(%q) inserted 0 records, want > 0", data.DID)
+	}
+
+	records, err := db.Records.GetByDID(ctx, data.DID)
+	if err != nil {
+		t.Fatalf("GetByDID(%q) failed: %v", data.DID, err)
+	}
+	if len(records) == 0 {
+		t.Fatalf("GetByDID(%q) returned 0 records after backfill", data.DID)
+	}
+
+	for _, record := range records {
+		if record.Collection != collection {
+			continue
+		}
+		if !json.Valid([]byte(record.JSON)) {
+			t.Fatalf("inserted record %s has invalid JSON: %s", record.URI, record.JSON)
+		}
+		if _, err := atdata.UnmarshalJSON([]byte(record.JSON)); err != nil {
+			t.Fatalf("inserted record %s has non-ATProto JSON: %v\n%s", record.URI, err, record.JSON)
+		}
+		return
+	}
+
+	t.Fatalf("BackfillActor(%q) inserted %d records but none for collection %s", data.DID, inserted, collection)
+}
+
+func backfillIntegrationCollection() string {
+	if collection := os.Getenv("HYPERINDEX_BACKFILL_INTEGRATION_COLLECTION"); collection != "" {
+		return collection
+	}
+	return CertifiedActorProfileCollection
+}
+
+func findRepoWithCARRecords(ctx context.Context, t *testing.T, client *Client, collection string) (*AtprotoData, []CARRecord) {
+	t.Helper()
+
+	if did := os.Getenv("HYPERINDEX_BACKFILL_INTEGRATION_DID"); did != "" {
+		return fetchCARRecordsForDID(ctx, t, client, did, collection, true)
+	}
+
+	const maxReposToProbe = 20
+	const maxPagesToProbe = 3
+
+	cursor := ""
+	checked := 0
+	for page := 0; page < maxPagesToProbe && checked < maxReposToProbe; page++ {
+		repos, nextCursor, err := client.listReposByCollectionPage(ctx, collection, cursor)
+		if err != nil {
+			t.Fatalf("list repos for collection %s: %v", collection, err)
+		}
+		if len(repos) == 0 {
+			break
+		}
+
+		for _, did := range repos {
+			if checked >= maxReposToProbe {
+				break
+			}
+			checked++
+
+			data, records := fetchCARRecordsForDID(ctx, t, client, did, collection, false)
+			if len(records) > 0 {
+				t.Logf("using %s (%s) with %d CAR records for %s", data.DID, data.Handle, len(records), collection)
+				return data, records
+			}
+		}
+
+		if nextCursor == "" {
+			break
+		}
+		cursor = nextCursor
+	}
+
+	t.Fatalf("found no repo with CAR records for %s after checking %d repos", collection, checked)
+	return nil, nil
+}
+
+func fetchCARRecordsForDID(ctx context.Context, t *testing.T, client *Client, did, collection string, failFast bool) (*AtprotoData, []CARRecord) {
+	t.Helper()
+
+	data, err := client.ResolveDID(ctx, did)
+	if err != nil {
+		if failFast {
+			t.Fatalf("resolve DID %s: %v", did, err)
+		}
+		t.Logf("resolve DID %s failed: %v", did, err)
+		return nil, nil
+	}
+
+	repoCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	records, err := client.GetRepo(repoCtx, data.PDS, data.DID, []string{collection})
+	if err != nil {
+		if failFast {
+			t.Fatalf("GetRepo(%s, %s) failed: %v", data.PDS, did, err)
+		}
+		t.Logf("GetRepo(%s, %s) failed: %v", data.PDS, did, err)
+		return data, nil
+	}
+	if len(records) == 0 {
+		t.Logf("GetRepo(%s, %s) returned no records for %s", data.PDS, did, collection)
+	}
+	return data, records
 }
