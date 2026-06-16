@@ -1,4 +1,0 @@
-kind: added
-body: Add certifiedProfileData to public record GraphQL nodes so clients can fetch an author's Certified profile record and its profile-record external labels alongside any indexed record.
-custom:
-  Affects: user
