@@ -1,5 +1,0 @@
-kind: fixed
-body: Fix legacy Go backfill CAR record conversion so AT Protocol CBOR values such as CID links, bytes, and blobs are stored with their canonical JSON shapes.
-time: 2026-06-15T12:18:52+06:00
-custom:
-    Affects: operator
