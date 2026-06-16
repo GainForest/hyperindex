@@ -667,8 +667,10 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 		}
 
 		// Determine the lexicon type for this field so the repository can CAST correctly.
+		// URI is generated metadata, not a JSON property, so it must stay string-typed
+		// even if a lexicon defines a colliding numeric property named "uri".
 		fieldType := "string" // default
-		if recordDef != nil {
+		if fieldName != "uri" && recordDef != nil {
 			if prop := recordDef.GetProperty(fieldName); prop != nil {
 				if prop.Format == "datetime" {
 					fieldType = "datetime"

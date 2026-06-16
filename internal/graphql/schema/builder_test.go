@@ -877,6 +877,30 @@ func TestExtractFilters_URIFilter(t *testing.T) {
 	}
 }
 
+func TestExtractFilters_URIFilterKeepsMetadataStringType(t *testing.T) {
+	lexiconID := "com.example.urifilter.collision"
+	registry := lexicon.NewRegistry()
+	registry.Register(buildReservedCollisionLexicon(lexiconID, []string{"uri"}))
+
+	filters, didFilter, err := extractFilters(map[string]interface{}{
+		"uri": map[string]interface{}{
+			"eq": "at://did:plc:alice/com.example.urifilter.collision/1",
+		},
+	}, lexiconID, registry)
+	if err != nil {
+		t.Fatalf("extractFilters() error = %v", err)
+	}
+	if !didFilter.IsEmpty() {
+		t.Fatalf("didFilter = %#v, want empty", didFilter)
+	}
+	if len(filters) != 1 {
+		t.Fatalf("len(filters) = %d, want 1 (filters: %#v)", len(filters), filters)
+	}
+	if filters[0].FieldType != "string" {
+		t.Fatalf("uri FieldType = %q, want string; metadata uri must not inherit colliding lexicon property type", filters[0].FieldType)
+	}
+}
+
 func TestBuildWhereInput_ComplexPropertiesUsePresenceFilter(t *testing.T) {
 	lexiconID := "com.example.whereinput.presence"
 	lex := &lexicon.Lexicon{
