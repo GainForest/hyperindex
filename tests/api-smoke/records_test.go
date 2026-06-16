@@ -45,6 +45,14 @@ type typedByURIRecord struct {
 	RKey string `json:"rkey"`
 }
 
+type typedRecordConnection struct {
+	Edges []typedRecordEdge `json:"edges"`
+}
+
+type typedRecordEdge struct {
+	Node typedByURIRecord `json:"node"`
+}
+
 func TestRequiredCollectionsAreQueryable(t *testing.T) {
 	config := loadSmokeConfig(t)
 
@@ -103,6 +111,32 @@ func TestTypedByURIRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTypedURIWhereFilterRoundTrip(t *testing.T) {
+	config := loadSmokeConfig(t)
+
+	for _, collection := range config.expectations.DataBearingCollections {
+		collection := collection
+		t.Run(collection.NSID, func(t *testing.T) {
+			typedField := config.expectations.TypedQueryFields[collection.NSID]
+			genericResponse := fetchGenericRecords(t, config, collection.NSID, 1)
+			if len(genericResponse.Records.Edges) != 1 {
+				t.Fatalf("records(%q, first: 1) returned %d edges, want exactly 1", collection.NSID, len(genericResponse.Records.Edges))
+			}
+
+			genericRecord := genericResponse.Records.Edges[0].Node
+			assertGenericRecordShape(t, collection.NSID, 0, genericRecord)
+
+			eqRecords := fetchTypedRecordsByURIWhereEQ(t, config, typedField, genericRecord.URI)
+			assertSingleURIWhereMatch(t, typedField+" where.uri.eq", genericRecord, eqRecords)
+
+			inRecords := fetchTypedRecordsByURIWhereIn(t, config, typedField, genericRecord.URI)
+			assertSingleURIWhereMatch(t, typedField+" where.uri.in", genericRecord, inRecords)
+		})
+	}
+
+	smokeLog("✓ Typed uri where filters work for eq and in")
+}
+
 func fetchGenericRecords(t testing.TB, config smokeConfig, collection string, first int) recordsQueryResponse {
 	t.Helper()
 
@@ -117,6 +151,70 @@ func fetchGenericRecords(t testing.TB, config smokeConfig, collection string, fi
 	}
 
 	return decoded
+}
+
+func fetchTypedRecordsByURIWhereEQ(t testing.TB, config smokeConfig, typedField string, uri string) []typedByURIRecord {
+	t.Helper()
+
+	query := fmt.Sprintf(`
+query SmokeTypedURIWhereEQ($uri: String!) {
+  %s(first: 2, where: { uri: { eq: $uri } }) {
+    edges {
+      node {
+        uri
+        did
+        cid
+        rkey
+      }
+    }
+  }
+}`, typedField)
+
+	response := postGraphQL(t, context.Background(), config, "SmokeTypedURIWhereEQ", query, map[string]any{
+		"uri": uri,
+	})
+
+	return decodeTypedRecordConnection(t, response, "SmokeTypedURIWhereEQ", typedField, uri)
+}
+
+func fetchTypedRecordsByURIWhereIn(t testing.TB, config smokeConfig, typedField string, uri string) []typedByURIRecord {
+	t.Helper()
+
+	query := fmt.Sprintf(`
+query SmokeTypedURIWhereIn($uris: [String!]) {
+  %s(first: 2, where: { uri: { in: $uris } }) {
+    edges {
+      node {
+        uri
+        did
+        cid
+        rkey
+      }
+    }
+  }
+}`, typedField)
+
+	response := postGraphQL(t, context.Background(), config, "SmokeTypedURIWhereIn", query, map[string]any{
+		"uris": []string{uri},
+	})
+
+	return decodeTypedRecordConnection(t, response, "SmokeTypedURIWhereIn", typedField, uri)
+}
+
+func decodeTypedRecordConnection(t testing.TB, response GraphQLResponse, operationName string, typedField string, uri string) []typedByURIRecord {
+	t.Helper()
+
+	var decoded map[string]typedRecordConnection
+	if err := json.Unmarshal(response.Data, &decoded); err != nil {
+		t.Fatalf("decode %s data for %s uri %q: %v", operationName, typedField, uri, err)
+	}
+
+	connection := decoded[typedField]
+	records := make([]typedByURIRecord, 0, len(connection.Edges))
+	for _, edge := range connection.Edges {
+		records = append(records, edge.Node)
+	}
+	return records
 }
 
 func fetchTypedRecordByURI(t testing.TB, config smokeConfig, typedField string, uri string) *typedByURIRecord {
@@ -179,6 +277,15 @@ func assertGenericRecordShape(t testing.TB, collection string, edgeIndex int, re
 			t.Fatalf("record shape %s: value $type = %q, want %q", location, typeName, collection)
 		}
 	}
+}
+
+func assertSingleURIWhereMatch(t testing.TB, label string, generic Record, records []typedByURIRecord) {
+	t.Helper()
+
+	if len(records) != 1 {
+		t.Fatalf("%s returned %d records for uri %q, want exactly 1", label, len(records), generic.URI)
+	}
+	assertMatchingRecordMetadata(t, label, generic, records[0])
 }
 
 func assertMatchingRecordMetadata(t testing.TB, typedByURIField string, generic Record, typed typedByURIRecord) {

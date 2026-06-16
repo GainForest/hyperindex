@@ -45,6 +45,12 @@ func TestFilterInputTypes(t *testing.T) {
 			wantAbsent: []string{"in", "contains", "startsWith"},
 		},
 		{
+			name:       "URIFilterInput fields",
+			inputObj:   URIFilterInput,
+			wantFields: []string{"eq", "in"},
+			wantAbsent: []string{"neq", "gt", "lt", "gte", "lte", "contains", "startsWith", "isNull"},
+		},
+		{
 			name:       "PresenceFilterInput fields",
 			inputObj:   PresenceFilterInput,
 			wantFields: []string{"isNull"},
@@ -169,6 +175,34 @@ func TestDateTimeFilterInput_FieldTypes(t *testing.T) {
 		if f.Type != DateTimeScalar {
 			t.Errorf("field %q type = %v, want DateTimeScalar", name, f.Type)
 		}
+	}
+}
+
+func TestURIFilterInput_FieldTypes(t *testing.T) {
+	fields := URIFilterInput.Fields()
+
+	eqField, ok := fields["eq"]
+	if !ok {
+		t.Fatal("URIFilterInput: missing field 'eq'")
+	}
+	if eqField.Type != graphql.String {
+		t.Errorf("URIFilterInput: eq type = %v, want String", eqField.Type)
+	}
+
+	inField, ok := fields["in"]
+	if !ok {
+		t.Fatal("URIFilterInput: missing field 'in'")
+	}
+	list, ok := inField.Type.(*graphql.List)
+	if !ok {
+		t.Fatalf("URIFilterInput: in type = %T, want *graphql.List", inField.Type)
+	}
+	nonNull, ok := list.OfType.(*graphql.NonNull)
+	if !ok {
+		t.Fatalf("URIFilterInput: in element type = %T, want *graphql.NonNull", list.OfType)
+	}
+	if nonNull.OfType != graphql.String {
+		t.Errorf("URIFilterInput: in element inner type = %v, want String", nonNull.OfType)
 	}
 }
 
@@ -311,6 +345,7 @@ func TestFilterInputNames(t *testing.T) {
 		{BooleanFilterInput, "BooleanFilterInput"},
 		{DateTimeFilterInput, "DateTimeFilterInput"},
 		{DIDFilterInput, "DIDFilterInput"},
+		{URIFilterInput, "URIFilterInput"},
 		{PresenceFilterInput, "PresenceFilterInput"},
 	}
 

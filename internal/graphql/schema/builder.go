@@ -209,9 +209,13 @@ func (b *Builder) buildWhereInputTypes() {
 		typeName := lexicon.ToTypeName(lex.ID) + "WhereInput"
 		fields := graphql.InputObjectConfigFieldMap{}
 
-		// Always include did as a filterable metadata field.
-		// Uses DIDFilterInput (restricted to eq and in only) because DID is a
-		// column-level filter — operators like contains/startsWith are not meaningful.
+		// Always include URI and DID as filterable metadata fields.
+		// Both are column-level filters, so only exact and batched lookup operators
+		// are exposed; substring operators are intentionally not meaningful here.
+		fields["uri"] = &graphql.InputObjectFieldConfig{
+			Type:        types.URIFilterInput,
+			Description: "Filter by AT-URI",
+		}
 		fields["did"] = &graphql.InputObjectFieldConfig{
 			Type:        types.DIDFilterInput,
 			Description: "Filter by DID (record author)",
@@ -662,9 +666,16 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 			continue
 		}
 
-		// Determine the lexicon type for this field so the repository can CAST correctly.
+		// Determine the filter target and lexicon type for this field so the repository
+		// can read from the correct storage location and CAST correctly. URI is
+		// generated metadata, not a JSON property, so it targets the record column and
+		// must stay string-typed even if a lexicon defines a colliding numeric property
+		// named "uri".
 		fieldType := "string" // default
-		if recordDef != nil {
+		fieldTarget := repositories.FieldFilterTargetJSON
+		if fieldName == "uri" {
+			fieldTarget = repositories.FieldFilterTargetColumn
+		} else if recordDef != nil {
 			if prop := recordDef.GetProperty(fieldName); prop != nil {
 				if prop.Format == "datetime" {
 					fieldType = "datetime"
@@ -684,6 +695,7 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 				Operator:  op,
 				Value:     val,
 				FieldType: fieldType,
+				Target:    fieldTarget,
 			})
 		}
 	}
