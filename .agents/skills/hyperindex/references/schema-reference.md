@@ -83,7 +83,7 @@ Typed list queries accept Relay-style pagination arguments (`first`, `after`, `l
 
 ## Filter inputs
 
-Scalar field filters support value comparisons. Complex top-level lexicon properties such as arrays, refs, unions, blobs, and objects use `PresenceFilterInput`, which only checks whether the field is missing/null or present. Nested values inside those complex properties are not filterable through typed `where` inputs.
+Scalar field filters support value comparisons. Generated typed `where` inputs also include a metadata-level `uri: URIFilterInput` field so clients can filter by exact AT-URI or batch hydrate records by URI without querying JSON payload fields. Complex top-level lexicon properties such as arrays, refs, unions, blobs, and objects use `PresenceFilterInput`, which only checks whether the field is missing/null or present. Nested values inside those complex properties are not filterable through typed `where` inputs.
 
 ### `StringFilterInput`
 
@@ -124,6 +124,15 @@ Filter conditions for datetime fields
 ### `DIDFilterInput`
 
 Filter conditions for DID fields (column-level). Only eq and in are supported.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `eq` | `String` | Equals |
+| `in` | `[String!]` | In list |
+
+### `URIFilterInput`
+
+Filter conditions for AT-URI metadata fields. Only eq and in are supported.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -199,6 +208,7 @@ Collection: `app.certified.actor.organization`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `longDescription` | `PresenceFilterInput` | Filter by whether longDescription is missing/null or present; nested values are not filterable |
 | `organizationType` | `PresenceFilterInput` | Filter by whether organizationType is missing/null or present; nested values are not filterable |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
@@ -234,6 +244,7 @@ Collection: `app.certified.actor.profile`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `pronouns` | `StringFilterInput` | Filter by pronouns |
 | `avatar` | `PresenceFilterInput` | Filter by whether avatar is missing/null or present; nested values are not filterable |
@@ -267,6 +278,7 @@ Collection: `app.certified.badge.award`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `note` | `StringFilterInput` | Filter by note |
 | `badge` | `PresenceFilterInput` | Filter by whether badge is missing/null or present; nested values are not filterable |
@@ -299,6 +311,7 @@ Collection: `app.certified.badge.definition`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `description` | `StringFilterInput` | Filter by description |
 | `allowedIssuers` | `PresenceFilterInput` | Filter by whether allowedIssuers is missing/null or present; nested values are not filterable |
 | `icon` | `PresenceFilterInput` | Filter by whether icon is missing/null or present; nested values are not filterable |
@@ -330,6 +343,7 @@ Collection: `app.certified.badge.response`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `response` | `StringFilterInput` | Filter by response |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `badgeAward` | `PresenceFilterInput` | Filter by whether badgeAward is missing/null or present; nested values are not filterable |
@@ -358,6 +372,7 @@ Collection: `app.certified.graph.follow`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `via` | `PresenceFilterInput` | Filter by whether via is missing/null or present; nested values are not filterable |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
@@ -385,6 +400,7 @@ Collection: `app.certified.link.evm`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `proof` | `PresenceFilterInput` | Filter by whether proof is missing/null or present; nested values are not filterable |
@@ -416,6 +432,7 @@ Collection: `app.certified.location`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `srs` | `StringFilterInput` | Filter by srs |
 | `location` | `PresenceFilterInput` | Filter by whether location is missing/null or present; nested values are not filterable |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
@@ -456,6 +473,7 @@ Collection: `org.hypercerts.claim.activity`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `workScope` | `PresenceFilterInput` | Filter by whether workScope is missing/null or present; nested values are not filterable |
 | `title` | `StringFilterInput` | Filter by title |
@@ -494,6 +512,7 @@ Collection: `org.hypercerts.claim.contribution`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `endDate` | `DateTimeFilterInput` | Filter by endDate |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
@@ -524,6 +543,7 @@ Collection: `org.hypercerts.claim.contributorInformation`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `image` | `PresenceFilterInput` | Filter by whether image is missing/null or present; nested values are not filterable |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `identifier` | `StringFilterInput` | Filter by identifier |
@@ -554,6 +574,7 @@ Collection: `org.hypercerts.claim.rights`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `attachment` | `PresenceFilterInput` | Filter by whether attachment is missing/null or present; nested values are not filterable |
@@ -590,6 +611,7 @@ Collection: `org.hypercerts.collection`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `banner` | `PresenceFilterInput` | Filter by whether banner is missing/null or present; nested values are not filterable |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `location` | `PresenceFilterInput` | Filter by whether location is missing/null or present; nested values are not filterable |
@@ -626,6 +648,7 @@ Collection: `org.hypercerts.context.acknowledgement`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `comment` | `StringFilterInput` | Filter by comment |
@@ -661,6 +684,7 @@ Collection: `org.hypercerts.context.attachment`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `location` | `PresenceFilterInput` | Filter by whether location is missing/null or present; nested values are not filterable |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
@@ -699,6 +723,7 @@ Collection: `org.hypercerts.context.evaluation`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `evaluators` | `PresenceFilterInput` | Filter by whether evaluators is missing/null or present; nested values are not filterable |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `subject` | `PresenceFilterInput` | Filter by whether subject is missing/null or present; nested values are not filterable |
@@ -742,6 +767,7 @@ Collection: `org.hypercerts.context.measurement`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `locations` | `PresenceFilterInput` | Filter by whether locations is missing/null or present; nested values are not filterable |
 | `unit` | `StringFilterInput` | Filter by unit |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
@@ -788,6 +814,7 @@ Collection: `org.hypercerts.funding.receipt`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `occurredAt` | `DateTimeFilterInput` | Filter by occurredAt |
 | `paymentNetwork` | `StringFilterInput` | Filter by paymentNetwork |
 | `to` | `PresenceFilterInput` | Filter by whether to is missing/null or present; nested values are not filterable |
@@ -831,6 +858,7 @@ Collection: `org.hypercerts.workscope.tag`
 
 | Filter field | Type | Notes |
 | --- | --- | --- |
+| `uri` | `URIFilterInput` | Filter by AT-URI |
 | `referenceDocument` | `PresenceFilterInput` | Filter by whether referenceDocument is missing/null or present; nested values are not filterable |
 | `sameAs` | `PresenceFilterInput` | Filter by whether sameAs is missing/null or present; nested values are not filterable |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |

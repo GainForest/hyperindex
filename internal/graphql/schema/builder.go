@@ -209,9 +209,13 @@ func (b *Builder) buildWhereInputTypes() {
 		typeName := lexicon.ToTypeName(lex.ID) + "WhereInput"
 		fields := graphql.InputObjectConfigFieldMap{}
 
-		// Always include did as a filterable metadata field.
-		// Uses DIDFilterInput (restricted to eq and in only) because DID is a
-		// column-level filter — operators like contains/startsWith are not meaningful.
+		// Always include URI and DID as filterable metadata fields.
+		// Both are column-level filters, so only exact and batched lookup operators
+		// are exposed; substring operators are intentionally not meaningful here.
+		fields["uri"] = &graphql.InputObjectFieldConfig{
+			Type:        types.URIFilterInput,
+			Description: "Filter by AT-URI",
+		}
 		fields["did"] = &graphql.InputObjectFieldConfig{
 			Type:        types.DIDFilterInput,
 			Description: "Filter by DID (record author)",

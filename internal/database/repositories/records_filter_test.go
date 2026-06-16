@@ -266,6 +266,60 @@ func TestBuildFilterClause_MultipleFilters(t *testing.T) {
 	}
 }
 
+func TestBuildFilterClause_URIUsesRecordColumn(t *testing.T) {
+	repo := newTestRepo(t)
+	filters := []FieldFilter{
+		{Field: "uri", Operator: "eq", Value: "at://did:plc:alice/com.example.post/1", FieldType: "string"},
+	}
+
+	clause, params, err := repo.buildFilterClause(filters, 1)
+	if err != nil {
+		t.Fatalf("buildFilterClause() error = %v", err)
+	}
+	if !strings.Contains(clause, "uri = ?") {
+		t.Errorf("clause = %q, want record uri column comparison", clause)
+	}
+	if strings.Contains(clause, "json_extract") {
+		t.Errorf("clause = %q, should not extract uri from record JSON", clause)
+	}
+	if len(params) != 1 {
+		t.Fatalf("params count = %d, want 1", len(params))
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_URIFilterUsesRecordColumn(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	const targetURI = "at://did:plc:alice/com.example.post/target"
+	insertSortRecord(t, repo, targetURI, "cid-target", "did:plc:alice", "com.example.post", `{"uri":"json-shadow","text":"target"}`)
+	insertSortRecord(t, repo, "at://did:plc:bob/com.example.post/other", "cid-other", "did:plc:bob", "com.example.post", `{"uri":"`+targetURI+`","text":"other"}`)
+	insertSortRecord(t, repo, "at://did:plc:alice/com.example.post/third", "cid-third", "did:plc:alice", "com.example.post", `{"text":"third"}`)
+
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "com.example.post", []FieldFilter{
+		{Field: "uri", Operator: "eq", Value: targetURI, FieldType: "string"},
+	}, DIDFilter{}, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("GetByCollectionSortedWithKeysetCursor() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if records[0].URI != targetURI {
+		t.Errorf("records[0].URI = %q, want %q", records[0].URI, targetURI)
+	}
+
+	count, err := repo.GetCollectionCountFiltered(ctx, "com.example.post", []FieldFilter{
+		{Field: "uri", Operator: "in", Value: []interface{}{targetURI}, FieldType: "string"},
+	}, DIDFilter{})
+	if err != nil {
+		t.Fatalf("GetCollectionCountFiltered() error = %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count = %d, want 1", count)
+	}
+}
+
 // newSortTestRepo creates a RecordsRepository with a fresh in-memory SQLite DB and the record table.
 // Returns the repo and a helper function for running raw SQL (e.g., to set indexed_at).
 func newSortTestRepo(t *testing.T) (*RecordsRepository, func(query string, args ...any)) {

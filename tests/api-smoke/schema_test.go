@@ -18,6 +18,22 @@ query SmokeSchema {
         name
         args {
           name
+          type {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType {
+                kind
+                name
+                ofType {
+                  kind
+                  name
+                }
+              }
+            }
+          }
         }
         type {
           kind
@@ -42,6 +58,25 @@ query SmokeSchema {
       name
       fields {
         name
+      }
+      inputFields {
+        name
+        type {
+          kind
+          name
+          ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType {
+                kind
+                name
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -70,9 +105,10 @@ type schemaObject struct {
 }
 
 type schemaType struct {
-	Kind   string        `json:"kind"`
-	Name   string        `json:"name"`
-	Fields []schemaField `json:"fields"`
+	Kind        string             `json:"kind"`
+	Name        string             `json:"name"`
+	Fields      []schemaField      `json:"fields"`
+	InputFields []schemaInputField `json:"inputFields"`
 }
 
 type schemaField struct {
@@ -82,7 +118,8 @@ type schemaField struct {
 }
 
 type schemaArgument struct {
-	Name string `json:"name"`
+	Name string        `json:"name"`
+	Type schemaTypeRef `json:"type"`
 }
 
 type schemaTypeRef struct {
@@ -128,6 +165,43 @@ func TestSchemaExposesExpectedTypedCollections(t *testing.T) {
 			requireSchemaArgument(t, byURIField, "uri")
 		})
 	}
+}
+
+func TestSchemaExposesURIWhereFilter(t *testing.T) {
+	config := loadSmokeConfig(t)
+	schema := fetchGraphQLSchema(t, config)
+	queryFields := fieldsByName(schema.QueryType.Fields)
+	types := typesByName(schema.Types)
+
+	uriFilter := requireSchemaType(t, types, "URIFilterInput")
+	if uriFilter.Kind != "INPUT_OBJECT" {
+		t.Fatalf("URIFilterInput kind = %q, want INPUT_OBJECT", uriFilter.Kind)
+	}
+	uriFilterFields := inputFieldsByName(uriFilter.InputFields)
+	requireSchemaInputField(t, uriFilterFields, "eq")
+	requireSchemaInputField(t, uriFilterFields, "in")
+	for _, absent := range []string{"contains", "startsWith", "neq", "isNull"} {
+		if _, exists := uriFilterFields[absent]; exists {
+			t.Fatalf("URIFilterInput exposes unsupported field %q", absent)
+		}
+	}
+
+	for nsid, queryFieldName := range config.expectations.TypedQueryFields {
+		nsid := nsid
+		queryFieldName := queryFieldName
+		t.Run(nsid, func(t *testing.T) {
+			collectionField := requireSchemaFieldForNSID(t, queryFields, queryFieldName, nsid)
+			whereArg := requireSchemaArgument(t, collectionField, "where")
+			whereInputName := namedTypeName(whereArg.Type)
+			whereInput := requireSchemaType(t, types, whereInputName)
+			uriField := requireSchemaInputField(t, inputFieldsByName(whereInput.InputFields), "uri")
+			if got := namedTypeName(uriField.Type); got != "URIFilterInput" {
+				t.Fatalf("%s.uri filter type = %q, want URIFilterInput", whereInputName, got)
+			}
+		})
+	}
+
+	smokeLog("✓ Typed collection schemas expose uri where filters")
 }
 
 func TestSchemaExcludesNonRecordLexiconsFromTypedCollectionQueries(t *testing.T) {
@@ -228,15 +302,26 @@ func requireSchemaType(t testing.TB, types map[string]schemaType, name string) s
 	return typ
 }
 
-func requireSchemaArgument(t testing.TB, field schemaField, name string) {
+func requireSchemaArgument(t testing.TB, field schemaField, name string) schemaArgument {
 	t.Helper()
 
 	for _, argument := range field.Args {
 		if argument.Name == name {
-			return
+			return argument
 		}
 	}
 	t.Fatalf("schema field %q is missing argument %q", field.Name, name)
+	return schemaArgument{}
+}
+
+func requireSchemaInputField(t testing.TB, fields map[string]schemaInputField, name string) schemaInputField {
+	t.Helper()
+
+	field, ok := fields[name]
+	if !ok {
+		t.Fatalf("schema input is missing field %q", name)
+	}
+	return field
 }
 
 func namedTypeName(typeRef schemaTypeRef) string {

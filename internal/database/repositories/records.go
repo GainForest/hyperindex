@@ -438,7 +438,7 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 	placeholderIdx := startPlaceholder
 
 	for _, f := range filters {
-		extract := r.db.JSONExtract("json", f.Field)
+		extract := r.filterFieldExpr(f.Field)
 
 		// Wrap numeric types in a CAST for proper comparison
 		isNumeric := f.FieldType == "integer" || f.FieldType == "number"
@@ -526,6 +526,16 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 	}
 
 	return strings.Join(conditions, " AND "), params, nil
+}
+
+// filterFieldExpr returns the SQL expression used for a filterable field. Record
+// metadata fields are stored in columns, while lexicon-defined fields are stored
+// in the record JSON payload.
+func (r *RecordsRepository) filterFieldExpr(field string) string {
+	if directSortColumns[field] {
+		return field
+	}
+	return r.db.JSONExtract("json", field)
 }
 
 // buildDIDFilterClause builds a SQL WHERE clause fragment for a DIDFilter.

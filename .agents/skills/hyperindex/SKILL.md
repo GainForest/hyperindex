@@ -80,9 +80,11 @@ Most typed list queries accept:
 - `sortBy`: collection-specific enum, default is usually `indexed_at`
 - `sortDirection`: `ASC` or `DESC`, default is `DESC`
 
-Common scalar and DID filter operators:
+Common metadata, scalar, and DID filter operators:
 
 ```graphql
+where: { uri: { eq: "at://did:plc:.../org.hypercerts.claim.activity/rkey" } }
+where: { uri: { in: ["at://did:plc:.../collection/rkey1", "at://did:plc:.../collection/rkey2"] } }
 where: { did: { eq: "did:plc:..." } }
 where: { did: { in: ["did:plc:a", "did:plc:b"] } }
 where: { title: { contains: "reforestation" } }
@@ -90,6 +92,8 @@ where: { title: { startsWith: "Q1" } }
 where: { createdAt: { gte: "2026-01-01T00:00:00Z" } }
 where: { endDate: { isNull: false } }
 ```
+
+`uri` filters are record metadata filters, not JSON-field filters. They support exact lookup with `eq` and batched lookup with `in`.
 
 Complex top-level fields such as arrays, refs, objects, blobs, and unions use `PresenceFilterInput`. That means you can ask whether the field is present, but not match nested values through typed `where` inputs:
 

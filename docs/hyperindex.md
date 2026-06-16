@@ -142,11 +142,15 @@ Pagination defaults to 20 records. The maximum page size is 1000 records.
 Common filters:
 
 ```graphql
+where: { uri: { eq: "at://did:plc:example/org.hypercerts.claim.activity/rkey" } }
+where: { uri: { in: ["at://did:plc:example/org.hypercerts.claim.activity/rkey1", "at://did:plc:example/org.hypercerts.claim.activity/rkey2"] } }
 where: { did: { eq: "did:plc:example" } }
 where: { title: { contains: "reforestation" } }
 where: { createdAt: { gte: "2026-01-01T00:00:00Z" } }
 where: { image: { isNull: false } }
 ```
+
+The generated `uri` filter is a record metadata filter for exact AT-URI lookup and batched hydration. It supports `eq` and `in` and does not search the JSON payload.
 
 Scalar fields support value filters such as `eq`, `neq`, `in`, `contains`, `startsWith`, `gt`, `lt`, `gte`, `lte`, and `isNull`, depending on the scalar type.
 
