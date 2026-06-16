@@ -12,9 +12,14 @@ import (
 
 const (
 	externalLabelLastErrorMaxLen = 4096
-	labelSubjectKeySeparator     = "\x00"
-	fatalCursorPrefix            = "FATAL_CURSOR "
-	fatalCursorLikePattern       = fatalCursorPrefix + "%"
+	// externalLabelSubjectBatchSize keeps subject hydration below SQLite's
+	// compound SELECT and bound parameter limits while still avoiding N+1 lookups.
+	// Each subject adds 3 parameters; 250 subjects plus the maximum 100 source
+	// and 100 value filters uses 950 parameters, below SQLite's 999 limit.
+	externalLabelSubjectBatchSize = 250
+	labelSubjectKeySeparator      = "\x00"
+	fatalCursorPrefix             = "FATAL_CURSOR "
+	fatalCursorLikePattern        = fatalCursorPrefix + "%"
 
 	// LabelSubscriptionStatusPending means the subscription is configured but has
 	// not yet reported a successful connection, event, or error in this database.
@@ -408,9 +413,9 @@ func (r *ExternalLabelsRepository) CountLabels(ctx context.Context, subscription
 	return count, nil
 }
 
-// GetBySubjects retrieves external labels for the requested subjects in one
-// query. The returned map is keyed by LabelSubject.Key(), which preserves CID
-// distinctions when the same URI is requested for multiple record versions.
+// GetBySubjects retrieves external labels for the requested subjects. The
+// returned map is keyed by LabelSubject.Key(), which preserves CID distinctions
+// when the same URI is requested for multiple record versions.
 func (r *ExternalLabelsRepository) GetBySubjects(ctx context.Context, subjects []LabelSubject, filter ExternalLabelFilter) (map[string][]ExternalLabel, error) {
 	normalizedSubjects, err := normalizeLabelSubjects(subjects)
 	if err != nil {
@@ -428,8 +433,35 @@ func (r *ExternalLabelsRepository) GetBySubjects(ctx context.Context, subjects [
 		return labelsBySubject, nil
 	}
 
+	for start := 0; start < len(normalizedSubjects); start += externalLabelSubjectBatchSize {
+		end := start + externalLabelSubjectBatchSize
+		if end > len(normalizedSubjects) {
+			end = len(normalizedSubjects)
+		}
+
+		batchLabels, err := r.getBySubjectsBatch(ctx, normalizedSubjects[start:end], filter)
+		if err != nil {
+			return nil, err
+		}
+		for subjectKey, labels := range batchLabels {
+			labelsBySubject[subjectKey] = append(labelsBySubject[subjectKey], labels...)
+		}
+	}
+
+	return labelsBySubject, nil
+}
+
+func (r *ExternalLabelsRepository) getBySubjectsBatch(ctx context.Context, subjects []LabelSubject, filter ExternalLabelFilter) (map[string][]ExternalLabel, error) {
+	labelsBySubject := make(map[string][]ExternalLabel, len(subjects))
+	for _, subject := range subjects {
+		labelsBySubject[subject.Key()] = nil
+	}
+	if len(subjects) == 0 {
+		return labelsBySubject, nil
+	}
+
 	var params []database.Value
-	requestedSubjectSQL := buildRequestedSubjectSQL(r.db, normalizedSubjects, &params)
+	requestedSubjectSQL := buildRequestedSubjectSQL(r.db, subjects, &params)
 	conditions := []string{`(rs.cid IS NULL OR el.cid IS NULL OR el.cid = rs.cid)`}
 	placeholderIdx := len(params) + 1
 
@@ -482,11 +514,11 @@ func (r *ExternalLabelsRepository) GetBySubjects(ctx context.Context, subjects [
 		if err != nil {
 			return nil, err
 		}
-		if subjectIndex < 0 || subjectIndex >= int64(len(normalizedSubjects)) {
+		if subjectIndex < 0 || subjectIndex >= int64(len(subjects)) {
 			return nil, fmt.Errorf("get external labels by subjects: invalid subject index %d", subjectIndex)
 		}
 
-		subjectKey := normalizedSubjects[subjectIndex].Key()
+		subjectKey := subjects[subjectIndex].Key()
 		labelsBySubject[subjectKey] = append(labelsBySubject[subjectKey], label)
 	}
 	if err := rows.Err(); err != nil {

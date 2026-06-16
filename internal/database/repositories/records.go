@@ -54,12 +54,29 @@ type Record struct {
 	RKey       string
 }
 
-// FieldFilter represents a single filter condition on a JSON field.
+// FieldFilterTarget identifies where a record field filter reads its value
+// from. Use JSON for lexicon-defined record properties and Column only for
+// generated metadata filters that intentionally target record table columns.
+type FieldFilterTarget string
+
+const (
+	// FieldFilterTargetJSON reads from a top-level field in the record JSON
+	// payload. It is also the default when FieldFilter.Target is empty, which
+	// keeps older callers on the safe lexicon-property path.
+	FieldFilterTargetJSON FieldFilterTarget = "json"
+
+	// FieldFilterTargetColumn reads from a whitelisted metadata column on the
+	// record table. Use it only for generated metadata filters such as uri.
+	FieldFilterTargetColumn FieldFilterTarget = "column"
+)
+
+// FieldFilter represents a single condition on a filterable record field.
 type FieldFilter struct {
-	Field     string      // JSON field name (e.g., "title", "createdAt"). Must be a valid field name.
-	Operator  string      // One of: "eq", "neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith", "isNull"
-	Value     interface{} // The comparison value. For "in", must be []interface{}. For "isNull", must be bool.
-	FieldType string      // Lexicon type used for SQL casting. Numeric types are cast; complex types are presence-filtered with isNull.
+	Field     string            // Field name. JSON targets use a top-level JSON property; column targets use a whitelisted metadata column.
+	Operator  string            // One of: "eq", "neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith", "isNull"
+	Value     interface{}       // The comparison value. For "in", must be []interface{}. For "isNull", must be bool.
+	FieldType string            // Lexicon type used for SQL casting. Numeric types are cast; complex types are presence-filtered with isNull.
+	Target    FieldFilterTarget // Where to read Field from. Empty means FieldFilterTargetJSON.
 }
 
 // DIDFilter represents a filter on the did column.
@@ -438,7 +455,10 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 	placeholderIdx := startPlaceholder
 
 	for _, f := range filters {
-		extract := r.db.JSONExtract("json", f.Field)
+		extract, err := r.filterFieldExpr(f)
+		if err != nil {
+			return "", nil, err
+		}
 
 		// Wrap numeric types in a CAST for proper comparison
 		isNumeric := f.FieldType == "integer" || f.FieldType == "number"
@@ -526,6 +546,30 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 	}
 
 	return strings.Join(conditions, " AND "), params, nil
+}
+
+// metadataFilterColumns is the set of record table columns that generated
+// metadata filters may read directly. Keep this narrower than directSortColumns:
+// sort fields and where-filter fields have different collision rules.
+var metadataFilterColumns = map[string]bool{
+	"uri": true,
+}
+
+// filterFieldExpr returns the SQL expression used for a filterable field. The
+// filter target decides whether Field is a JSON property or a record table
+// column; callers must not infer that from the field name alone.
+func (r *RecordsRepository) filterFieldExpr(f FieldFilter) (string, error) {
+	switch f.Target {
+	case "", FieldFilterTargetJSON:
+		return r.db.JSONExtract("json", f.Field), nil
+	case FieldFilterTargetColumn:
+		if !metadataFilterColumns[f.Field] {
+			return "", fmt.Errorf("unsupported metadata filter column %q: expose it as a generated metadata filter before using FieldFilterTargetColumn", f.Field)
+		}
+		return f.Field, nil
+	default:
+		return "", fmt.Errorf("unsupported filter target %q for field %q: use FieldFilterTargetJSON or FieldFilterTargetColumn", f.Target, f.Field)
+	}
 }
 
 // buildDIDFilterClause builds a SQL WHERE clause fragment for a DIDFilter.

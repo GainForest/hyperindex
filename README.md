@@ -14,12 +14,12 @@ Hyperindex (hi) connects to the AT Protocol network, indexes records matching yo
 
 ## Agent skill
 
-This repository includes a `hyperindex-consumer` Agent Skill for querying the hosted Hypercerts indexer, including common GraphQL workflows, filters, pagination, attachments, certified profiles, and external label filtering notes.
+This repository includes a `hyperindex` Agent Skill for querying the hosted Hypercerts indexer, including common GraphQL workflows, filters, pagination, attachments, certified profiles, and external label filtering notes.
 
 Install it with the [`skills`](https://www.skills.sh/) CLI:
 
 ```bash
-npx skills add https://github.com/GainForest/hyperindex --skill hyperindex-consumer
+npx skills add https://github.com/GainForest/hyperindex --skill hyperindex
 ```
 
 ## Quick Start
@@ -122,6 +122,16 @@ TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.ym
 | `TAP_COLLECTION_FILTERS` | Comma-separated collection NSIDs for Tap sidecar record filtering; set independently from legacy `JETSTREAM_COLLECTIONS` | *(empty)* |
 
 Tap Docker deployments also require `ADMIN_API_KEY` in `.env` because Hyperindex requires admin authentication at startup. `TAP_COLLECTION_FILTERS` is read by the Tap sidecar only; legacy `JETSTREAM_COLLECTIONS` remains part of Jetstream mode and is not used as a Tap filtering fallback.
+
+**Local isolated Tap smoke stack (requires Docker):**
+
+Use this when you want to test current local changes against Tap with the Hypercerts/Certified lexicon set mounted into the backend container:
+
+```bash
+make smoke-tap-local
+```
+
+The target starts a fresh Docker Compose project with Tap and Hyperindex, mounts `testdata/lexicons` into the backend so the listed lexicons are present in the generated GraphQL schema, uses `TAP_SIGNAL_COLLECTION=app.certified.actor.profile`, uses `TAP_COLLECTION_FILTERS=app.certified.*,org.hypercerts.*`, waits 20 seconds for Tap discovery/backfill to warm up after Hyperindex is ready, runs the API smoke suite against `http://127.0.0.1:8080` with `tests/api-smoke/expectations/local-tap.json`, retries every 15 seconds while Tap catches up, and then stops the stack. The filters use Tap's `.*` wildcard syntax for NSID prefixes. Set `HYPERINDEX_LOCAL_TAP_KEEP=1` to leave the stack running for debugging, or `HYPERINDEX_LOCAL_TAP_HOST_PORT=18080` if port 8080 is already in use.
 
 #### Optional: External Labeler Streams
 
@@ -300,6 +310,28 @@ query {
 
 `where.externalLabels` decides which records qualify. The `node.externalLabels(...)` field decides which labels are displayed on each returned record, so repeat the same source/value constraints on the field if you only want to display labels used for filtering.
 
+Generated record types and `GenericRecord` also include a virtual `certifiedProfileData` field when the `app.certified.actor.profile` lexicon is registered. This field resolves the author's `at://<did>/app.certified.actor.profile/self` record and can include external labels attached to that profile record:
+
+```graphql
+query {
+  orgHypercertsClaimActivity(first: 20) {
+    edges {
+      node {
+        uri
+        did
+        certifiedProfileData {
+          displayName
+          description
+          externalLabels(values: ["test-account"]) { src val cts }
+        }
+      }
+    }
+  }
+}
+```
+
+`certifiedProfileData` is nullable when the author has no Certified profile record. Its nested `externalLabels` field uses labels on the profile record URI only.
+
 #### Filtering (`where`)
 
 Typed collection queries accept a `where` argument with per-field filters:
@@ -465,7 +497,7 @@ Legacy mode: Jetstream + Backfill ─────────→ Records DB
 - **Jetstream Consumer** - Legacy real-time AT Protocol event ingestion
 - **Backfill Worker** - Legacy historical import from relays
 - **GraphQL Schema Builder** - Generates schema from Lexicons
-- **Activity Tracker** - Logs record indexing activity for monitoring
+- **Activity Tracker** - Logs record indexing activity for monitoring in the `indexing_activity` table
 
 ## Development
 
@@ -491,48 +523,7 @@ make build
 
 We use [Changie](https://github.com/miniscruff/changie) for release-note fragments.
 
-```bash
-go install github.com/miniscruff/changie@v1.24.0
-make tools
-make changie-new
-```
-
-- Add a changelog fragment for user-facing changes, operator-facing changes, bug fixes, and other work that should appear in the next release notes.
-- You do not need a fragment for docs-only edits, tests-only changes, or internal refactors that do not affect behavior.
-- Maintainers run **Prepare release notes PR** on `main` to batch pending fragments and open or update a release PR.
-- After the release PR is merged, maintainers run **Publish release tag and GitHub Release** on `main` to create the `vX.Y.Z` tag and publish the matching GitHub Release from the generated `.changes` version file.
-- See `docs/changelog-workflow.md` for the full maintainer runbook, token requirements, and validation workflow details.
-
-Recommended fragment kinds:
-
-- `added` — new functionality
-- `breaking` — behavior or interface changes that require users, operators, or developers to adapt
-- `changed` — changed behavior, enhancements, or workflow changes
-- `deprecated` — functionality that still works now but should be migrated away from
-- `removed` — functionality removed
-- `fixed` — bug fixes
-- `security` — security-relevant fixes or hardening worth calling out
-
-### Affects and body guidance
-
-`Affects` describes who or what the change impacts most. Use the smallest audience that still fits the change.
-
-Recommended values:
-
-- `user` — changes that affect product behavior, APIs, queries, or UX
-- `operator` — changes that affect deployment, configuration, monitoring, or runtime behavior
-- `developer` — changes that affect contributor workflows, tooling, tests, or documentation
-
-Write the release-note body as a short description of the impact, not the implementation. Good bodies explain what changed, why it matters, and what readers should expect. Bad bodies focus on internal code paths, file names, or implementation details instead of the visible effect.
-
-### Release PR automation
-
-- Merge feature PRs with their Changie fragments into `main`.
-- Run **Prepare release notes PR** from GitHub Actions on `main` and choose `auto`, `patch`, `minor`, or `major` batching.
-- If unreleased fragments exist, the workflow runs `go build ./...`, `go test ./...`, `changie batch <release_type>`, and `changie merge`, then creates or updates a PR from `release/changelog` back into `main` for review.
-- Merge the generated release PR after reviewing the versioned `.changes` file and `CHANGELOG.md` diff.
-- Run **Publish release tag and GitHub Release** on `main` after the PR is merged.
-- Publish uses the latest generated `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` release file as the GitHub Release notes body; newer unreleased fragments for the next cycle do not block publishing that prepared version.
+[`docs/changelog-workflow.md`](./docs/changelog-workflow.md) is the source of truth for when to add or skip fragments, install the tooling, write fragments, and batch or publish releases. Check that document before adding or intentionally skipping a fragment.
 
 ### Local pre-commit linting
 

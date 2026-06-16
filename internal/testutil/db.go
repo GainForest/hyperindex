@@ -19,7 +19,7 @@ type TestDB struct {
 	Actors           *repositories.ActorsRepository
 	Config           *repositories.ConfigRepository
 	Lexicons         *repositories.LexiconsRepository
-	Activity         *repositories.JetstreamActivityRepository
+	Activity         *repositories.IndexingActivityRepository
 	OAuthClients     *repositories.OAuthClientsRepository
 	Labels           *repositories.LabelsRepository
 	ExternalLabels   *repositories.ExternalLabelsRepository
@@ -50,7 +50,7 @@ func SetupTestDB(t *testing.T) *TestDB {
 		Actors:           repositories.NewActorsRepository(exec),
 		Config:           repositories.NewConfigRepository(exec),
 		Lexicons:         repositories.NewLexiconsRepository(exec),
-		Activity:         repositories.NewJetstreamActivityRepository(exec),
+		Activity:         repositories.NewIndexingActivityRepository(exec),
 		OAuthClients:     repositories.NewOAuthClientsRepository(exec),
 		Labels:           repositories.NewLabelsRepository(exec),
 		ExternalLabels:   repositories.NewExternalLabelsRepository(exec),

@@ -1,0 +1,6 @@
+services:
+  hyperindex:
+    environment:
+      LEXICON_DIR: /app/testdata/lexicons
+    volumes:
+      - ./testdata/lexicons:/app/testdata/lexicons:ro

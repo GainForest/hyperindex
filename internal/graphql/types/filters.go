@@ -187,6 +187,24 @@ var DIDFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	},
 })
 
+// URIFilterInput is a restricted GraphQL InputObject for filtering AT-URI
+// metadata fields. URI filters are column-level filters, so exact matching and
+// batched lookup are supported while substring matching is intentionally not.
+var URIFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "URIFilterInput",
+	Description: "Filter conditions for AT-URI metadata fields. Only eq and in are supported.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"eq": &graphql.InputObjectFieldConfig{
+			Type:        graphql.String,
+			Description: "Equals",
+		},
+		"in": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewList(graphql.NewNonNull(graphql.String)),
+			Description: "In list",
+		},
+	},
+})
+
 // PresenceFilterInput is a GraphQL InputObject for checking whether a top-level
 // JSON field is missing/null or present. Use it for complex lexicon properties
 // where Hyperindex exposes presence checks but not nested value filtering.

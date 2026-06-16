@@ -40,13 +40,33 @@ HYPERINDEX_SMOKE_URL=https://api.example.com \
   go test -v -tags=api_smoke ./tests/api-smoke -count=1
 ```
 
+## Local isolated Tap smoke stack
+
+Use the repo-level Make target when you want a fresh local Docker stack instead of pointing smoke tests at an existing deployment:
+
+```bash
+make smoke-tap-local
+```
+
+This requires Docker with Compose v2. The target starts Tap and Hyperindex in an isolated Compose project, mounts `testdata/lexicons` so the local schema includes the Hypercerts, Certified, ATProto helper, and Leaflet helper lexicons used by local Tap checks, sets `TAP_SIGNAL_COLLECTION=app.certified.actor.profile`, sets `TAP_COLLECTION_FILTERS=app.certified.*,org.hypercerts.*`, waits 20 seconds for Tap discovery/backfill to warm up after Hyperindex is ready, and runs this smoke suite against `http://127.0.0.1:8080` with `tests/api-smoke/expectations/local-tap.json`. Failed smoke attempts retry every 15 seconds while Tap catches up. The filters use Tap's `.*` wildcard syntax for NSID prefixes. It ignores `tests/api-smoke/.env` by setting `HYPERINDEX_SMOKE_ENV_FILE=/dev/null`, so local staging credentials are not accidentally used.
+
+Useful overrides:
+
+```bash
+HYPERINDEX_LOCAL_TAP_KEEP=1 make smoke-tap-local       # leave containers running
+HYPERINDEX_LOCAL_TAP_HOST_PORT=18080 make smoke-tap-local
+HYPERINDEX_LOCAL_TAP_SETTLE_SECONDS=30 make smoke-tap-local
+HYPERINDEX_LOCAL_TAP_SMOKE_RETRY_SECONDS=20 make smoke-tap-local
+HYPERINDEX_LOCAL_TAP_SMOKE_TIMEOUT_SECONDS=1800 make smoke-tap-local
+```
+
 ## Optional smoke `.env` file
 
 By default, the suite loads `tests/api-smoke/.env` if the file exists. Copy `tests/api-smoke/.env.example` to `tests/api-smoke/.env` for local or staging smoke settings. Set `HYPERINDEX_SMOKE_ENV_FILE=/path/to/.env` to load a different file. Values already present in the process environment take precedence over values from the file.
 
 ## Optional expectations file
 
-By default, the suite loads `tests/api-smoke/expectations.json`. Set `HYPERINDEX_SMOKE_EXPECTATIONS=/path/to/expectations.json` to provide environment-specific expectations for the smoke run.
+By default, the suite loads `tests/api-smoke/expectations.json`. Set `HYPERINDEX_SMOKE_EXPECTATIONS=/path/to/expectations.json` to provide environment-specific expectations for the smoke run. Keep additional checked-in expectation files under `tests/api-smoke/expectations/`.
 
 The default expectations only assert `app.certified.*` and `org.hypercerts.*` lexicons. They assume the target API started with those lexicons, plus any loader-required helper lexicons, loaded. For local full-stack runs, set `LEXICON_DIR` to a directory containing that lexicon set or point `HYPERINDEX_SMOKE_EXPECTATIONS` at an environment-specific expectations file.
 

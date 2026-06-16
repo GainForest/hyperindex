@@ -918,7 +918,7 @@ func ExtractAuthContext(ctx context.Context) (*AuthContext, bool)
 
 > **Implementation Notes:**
 > - Backfill: `internal/backfill/backfill.go`, `internal/backfill/client.go` (from Phase 4)
-> - Admin repositories: `internal/database/repositories/jetstream_activity.go`, `labels.go`, `label_definitions.go`, `label_preferences.go`, `reports.go`
+> - Admin repositories: `internal/database/repositories/indexing_activity.go`, `labels.go`, `label_definitions.go`, `label_preferences.go`, `reports.go`
 > - Admin GraphQL types: `internal/graphql/admin/types.go` (594 lines)
 > - Admin resolvers: `internal/graphql/admin/resolvers.go` (563 lines)
 > - Admin schema: `internal/graphql/admin/schema.go` (487 lines)
@@ -1026,7 +1026,7 @@ func BuildAdminSchema(
 - `settings` - Get server settings
 - `statistics` - Get record/actor counts
 - `activityBuckets` - Get activity over time
-- `recentActivity` - Get recent Jetstream activity
+- `recentActivity` - Get recent indexing activity
 - `oauthClients` - List OAuth clients
 - `lexicons` - List loaded lexicons
 

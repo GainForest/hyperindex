@@ -1,5 +1,5 @@
 ---
-name: hyperindex-consumer
+name: hyperindex
 description: Query the Hypercerts Hyperindex GraphQL indexer for ATProto hypercert records. Use when consumers need GraphQL queries, filters, pagination, sorting, or workflows for org.hypercerts.* and app.certified.* records on api.indexer.hypercerts.dev or dev.api.indexer.hypercerts.dev.
 compatibility: Requires network access to the Hyperindex GraphQL endpoint. Examples target the current ATProto Hypercerts schema exposed by api.indexer.hypercerts.dev/graphql.
 allowed-tools: bash read fetch_content
@@ -9,44 +9,49 @@ metadata:
   staging_endpoint: https://dev.api.indexer.hypercerts.dev/graphql
 ---
 
-# Hyperindex Consumer Queries
+# Hyperindex Queries
 
 Use this skill when helping consumers read Hypercerts records from the hosted Hyperindex GraphQL API.
 
-The current indexer is ATProto-first. Do **not** explain it using old Hyperindex concepts such as generic attestations or older claim models unless the live schema exposes them. Base generated queries on the live schema and the current lexicons:
+The current production indexer is ATProto-first. Do **not** explain it using old Hyperindex concepts such as generic attestations or older claim models unless the live schema exposes them. Base generated queries on the live schema and the current typed production collections:
 
+- `app.certified.actor.organization`
+- `app.certified.actor.profile`
+- `app.certified.badge.award`
+- `app.certified.badge.definition`
+- `app.certified.badge.response`
+- `app.certified.graph.follow`
+- `app.certified.link.evm`
+- `app.certified.location`
 - `org.hypercerts.claim.activity`
-- `org.hypercerts.context.attachment`
 - `org.hypercerts.claim.contribution`
 - `org.hypercerts.claim.contributorInformation`
 - `org.hypercerts.claim.rights`
 - `org.hypercerts.collection`
+- `org.hypercerts.context.acknowledgement`
+- `org.hypercerts.context.attachment`
 - `org.hypercerts.context.evaluation`
 - `org.hypercerts.context.measurement`
-- `org.hypercerts.context.acknowledgement`
 - `org.hypercerts.funding.receipt`
 - `org.hypercerts.workscope.tag`
-- `app.certified.actor.profile`
-- `app.certified.actor.organization`
 
 ## Endpoints
 
 - Production: `https://api.indexer.hypercerts.dev/graphql`
 - Staging: `https://dev.api.indexer.hypercerts.dev/graphql`
-- Label test endpoint: `https://hyperindex-test.up.railway.app/graphql`
 
-Use production by default for consumer examples. Production and staging should have the same indexed data; staging may expose schema changes or new features earlier than production. Use the label test endpoint for external label filtering examples until prod/staging expose `externalLabels`.
+Use production by default for consumer examples. `api.indexer.hypercerts.dev` is the production endpoint and currently exposes presence filters and typed queries for the collections above. Staging may expose schema changes earlier; because ATProto data is network-wide, do not describe staging as a separate dataset unless you have verified an environment-specific indexing difference.
 
 ## Before answering
 
-1. If the user asks for an exact field/filter and you are not sure, introspect the endpoint first.
+1. If the user asks for an exact field, filter, enum, or union and you are not sure, introspect the endpoint first.
 2. Prefer schema-specific queries such as `orgHypercertsClaimActivity` over generic `records` when the collection has a typed query.
 3. Always include pagination (`first`, `after`, `pageInfo { hasNextPage endCursor }`) in list examples.
 4. Keep selection sets small. Add fields only when needed for the workflow.
-5. Use inline fragments for union fields such as descriptions, images, attachment content, and strong references.
+5. Use inline fragments for union fields such as descriptions, images, attachment content, proof fields, and strong references.
+6. Use `search(query: ..., collection: ...)` when the caller needs to match a nested URI/string inside JSON. Typed `where` inputs only support scalar comparisons and top-level presence checks for complex fields.
 
 Detailed schema reference: [references/schema-reference.md](references/schema-reference.md)
-
 
 ## GraphQL request shape
 
@@ -75,9 +80,11 @@ Most typed list queries accept:
 - `sortBy`: collection-specific enum, default is usually `indexed_at`
 - `sortDirection`: `ASC` or `DESC`, default is `DESC`
 
-Common filter operators:
+Common metadata, scalar, and DID filter operators:
 
 ```graphql
+where: { uri: { eq: "at://did:plc:.../org.hypercerts.claim.activity/rkey" } }
+where: { uri: { in: ["at://did:plc:.../collection/rkey1", "at://did:plc:.../collection/rkey2"] } }
 where: { did: { eq: "did:plc:..." } }
 where: { did: { in: ["did:plc:a", "did:plc:b"] } }
 where: { title: { contains: "reforestation" } }
@@ -86,29 +93,33 @@ where: { createdAt: { gte: "2026-01-01T00:00:00Z" } }
 where: { endDate: { isNull: false } }
 ```
 
-Typed filters currently do not expose every nested relation. If a workflow needs nested matching, use one of these patterns:
+`uri` filters are record metadata filters, not JSON-field filters. They support exact lookup with `eq` and batched lookup with `in`.
 
-- Query a small typed set, then filter nested fields client-side.
-- Use `search(query: ..., collection: ...)` to find records whose JSON contains a referenced AT-URI.
+Complex top-level fields such as arrays, refs, objects, blobs, and unions use `PresenceFilterInput`. That means you can ask whether the field is present, but not match nested values through typed `where` inputs:
+
+```graphql
+where: { image: { isNull: false } }
+where: { subjects: { isNull: false } }
+where: { rights: { isNull: true } }
+```
+
+If a workflow needs nested matching, use one of these patterns:
+
+- Use typed presence filters to narrow the set, then filter nested fields client-side.
+- Use `search(query: ..., collection: ...)` to find records whose JSON contains a referenced AT-URI or string.
 - Use `records(collection: ...)` as a fallback for collections without typed schema coverage.
 
 ## External labeler filtering
 
-Hyperindex can expose locally ingested external ATProto labels and use them to filter records before pagination. This is the most important consumer workflow for curated activity claims, but do not assume every hosted endpoint has the label schema enabled.
+Use external label filtering only after confirming that the target endpoint exposes external label support.
 
-Endpoint status tested on 2026-05-25:
+Supported schemas expose:
 
-- Label test endpoint supports external label queries: `https://hyperindex-test.up.railway.app/graphql`
-- Production did **not** expose `externalLabels` yet: `https://api.indexer.hypercerts.dev/graphql`
-- Staging did **not** expose `externalLabels` yet: `https://dev.api.indexer.hypercerts.dev/graphql`
+- Root query: `externalLabels(subjects: ..., sources: ..., values: ..., activeOnly: ...)`
+- Record field: `externalLabels(sources: ..., values: ..., activeOnly: ...)`
+- Typed predicates: `where.externalLabels.has` and `where.externalLabels.none`
 
-Before giving a label-based query for an endpoint, introspect and confirm these fields exist:
-
-- root query: `externalLabels(subjects: ..., sources: ..., values: ..., activeOnly: ...)`
-- record field: `externalLabels(sources: ..., values: ..., activeOnly: ...)`
-- typed `where.externalLabels.has` / `where.externalLabels.none` predicates
-
-Use this tested pattern to get `high-quality` activity claims labeled by `did:plc:edod7rboajioq3jbyxsgeicc` on the label test endpoint:
+Use this pattern to get `high-quality` activity claims from source DID `did:plc:antf7bsm6f4ohkqfdckefyt7`:
 
 ```graphql
 query HighQualityActivityClaimsByLabeler($labeler: String!, $after: String) {
@@ -161,10 +172,8 @@ query HighQualityActivityClaimsByLabeler($labeler: String!, $after: String) {
 Variables:
 
 ```json
-{ "labeler": "did:plc:edod7rboajioq3jbyxsgeicc", "after": null }
+{ "labeler": "did:plc:antf7bsm6f4ohkqfdckefyt7", "after": null }
 ```
-
-Test result on `https://hyperindex-test.up.railway.app/graphql`: the query returned high-quality `org.hypercerts.claim.activity` records, including `Mangrove Restoration & Environmental Education`, `Jagomir Bee Corridor - dMRV Report`, and `Restoring soil and food security at Kanyanjwa community in Homa Bay, Kenya`.
 
 To combine label filtering with author filtering, add a normal DID filter beside `externalLabels`:
 
@@ -173,7 +182,7 @@ where: {
   did: { eq: "did:plc:activity-author..." }
   externalLabels: {
     has: {
-      src: { eq: "did:plc:edod7rboajioq3jbyxsgeicc" }
+      src: { eq: "did:plc:antf7bsm6f4ohkqfdckefyt7" }
       val: { eq: "high-quality" }
       activeOnly: true
     }
@@ -213,7 +222,7 @@ query LabelsForSubjects($subjects: [String!]!, $labeler: String!) {
 }
 ```
 
-If the endpoint does not expose `externalLabels`, tell the consumer the hosted schema cannot yet filter by labels. Do not silently replace label filtering with text search; that can return false positives.
+If an endpoint does not expose `externalLabels`, tell the consumer the selected hosted schema cannot filter by labels. Do not silently replace label filtering with text search; that can return false positives.
 
 ## Consumer workflows
 
@@ -279,13 +288,8 @@ query HypercertByUri($uri: String!) {
     endDate
     description {
       __typename
-      ... on OrgHypercertsDefsDescriptionString {
-        value
-      }
-      ... on ComAtprotoRepoStrongRef {
-        uri
-        cid
-      }
+      ... on OrgHypercertsDefsDescriptionString { value }
+      ... on ComAtprotoRepoStrongRef { uri cid }
     }
     contributors {
       contributionWeight
@@ -314,7 +318,7 @@ Variables:
 
 ### Get attachments relevant to a hypercert
 
-`org.hypercerts.context.attachment` records connect to subjects through a `subjects` array of strong refs. The typed attachment filter does not currently expose `subjects`, so use `search` with the hypercert AT-URI, then read matching attachment records.
+`org.hypercerts.context.attachment` records connect to subjects through a `subjects` array of strong refs. Production exposes `subjects` as a presence filter, not as a nested URI filter. To find attachments for a specific hypercert AT-URI, use `search` with the hypercert AT-URI, then read matching attachment records.
 
 ```graphql
 query AttachmentsForHypercert($hypercertUri: String!, $after: String) {
@@ -346,16 +350,16 @@ Variables:
 { "hypercertUri": "at://did:plc:.../org.hypercerts.claim.activity/...", "after": null }
 ```
 
-If the caller only needs attachments by a known author, use the typed query and filter client-side by `subjects.uri`:
+If the caller only needs attachments that have any subject reference, use the typed presence filter:
 
 ```graphql
-query AttachmentsByDid($did: String!, $after: String) {
+query AttachmentsWithSubjects($after: String) {
   orgHypercertsContextAttachment(
     first: 20
     after: $after
     sortBy: createdAt
     sortDirection: DESC
-    where: { did: { eq: $did } }
+    where: { subjects: { isNull: false } }
   ) {
     edges {
       cursor
@@ -365,11 +369,6 @@ query AttachmentsByDid($did: String!, $after: String) {
         contentType
         createdAt
         subjects { uri cid }
-        content {
-          __typename
-          ... on OrgHypercertsDefsUri { uri }
-          ... on OrgHypercertsDefsSmallBlob { blob { ref mimeType size } }
-        }
       }
     }
     pageInfo { hasNextPage endCursor }
@@ -380,12 +379,42 @@ query AttachmentsByDid($did: String!, $after: String) {
 Variables:
 
 ```json
-{ "did": "did:plc:...", "after": null }
+{ "after": null }
+```
+
+### Filter hypercerts with images
+
+Use `PresenceFilterInput` for complex top-level fields such as `image`.
+
+```graphql
+query ActivityClaimsWithImages($after: String) {
+  orgHypercertsClaimActivity(
+    first: 20
+    after: $after
+    where: { image: { isNull: false } }
+  ) {
+    edges {
+      cursor
+      node {
+        uri
+        title
+        image { __typename }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+Variables:
+
+```json
+{ "after": null }
 ```
 
 ### Sort hypercerts by activity dates or creation time
 
-Use `sortBy` on `orgHypercertsClaimActivity`. Available sort fields include `indexed_at`, `title`, `startDate`, `endDate`, `createdAt`, and `shortDescription`.
+Use `sortBy` on `orgHypercertsClaimActivity`. Production sort fields are `indexed_at`, `title`, `startDate`, `endDate`, `createdAt`, and `shortDescription`.
 
 ```graphql
 query RecentActivity($after: String) {
@@ -483,6 +512,42 @@ Variables:
 { "did": "did:plc:...", "after": null }
 ```
 
+### Get EVM account links
+
+Use `appCertifiedLinkEvm` for `app.certified.link.evm` records. Filter by author DID or EVM `address` when the consumer needs wallet-account links.
+
+```graphql
+query EvmLinksForDid($did: String!, $after: String) {
+  appCertifiedLinkEvm(
+    first: 20
+    after: $after
+    where: { did: { eq: $did } }
+    sortBy: createdAt
+    sortDirection: DESC
+  ) {
+    edges {
+      cursor
+      node {
+        uri
+        cid
+        did
+        rkey
+        address
+        createdAt
+        proof { __typename }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+Variables:
+
+```json
+{ "did": "did:plc:...", "after": null }
+```
+
 ### Get record counts by collection
 
 Use this for dashboards, health checks, and deciding which typed query to use.
@@ -493,7 +558,8 @@ query HypercertCollectionStats {
     "org.hypercerts.claim.activity",
     "org.hypercerts.context.attachment",
     "org.hypercerts.collection",
-    "app.certified.actor.profile"
+    "app.certified.actor.profile",
+    "app.certified.link.evm"
   ]) {
     collection
     count
@@ -506,6 +572,7 @@ query HypercertCollectionStats {
 - Say “hypercert” when referring to `org.hypercerts.claim.activity` records unless the user is asking about another collection explicitly.
 - Say “attachment” for `org.hypercerts.context.attachment` records.
 - Say “certified profile” for `app.certified.actor.profile` records.
-- Do not claim attachments are directly joinable through GraphQL filters unless the live schema adds a subject filter.
+- Say “EVM link” or “wallet link” for `app.certified.link.evm` records.
+- Do not claim typed filters can match nested values inside refs, arrays, blobs, objects, or unions. Production exposes those fields as presence filters only.
 - When giving user-facing parameterized examples, include both the query and variables.
 - When the schema has changed, prefer live introspection over this file and mention the endpoint used.
