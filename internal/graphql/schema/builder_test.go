@@ -872,6 +872,9 @@ func TestExtractFilters_URIFilter(t *testing.T) {
 				if !reflect.DeepEqual(filter.Value, tt.wantValue[i]) {
 					t.Errorf("filters[%d].Value = %#v, want %#v", i, filter.Value, tt.wantValue[i])
 				}
+				if filter.Target != repositories.FieldFilterTargetColumn {
+					t.Errorf("filters[%d].Target = %q, want %q", i, filter.Target, repositories.FieldFilterTargetColumn)
+				}
 			}
 		})
 	}
@@ -898,6 +901,9 @@ func TestExtractFilters_URIFilterKeepsMetadataStringType(t *testing.T) {
 	}
 	if filters[0].FieldType != "string" {
 		t.Fatalf("uri FieldType = %q, want string; metadata uri must not inherit colliding lexicon property type", filters[0].FieldType)
+	}
+	if filters[0].Target != repositories.FieldFilterTargetColumn {
+		t.Fatalf("uri Target = %q, want %q", filters[0].Target, repositories.FieldFilterTargetColumn)
 	}
 }
 

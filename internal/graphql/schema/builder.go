@@ -666,11 +666,16 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 			continue
 		}
 
-		// Determine the lexicon type for this field so the repository can CAST correctly.
-		// URI is generated metadata, not a JSON property, so it must stay string-typed
-		// even if a lexicon defines a colliding numeric property named "uri".
+		// Determine the filter target and lexicon type for this field so the repository
+		// can read from the correct storage location and CAST correctly. URI is
+		// generated metadata, not a JSON property, so it targets the record column and
+		// must stay string-typed even if a lexicon defines a colliding numeric property
+		// named "uri".
 		fieldType := "string" // default
-		if fieldName != "uri" && recordDef != nil {
+		fieldTarget := repositories.FieldFilterTargetJSON
+		if fieldName == "uri" {
+			fieldTarget = repositories.FieldFilterTargetColumn
+		} else if recordDef != nil {
 			if prop := recordDef.GetProperty(fieldName); prop != nil {
 				if prop.Format == "datetime" {
 					fieldType = "datetime"
@@ -690,6 +695,7 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 				Operator:  op,
 				Value:     val,
 				FieldType: fieldType,
+				Target:    fieldTarget,
 			})
 		}
 	}
