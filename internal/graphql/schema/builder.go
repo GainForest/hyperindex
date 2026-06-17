@@ -253,6 +253,14 @@ func (b *Builder) buildWhereInputTypes() {
 		}
 
 		if lex.ID == "org.hypercerts.claim.activity" {
+			// contributorDid is a deliberate compatibility exception to the generated
+			// lexicon-property filters. The inline contributors.any.contributorIdentity
+			// shape fits the three-segment nested-filter limit, but matching a
+			// contributorInformation.identifier requires following a strongRef into
+			// another record, which generated nested filters intentionally do not do.
+			// Historical records may also store bare DID strings or object-shaped
+			// identities, so this narrow filter preserves one stable caller contract for
+			// all supported contributor encodings.
 			fields["contributorDid"] = &graphql.InputObjectFieldConfig{
 				Type:        types.DIDFilterInput,
 				Description: "Compatibility filter for activities whose contributors include this DID inline or through an org.hypercerts.claim.contributorInformation strongRef.",
@@ -678,6 +686,11 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 		}
 
 		if fieldName == "contributorDid" && lexiconID == "org.hypercerts.claim.activity" {
+			// contributorDid is not a lexicon field. It routes to a repository-level
+			// compatibility predicate because the strongRef case crosses out of the
+			// activity record into contributorInformation.identifier, beyond the
+			// same-record nested-filter model. It also handles legacy bare DID
+			// contributors and inline contributor objects.
 			for op, val := range filterMap {
 				if val == nil {
 					continue

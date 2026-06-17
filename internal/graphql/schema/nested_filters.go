@@ -305,6 +305,9 @@ func extractNestedPropertyFiltersAtPath(
 		if !ok || anyVal == nil || prop.Items == nil {
 			return filters, nil
 		}
+		if len(arrayPath) > 0 {
+			return nil, fmt.Errorf("nested array any filters inside another array any are not supported for field %q at path %q", fieldName, strings.Join(jsonPath, "."))
+		}
 		itemProp := lexicon.Property{Type: prop.Items.Type, Ref: prop.Items.Ref, Refs: prop.Items.Refs}
 		anyFilters, err := extractNestedPropertyFiltersAtPath(contextLexiconID, registry, fieldName, itemProp, anyVal, nil, jsonPath, depth)
 		if err != nil {

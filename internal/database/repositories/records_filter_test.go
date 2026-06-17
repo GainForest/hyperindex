@@ -428,6 +428,53 @@ func TestGetByCollectionSortedWithKeysetCursor_NestedArrayAnyFilter(t *testing.T
 	}
 }
 
+func TestGetByCollectionSortedWithKeysetCursor_NestedArrayAnyFilterKeepsPredicatesOnSameElement(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	const targetURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
+	const targetCID = "bafyactivity"
+	insertSortRecord(t, repo, "at://did:plc:alice/org.hypercerts.collection/exact", "cid-exact", "did:plc:alice", "org.hypercerts.collection", `{"title":"Exact","items":[{"itemIdentifier":{"uri":"`+targetURI+`","cid":"`+targetCID+`"}}]}`)
+	insertSortRecord(t, repo, "at://did:plc:alice/org.hypercerts.collection/split", "cid-split", "did:plc:alice", "org.hypercerts.collection", `{"title":"Split","items":[{"itemIdentifier":{"uri":"`+targetURI+`","cid":"wrong-cid"}},{"itemIdentifier":{"uri":"at://did:plc:maker/org.hypercerts.claim.activity/other","cid":"`+targetCID+`"}}]}`)
+
+	filters := []FieldFilter{
+		{Field: "items", Path: []string{"itemIdentifier", "uri"}, ArrayPath: []string{"items"}, Operator: "eq", Value: targetURI, FieldType: "string"},
+		{Field: "items", Path: []string{"itemIdentifier", "cid"}, ArrayPath: []string{"items"}, Operator: "eq", Value: targetCID, FieldType: "string"},
+	}
+	clause, params, err := repo.buildFilterClause(filters, 1)
+	if err != nil {
+		t.Fatalf("buildFilterClause() error = %v", err)
+	}
+	if got := strings.Count(clause, "EXISTS (SELECT 1 FROM json_each"); got != 1 {
+		t.Fatalf("array filters should share one EXISTS clause, got %d in %q", got, clause)
+	}
+	if !strings.Contains(clause, " AND ") {
+		t.Fatalf("array filters should be joined inside the same EXISTS clause: %q", clause)
+	}
+	if len(params) != 2 {
+		t.Fatalf("len(params) = %d, want 2", len(params))
+	}
+
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "org.hypercerts.collection", filters, DIDFilter{}, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("GetByCollectionSortedWithKeysetCursor() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if records[0].URI != "at://did:plc:alice/org.hypercerts.collection/exact" {
+		t.Fatalf("records[0].URI = %q, want exact record", records[0].URI)
+	}
+
+	count, err := repo.GetCollectionCountFiltered(ctx, "org.hypercerts.collection", filters, DIDFilter{})
+	if err != nil {
+		t.Fatalf("GetCollectionCountFiltered() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+}
+
 func TestGetByCollectionSortedWithKeysetCursor_NestedThreeLevelJSONPathFilter(t *testing.T) {
 	repo, _ := newSortTestRepo(t)
 	ctx := context.Background()

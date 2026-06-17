@@ -448,7 +448,7 @@ where: {
 }
 \`\`\`
 
-Nested scalar leaves support exact operators only: \`eq\`, \`in\`, and \`isNull\`. Nested filters do not support \`contains\`, \`startsWith\`, nested sorting, arbitrary JSON paths, or strong-ref dereferencing.
+Nested scalar leaves support exact operators only: \`eq\`, \`in\`, and \`isNull\`. Multiple predicates inside the same array \`any\` must match the same array item. Nested filters do not support substring operators (\`contains\`, \`startsWith\`), comparison operators (\`gt\`, \`lt\`, \`gte\`, \`lte\`), nested sorting, arbitrary JSON paths, or strong-ref dereferencing.
 
 \`isNull: true\` matches records where the JSON field is missing or explicitly \`null\`. \`isNull: false\` matches records where the field is present and non-null. Empty arrays \`[]\`, empty objects \`{}\`, and empty strings \`""\` count as present.
 

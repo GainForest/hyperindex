@@ -88,7 +88,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - Typed `ByUri` roundtrip
 - `app.certified.graph.follow` typed pagination, filters, and sorting
 - `org.hypercerts.claim.activity` image filters expose `isNull` for presence checks
-- Three-level nested filters for `org.hypercerts.collection` with `where: { items: { any: { itemIdentifier: { uri: { eq: ... } } } } }`
+- Three-level nested filters for `org.hypercerts.collection`, including same-element `any` semantics for `where: { items: { any: { itemIdentifier: { uri: { eq: ... }, cid: { eq: ... } } } } }`
 - `org.hypercerts.claim.activity` image presence filtering with `where: { image: { isNull: false } }`
 - Optional external label filtering and pagination for `org.hypercerts.claim.activity`
 - Optional ATProto write-through lifecycle for `app.certified.actor.profile` and `org.hypercerts.claim.activity`

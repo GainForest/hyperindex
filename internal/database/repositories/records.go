@@ -82,7 +82,7 @@ const (
 type FieldFilter struct {
 	Field     string            // Field name for diagnostics. JSON targets use a top-level JSON property unless Path is set; column targets use a whitelisted metadata column.
 	Path      []string          // Optional JSON path from the record root for nested filters. Empty means Field is the JSON path.
-	ArrayPath []string          // Optional JSON path to an array field whose elements should be searched with any-semantics; Path is evaluated relative to each array element.
+	ArrayPath []string          // Optional JSON path to an array field whose elements should be searched with any-semantics. Filters with the same ArrayPath are correlated against the same array element; Path is evaluated relative to that element.
 	Operator  string            // One of: "eq", "neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith", "isNull"
 	Value     interface{}       // The comparison value. For "in", must be []interface{}. For "isNull", must be bool.
 	FieldType string            // Lexicon type used for SQL casting. Numeric types are cast; complex types are presence-filtered with isNull.
@@ -464,7 +464,32 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 	var params []database.Value
 	placeholderIdx := startPlaceholder
 
+	processedArrayGroups := make(map[string]bool)
 	for i, f := range filters {
+		if isArrayAnyFilter(f) {
+			groupKey := arrayFilterGroupKey(f)
+			if processedArrayGroups[groupKey] {
+				continue
+			}
+			processedArrayGroups[groupKey] = true
+
+			arrayFilters := make([]FieldFilter, 0, len(filters)-i)
+			for _, candidate := range filters[i:] {
+				if arrayFilterGroupKey(candidate) == groupKey {
+					arrayFilters = append(arrayFilters, candidate)
+				}
+			}
+
+			condition, conditionParams, consumed, err := r.buildArrayAnyFilterCondition(arrayFilters, placeholderIdx, i)
+			if err != nil {
+				return "", nil, err
+			}
+			conditions = append(conditions, condition)
+			params = append(params, conditionParams...)
+			placeholderIdx += consumed
+			continue
+		}
+
 		condition, conditionParams, consumed, err := r.buildFieldFilterCondition(f, placeholderIdx, i)
 		if err != nil {
 			return "", nil, err
@@ -477,13 +502,24 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 	return strings.Join(conditions, " AND "), params, nil
 }
 
+func isArrayAnyFilter(f FieldFilter) bool {
+	return (f.Target == "" || f.Target == FieldFilterTargetJSON) && len(f.ArrayPath) > 0
+}
+
+func arrayFilterGroupKey(f FieldFilter) string {
+	if !isArrayAnyFilter(f) {
+		return ""
+	}
+	return strings.Join(f.ArrayPath, "\x00")
+}
+
 func (r *RecordsRepository) buildFieldFilterCondition(f FieldFilter, placeholderIdx, filterIndex int) (string, []database.Value, int, error) {
 	switch f.Target {
 	case FieldFilterTargetContributorDID:
 		return r.buildContributorDIDFilterCondition(f, placeholderIdx)
 	case "", FieldFilterTargetJSON:
 		if len(f.ArrayPath) > 0 {
-			return r.buildArrayAnyFilterCondition(f, placeholderIdx, filterIndex)
+			return r.buildArrayAnyFilterCondition([]FieldFilter{f}, placeholderIdx, filterIndex)
 		}
 	}
 
@@ -564,25 +600,55 @@ func (r *RecordsRepository) buildScalarFilterCondition(extract string, f FieldFi
 	}
 }
 
-func (r *RecordsRepository) buildArrayAnyFilterCondition(f FieldFilter, placeholderIdx, filterIndex int) (string, []database.Value, int, error) {
-	alias := fmt.Sprintf("nested_filter_%d", filterIndex)
-	arrayExpr := r.jsonValuePathExpr("record.json", f.ArrayPath)
-	innerExpr := r.jsonTextPathExpr(alias+".value", f.Path)
-
-	innerCondition, params, consumed, err := r.buildScalarFilterCondition(innerExpr, f, placeholderIdx)
-	if err != nil {
-		return "", nil, 0, err
+func (r *RecordsRepository) buildArrayAnyFilterCondition(filters []FieldFilter, placeholderIdx, filterIndex int) (string, []database.Value, int, error) {
+	if len(filters) == 0 {
+		return "", nil, 0, fmt.Errorf("array any filter requires at least one condition")
 	}
+
+	first := filters[0]
+	alias := fmt.Sprintf("nested_filter_%d", filterIndex)
+	arrayExpr := r.jsonValuePathExpr("record.json", first.ArrayPath)
+	innerConditions := make([]string, 0, len(filters))
+	params := make([]database.Value, 0, len(filters))
+	consumed := 0
+
+	for _, f := range filters {
+		if !isArrayAnyFilter(f) || !sameStringSlice(f.ArrayPath, first.ArrayPath) {
+			return "", nil, 0, fmt.Errorf("array any filters must share one JSON array path")
+		}
+
+		innerExpr := r.jsonTextPathExpr(alias+".value", f.Path)
+		innerCondition, innerParams, innerConsumed, err := r.buildScalarFilterCondition(innerExpr, f, placeholderIdx+consumed)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		innerConditions = append(innerConditions, innerCondition)
+		params = append(params, innerParams...)
+		consumed += innerConsumed
+	}
+	innerCondition := strings.Join(innerConditions, " AND ")
 
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
 		safeArrayExpr := fmt.Sprintf("CASE WHEN jsonb_typeof(%s) = 'array' THEN %s ELSE '[]'::jsonb END", arrayExpr, arrayExpr)
 		return fmt.Sprintf("EXISTS (SELECT 1 FROM jsonb_array_elements(%s) AS %s(value) WHERE %s)", safeArrayExpr, alias, innerCondition), params, consumed, nil
 	default:
-		arrayTypeExpr := r.sqliteJSONTypePathExpr("record.json", f.ArrayPath)
+		arrayTypeExpr := r.sqliteJSONTypePathExpr("record.json", first.ArrayPath)
 		safeArrayExpr := fmt.Sprintf("CASE WHEN %s = 'array' THEN %s ELSE '[]' END", arrayTypeExpr, arrayExpr)
 		return fmt.Sprintf("%s = 'array' AND EXISTS (SELECT 1 FROM json_each(%s) AS %s WHERE %s)", arrayTypeExpr, safeArrayExpr, alias, innerCondition), params, consumed, nil
 	}
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *RecordsRepository) jsonTextPathExpr(column string, path []string) string {

@@ -16,9 +16,7 @@ import (
 	"github.com/graphql-go/graphql/language/ast"
 	"github.com/graphql-go/graphql/language/parser"
 
-	"github.com/GainForest/hyperindex/internal/database/migrations"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
-	"github.com/GainForest/hyperindex/internal/database/sqlite"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/testutil"
@@ -1384,25 +1382,15 @@ func setupSchemaRecordTestDB(t *testing.T, rec *repositories.Record) context.Con
 func setupSchemaRecordsTestDB(t *testing.T, recordsToInsert []*repositories.Record) context.Context {
 	t.Helper()
 
-	exec, err := sqlite.NewExecutor("sqlite::memory:")
-	if err != nil {
-		t.Fatalf("setupSchemaRecordsTestDB: failed to create SQLite executor: %v", err)
-	}
-	t.Cleanup(func() { exec.Close() })
-
 	ctx := context.Background()
-	if err := migrations.Run(ctx, exec); err != nil {
-		t.Fatalf("setupSchemaRecordsTestDB: failed to run migrations: %v", err)
-	}
-
-	records := repositories.NewRecordsRepository(exec)
-	if err := records.BatchInsert(ctx, recordsToInsert); err != nil {
+	db := testutil.SetupTestDB(t)
+	if err := db.Records.BatchInsert(ctx, recordsToInsert); err != nil {
 		t.Fatalf("setupSchemaRecordsTestDB: failed to insert records: %v", err)
 	}
 
 	repos := &resolver.Repositories{
-		Records:        records,
-		ExternalLabels: repositories.NewExternalLabelsRepository(exec),
+		Records:        db.Records,
+		ExternalLabels: db.ExternalLabels,
 	}
 	return resolver.WithRepositories(ctx, repos)
 }
@@ -1803,6 +1791,44 @@ func TestCollectionResolver_NestedArrayFilterFindsCollectionContainingItemURI(t 
 
 	conn := executeConnectionQuery(ctx, t, schema, query, "orgHypercertsCollection")
 	assertConnectionURIs(t, conn, []string{"at://did:plc:alice/org.hypercerts.collection/contains-activity"})
+	if got := conn["totalCount"]; got != 1 {
+		t.Fatalf("totalCount = %v, want 1", got)
+	}
+}
+
+func TestCollectionResolver_NestedArrayAnyFilterKeepsPredicatesOnSameElement(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const targetURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
+	const targetCID = "bafyactivity"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:alice/org.hypercerts.collection/exact-activity",
+			CID:        "bafycollection1",
+			DID:        "did:plc:alice",
+			Collection: "org.hypercerts.collection",
+			JSON:       `{"title":"Exact","createdAt":"2026-01-01T00:00:00Z","items":[{"itemIdentifier":{"uri":"` + targetURI + `","cid":"` + targetCID + `"},"itemWeight":"1"}]}`,
+		},
+		{
+			URI:        "at://did:plc:alice/org.hypercerts.collection/split-activity",
+			CID:        "bafycollection2",
+			DID:        "did:plc:alice",
+			Collection: "org.hypercerts.collection",
+			JSON:       `{"title":"Split","createdAt":"2026-01-01T00:00:00Z","items":[{"itemIdentifier":{"uri":"` + targetURI + `","cid":"wrong-cid"}},{"itemIdentifier":{"uri":"at://did:plc:maker/org.hypercerts.claim.activity/other","cid":"` + targetCID + `"}}]}`,
+		},
+	})
+
+	query := `{
+		orgHypercertsCollection(
+			first: 10
+			where: { items: { any: { itemIdentifier: { uri: { eq: "` + targetURI + `" }, cid: { eq: "` + targetCID + `" } } } } }
+		) {
+			totalCount
+			edges { node { uri } }
+		}
+	}`
+
+	conn := executeConnectionQuery(ctx, t, schema, query, "orgHypercertsCollection")
+	assertConnectionURIs(t, conn, []string{"at://did:plc:alice/org.hypercerts.collection/exact-activity"})
 	if got := conn["totalCount"]; got != 1 {
 		t.Fatalf("totalCount = %v, want 1", got)
 	}

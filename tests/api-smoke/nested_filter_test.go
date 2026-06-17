@@ -23,6 +23,43 @@ query SmokeThreeLevelNestedFilter($uri: String!) {
   }
 }`
 
+const smokeNestedFilterSameElementCandidatesQuery = `
+query SmokeNestedFilterSameElementCandidates {
+  orgHypercertsCollection(first: 100) {
+    edges {
+      node {
+        uri
+        items {
+          itemIdentifier {
+            uri
+            cid
+          }
+        }
+      }
+    }
+  }
+}`
+
+const smokeNestedFilterSameElementQuery = `
+query SmokeNestedFilterSameElement($uri: String!, $cid: String!) {
+  orgHypercertsCollection(
+    first: 100
+    where: { items: { any: { itemIdentifier: { uri: { eq: $uri }, cid: { eq: $cid } } } } }
+  ) {
+    edges {
+      node {
+        uri
+        items {
+          itemIdentifier {
+            uri
+            cid
+          }
+        }
+      }
+    }
+  }
+}`
+
 type nestedCollectionFilterResponse struct {
 	OrgHypercertsCollection struct {
 		TotalCount int `json:"totalCount"`
@@ -30,6 +67,28 @@ type nestedCollectionFilterResponse struct {
 			Node struct {
 				URI string `json:"uri"`
 			} `json:"node"`
+		} `json:"edges"`
+	} `json:"orgHypercertsCollection"`
+}
+
+type nestedCollectionStrongRef struct {
+	URI string `json:"uri"`
+	CID string `json:"cid"`
+}
+
+type nestedCollectionItem struct {
+	ItemIdentifier nestedCollectionStrongRef `json:"itemIdentifier"`
+}
+
+type nestedCollectionNode struct {
+	URI   string                 `json:"uri"`
+	Items []nestedCollectionItem `json:"items"`
+}
+
+type nestedCollectionSameElementResponse struct {
+	OrgHypercertsCollection struct {
+		Edges []struct {
+			Node nestedCollectionNode `json:"node"`
 		} `json:"edges"`
 	} `json:"orgHypercertsCollection"`
 }
@@ -68,17 +127,82 @@ func TestSchemaExposesThreeLevelNestedWhereFilter(t *testing.T) {
 
 func TestThreeLevelNestedWhereFilterQueryExecutes(t *testing.T) {
 	config := loadSmokeConfig(t)
+	requestedURI := "at://did:plc:example/org.hypercerts.claim.activity/nonexistent-smoke-record"
 	response := postGraphQL(t, context.Background(), config, "SmokeThreeLevelNestedFilter", smokeThreeLevelNestedFilterQuery, map[string]any{
-		"uri": "at://did:plc:example/org.hypercerts.claim.activity/nonexistent-smoke-record",
+		"uri": requestedURI,
 	})
 
 	var decoded nestedCollectionFilterResponse
 	if err := json.Unmarshal(response.Data, &decoded); err != nil {
 		t.Fatalf("decode SmokeThreeLevelNestedFilter data: %v", err)
 	}
-	if len(decoded.OrgHypercertsCollection.Edges) > 1 {
-		t.Fatalf("nested filter query returned %d edges with first: 1, want at most 1", len(decoded.OrgHypercertsCollection.Edges))
+	if len(decoded.OrgHypercertsCollection.Edges) != 0 {
+		t.Fatalf("nested filter query for guaranteed-miss URI %q returned %d edges, want 0", requestedURI, len(decoded.OrgHypercertsCollection.Edges))
 	}
 
-	smokeLog("✓ org.hypercerts.collection three-level nested where filter executes")
+	smokeLog("✓ org.hypercerts.collection three-level nested where filter executes and filters")
+}
+
+func TestNestedWhereAnyPredicatesMatchSameArrayElement(t *testing.T) {
+	config := loadSmokeConfig(t)
+	response := postGraphQL(t, context.Background(), config, "SmokeNestedFilterSameElementCandidates", smokeNestedFilterSameElementCandidatesQuery, nil)
+
+	var candidates nestedCollectionSameElementResponse
+	if err := json.Unmarshal(response.Data, &candidates); err != nil {
+		t.Fatalf("decode SmokeNestedFilterSameElementCandidates data: %v", err)
+	}
+
+	candidateURI, requestedURI, requestedCID, ok := findMismatchedItemIdentifierCandidate(candidates)
+	if !ok {
+		t.Skip("no org.hypercerts.collection record with two itemIdentifier values suitable for same-element nested filter smoke coverage")
+	}
+
+	response = postGraphQL(t, context.Background(), config, "SmokeNestedFilterSameElement", smokeNestedFilterSameElementQuery, map[string]any{
+		"uri": requestedURI,
+		"cid": requestedCID,
+	})
+
+	var filtered nestedCollectionSameElementResponse
+	if err := json.Unmarshal(response.Data, &filtered); err != nil {
+		t.Fatalf("decode SmokeNestedFilterSameElement data: %v", err)
+	}
+	for _, edge := range filtered.OrgHypercertsCollection.Edges {
+		if !nodeHasItemIdentifierPair(edge.Node, requestedURI, requestedCID) {
+			t.Fatalf("nested any filter returned %q for itemIdentifier.uri=%q and itemIdentifier.cid=%q, but no single item has both values", edge.Node.URI, requestedURI, requestedCID)
+		}
+	}
+
+	smokeLog("✓ org.hypercerts.collection nested any keeps uri/cid predicates on the same item (candidate %s)", candidateURI)
+}
+
+func findMismatchedItemIdentifierCandidate(response nestedCollectionSameElementResponse) (recordURI string, requestedURI string, requestedCID string, ok bool) {
+	for _, edge := range response.OrgHypercertsCollection.Edges {
+		refs := make([]nestedCollectionStrongRef, 0, len(edge.Node.Items))
+		for _, item := range edge.Node.Items {
+			ref := item.ItemIdentifier
+			if ref.URI != "" && ref.CID != "" {
+				refs = append(refs, ref)
+			}
+		}
+		for i, uriRef := range refs {
+			for j, cidRef := range refs {
+				if i == j {
+					continue
+				}
+				if !nodeHasItemIdentifierPair(edge.Node, uriRef.URI, cidRef.CID) {
+					return edge.Node.URI, uriRef.URI, cidRef.CID, true
+				}
+			}
+		}
+	}
+	return "", "", "", false
+}
+
+func nodeHasItemIdentifierPair(node nestedCollectionNode, uri string, cid string) bool {
+	for _, item := range node.Items {
+		if item.ItemIdentifier.URI == uri && item.ItemIdentifier.CID == cid {
+			return true
+		}
+	}
+	return false
 }
