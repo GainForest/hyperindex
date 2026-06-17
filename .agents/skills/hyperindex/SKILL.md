@@ -95,7 +95,7 @@ where: { endDate: { isNull: false } }
 
 `uri` filters are record metadata filters, not JSON-field filters. They support exact lookup with `eq` and batched lookup with `in`.
 
-Complex fields expose `isNull` for presence checks. Arrays, refs, and unions can also expose generated nested filters up to three lexicon path segments deep. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`.
+Complex fields expose `isNull` for presence checks. Some complex fields use the shared `PresenceFilterInput`; arrays, refs, and unions can instead expose generated nested filter inputs up to three lexicon path segments deep. Do not rely on the input type name for presence checks; introspect the field and use `isNull`. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`.
 
 ```graphql
 where: { image: { isNull: false } }
@@ -325,28 +325,28 @@ Variables:
 
 ### Get attachments relevant to a hypercert
 
-`org.hypercerts.context.attachment` records connect to subjects through a `subjects` array of strong refs. Production exposes `subjects` as a presence filter, not as a nested URI filter. To find attachments for a specific hypercert AT-URI, use `search` with the hypercert AT-URI, then read matching attachment records.
+`org.hypercerts.context.attachment` records connect to subjects through a `subjects` array of strong refs. When the endpoint exposes nested filters, find attachments for a specific hypercert AT-URI with `subjects.any.uri.eq`:
 
 ```graphql
 query AttachmentsForHypercert($hypercertUri: String!, $after: String) {
-  search(
-    query: $hypercertUri
-    collection: "org.hypercerts.context.attachment"
+  orgHypercertsContextAttachment(
     first: 20
     after: $after
+    sortBy: createdAt
+    sortDirection: DESC
+    where: { subjects: { any: { uri: { eq: $hypercertUri } } } }
   ) {
     edges {
       cursor
       node {
         uri
-        cid
-        did
-        collection
-        value
+        title
+        contentType
+        createdAt
+        subjects { uri cid }
       }
     }
     pageInfo { hasNextPage endCursor }
-    totalCount
   }
 }
 ```
@@ -357,7 +357,7 @@ Variables:
 { "hypercertUri": "at://did:plc:.../org.hypercerts.claim.activity/...", "after": null }
 ```
 
-If the caller only needs attachments that have any subject reference, use the typed presence filter:
+If the endpoint does not expose `subjects.any.uri`, fall back to `search(query: $hypercertUri, collection: "org.hypercerts.context.attachment")` and filter the returned JSON client-side. If the caller only needs attachments that have any subject reference, use the typed presence check:
 
 ```graphql
 query AttachmentsWithSubjects($after: String) {
@@ -391,7 +391,7 @@ Variables:
 
 ### Filter hypercerts with images
 
-Use `PresenceFilterInput` for complex top-level fields such as `image`.
+Use `isNull` on the field's generated filter input for complex top-level fields such as `image`. The input type may be a generated nested filter input rather than `PresenceFilterInput`.
 
 ```graphql
 query ActivityClaimsWithImages($after: String) {

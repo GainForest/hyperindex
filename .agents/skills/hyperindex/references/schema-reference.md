@@ -161,7 +161,7 @@ Filter conditions for AT-URI metadata fields. Only eq and in are supported.
 
 ### `PresenceFilterInput`
 
-Filter conditions for checking whether a top-level JSON field is missing/null or present.
+Fallback filter input for checking whether a JSON field is missing/null or present. Arrays, refs, and unions may instead use generated nested filter inputs that also expose `isNull`.
 
 | Field | Type | Description |
 | --- | --- | --- |
@@ -229,15 +229,15 @@ Collection: `app.certified.actor.organization`
 | Filter field | Type | Notes |
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
-| `longDescription` | `PresenceFilterInput` | Filter by whether longDescription is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `organizationType` | `PresenceFilterInput` | Filter by whether organizationType is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `longDescription` | `Generated complex filter input` | Filter by whether longDescription is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `organizationType` | `Generated complex filter input` | Filter by whether organizationType is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
-| `urls` | `PresenceFilterInput` | Filter by whether urls is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `urls` | `Generated complex filter input` | Filter by whether urls is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `foundedDate` | `DateTimeFilterInput` | Filter by foundedDate |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `visibility` | `StringFilterInput` | Filter by visibility |
-| `location` | `PresenceFilterInput` | Filter by whether location is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `location` | `Generated complex filter input` | Filter by whether location is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 
 Sort fields: `indexed_at`, `createdAt`, `visibility`, `foundedDate`
 
@@ -267,9 +267,9 @@ Collection: `app.certified.actor.profile`
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `pronouns` | `StringFilterInput` | Filter by pronouns |
-| `avatar` | `PresenceFilterInput` | Filter by whether avatar is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `avatar` | `Generated complex filter input` | Filter by whether avatar is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
-| `banner` | `PresenceFilterInput` | Filter by whether banner is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `banner` | `Generated complex filter input` | Filter by whether banner is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `website` | `StringFilterInput` | Filter by website |
 | `displayName` | `StringFilterInput` | Filter by displayName |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
@@ -333,8 +333,8 @@ Collection: `app.certified.badge.definition`
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `description` | `StringFilterInput` | Filter by description |
-| `allowedIssuers` | `PresenceFilterInput` | Filter by whether allowedIssuers is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `icon` | `PresenceFilterInput` | Filter by whether icon is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `allowedIssuers` | `Generated complex filter input` | Filter by whether allowedIssuers is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `icon` | `Generated complex filter input` | Filter by whether icon is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `title` | `StringFilterInput` | Filter by title |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
@@ -366,7 +366,7 @@ Collection: `app.certified.badge.response`
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `response` | `StringFilterInput` | Filter by response |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
-| `badgeAward` | `PresenceFilterInput` | Filter by whether badgeAward is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `badgeAward` | `Generated complex filter input` | Filter by whether badgeAward is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `weight` | `StringFilterInput` | Filter by weight |
@@ -394,7 +394,7 @@ Collection: `app.certified.graph.follow`
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
-| `via` | `PresenceFilterInput` | Filter by whether via is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `via` | `Generated complex filter input` | Filter by whether via is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `subject` | `StringFilterInput` | Filter by subject |
@@ -423,7 +423,7 @@ Collection: `app.certified.link.evm`
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
-| `proof` | `PresenceFilterInput` | Filter by whether proof is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `proof` | `Generated complex filter input` | Filter by whether proof is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `address` | `StringFilterInput` | Filter by address |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 
@@ -454,7 +454,7 @@ Collection: `app.certified.location`
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `srs` | `StringFilterInput` | Filter by srs |
-| `location` | `PresenceFilterInput` | Filter by whether location is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `location` | `Generated complex filter input` | Filter by whether location is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `lpVersion` | `StringFilterInput` | Filter by lpVersion |
 | `locationType` | `StringFilterInput` | Filter by locationType |
@@ -495,12 +495,12 @@ Collection: `org.hypercerts.claim.activity`
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
-| `workScope` | `PresenceFilterInput` | Filter by whether workScope is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `workScope` | `Generated complex filter input` | Filter by whether workScope is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `title` | `StringFilterInput` | Filter by title |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
-| `description` | `PresenceFilterInput` | Filter by whether description is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `description` | `Generated complex filter input` | Filter by whether description is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `shortDescription` | `StringFilterInput` | Filter by shortDescription |
-| `image` | `PresenceFilterInput` | Filter by whether image is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `image` | `Generated complex filter input` | Filter by whether image is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `endDate` | `DateTimeFilterInput` | Filter by endDate |
 | `startDate` | `DateTimeFilterInput` | Filter by startDate |
 | `rights` | generated nested strong-ref filter | Filter by whether rights is present or by nested exact fields such as `uri` and `cid` |
@@ -565,7 +565,7 @@ Collection: `org.hypercerts.claim.contributorInformation`
 | Filter field | Type | Notes |
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
-| `image` | `PresenceFilterInput` | Filter by whether image is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `image` | `Generated complex filter input` | Filter by whether image is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `identifier` | `StringFilterInput` | Filter by identifier |
 | `displayName` | `StringFilterInput` | Filter by displayName |
@@ -598,7 +598,7 @@ Collection: `org.hypercerts.claim.rights`
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
-| `attachment` | `PresenceFilterInput` | Filter by whether attachment is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `attachment` | `Generated complex filter input` | Filter by whether attachment is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `rightsName` | `StringFilterInput` | Filter by rightsName |
 | `rightsType` | `StringFilterInput` | Filter by rightsType |
 | `rightsDescription` | `StringFilterInput` | Filter by rightsDescription |
@@ -633,15 +633,15 @@ Collection: `org.hypercerts.collection`
 | Filter field | Type | Notes |
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
-| `banner` | `PresenceFilterInput` | Filter by whether banner is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `banner` | `Generated complex filter input` | Filter by whether banner is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `location` | generated nested strong-ref filter | Filter by whether location is present or by nested exact fields such as `uri` and `cid` |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `items` | generated nested array filter | Filter by whether items is present or by `any` item fields such as `itemIdentifier.uri` |
-| `description` | `PresenceFilterInput` | Filter by whether description is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `description` | `Generated complex filter input` | Filter by whether description is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `type` | `StringFilterInput` | Filter by type |
-| `avatar` | `PresenceFilterInput` | Filter by whether avatar is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `shortDescriptionFacets` | `PresenceFilterInput` | Filter by whether shortDescriptionFacets is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `avatar` | `Generated complex filter input` | Filter by whether avatar is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `shortDescriptionFacets` | `Generated complex filter input` | Filter by whether shortDescriptionFacets is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `shortDescription` | `StringFilterInput` | Filter by shortDescription |
 | `title` | `StringFilterInput` | Filter by title |
@@ -673,8 +673,8 @@ Collection: `org.hypercerts.context.acknowledgement`
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `comment` | `StringFilterInput` | Filter by comment |
-| `context` | `PresenceFilterInput` | Filter by whether context is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `subject` | `PresenceFilterInput` | Filter by whether subject is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `context` | `Generated complex filter input` | Filter by whether context is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `subject` | `Generated complex filter input` | Filter by whether subject is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `acknowledged` | `BooleanFilterInput` | Filter by acknowledged |
 
@@ -707,15 +707,15 @@ Collection: `org.hypercerts.context.attachment`
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `location` | `PresenceFilterInput` | Filter by whether location is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `location` | `Generated complex filter input` | Filter by whether location is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
-| `shortDescriptionFacets` | `PresenceFilterInput` | Filter by whether shortDescriptionFacets is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `content` | `PresenceFilterInput` | Filter by whether content is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `shortDescriptionFacets` | `Generated complex filter input` | Filter by whether shortDescriptionFacets is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `content` | `Generated complex filter input` | Filter by whether content is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
-| `description` | `PresenceFilterInput` | Filter by whether description is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `description` | `Generated complex filter input` | Filter by whether description is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `title` | `StringFilterInput` | Filter by title |
 | `shortDescription` | `StringFilterInput` | Filter by shortDescription |
-| `subjects` | `PresenceFilterInput` | Filter by whether subjects is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `subjects` | `Generated complex filter input` | Filter by whether subjects is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `contentType` | `StringFilterInput` | Filter by contentType |
 
 Sort fields: `contentType`, `title`, `shortDescription`, `createdAt`, `indexed_at`
@@ -745,16 +745,16 @@ Collection: `org.hypercerts.context.evaluation`
 | Filter field | Type | Notes |
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
-| `evaluators` | `PresenceFilterInput` | Filter by whether evaluators is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `evaluators` | `Generated complex filter input` | Filter by whether evaluators is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
-| `subject` | `PresenceFilterInput` | Filter by whether subject is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `subject` | `Generated complex filter input` | Filter by whether subject is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `summary` | `StringFilterInput` | Filter by summary |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
-| `measurements` | `PresenceFilterInput` | Filter by whether measurements is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `score` | `PresenceFilterInput` | Filter by whether score is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `content` | `PresenceFilterInput` | Filter by whether content is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `location` | `PresenceFilterInput` | Filter by whether location is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `measurements` | `Generated complex filter input` | Filter by whether measurements is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `score` | `Generated complex filter input` | Filter by whether score is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `content` | `Generated complex filter input` | Filter by whether content is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `location` | `Generated complex filter input` | Filter by whether location is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 
 Sort fields: `indexed_at`, `summary`, `createdAt`
 
@@ -789,7 +789,7 @@ Collection: `org.hypercerts.context.measurement`
 | Filter field | Type | Notes |
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
-| `locations` | `PresenceFilterInput` | Filter by whether locations is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `locations` | `Generated complex filter input` | Filter by whether locations is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `unit` | `StringFilterInput` | Filter by unit |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
@@ -799,11 +799,11 @@ Collection: `org.hypercerts.context.measurement`
 | `value` | `StringFilterInput` | Filter by value |
 | `endDate` | `DateTimeFilterInput` | Filter by endDate |
 | `methodURI` | `StringFilterInput` | Filter by methodURI |
-| `commentFacets` | `PresenceFilterInput` | Filter by whether commentFacets is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `subjects` | `PresenceFilterInput` | Filter by whether subjects is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `commentFacets` | `Generated complex filter input` | Filter by whether commentFacets is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `subjects` | `Generated complex filter input` | Filter by whether subjects is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `startDate` | `DateTimeFilterInput` | Filter by startDate |
-| `evidenceURI` | `PresenceFilterInput` | Filter by whether evidenceURI is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `measurers` | `PresenceFilterInput` | Filter by whether measurers is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `evidenceURI` | `Generated complex filter input` | Filter by whether evidenceURI is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `measurers` | `Generated complex filter input` | Filter by whether measurers is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `methodType` | `StringFilterInput` | Filter by methodType |
 
 Sort fields: `endDate`, `startDate`, `unit`, `comment`, `methodType`, `indexed_at`, `methodURI`, `createdAt`, `value`, `metric`
@@ -838,14 +838,14 @@ Collection: `org.hypercerts.funding.receipt`
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `occurredAt` | `DateTimeFilterInput` | Filter by occurredAt |
 | `paymentNetwork` | `StringFilterInput` | Filter by paymentNetwork |
-| `to` | `PresenceFilterInput` | Filter by whether to is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `for` | `PresenceFilterInput` | Filter by whether for is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `to` | `Generated complex filter input` | Filter by whether to is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `for` | `Generated complex filter input` | Filter by whether for is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `currency` | `StringFilterInput` | Filter by currency |
 | `notes` | `StringFilterInput` | Filter by notes |
 | `paymentRail` | `StringFilterInput` | Filter by paymentRail |
 | `transactionId` | `StringFilterInput` | Filter by transactionId |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `from` | `PresenceFilterInput` | Filter by whether from is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `from` | `Generated complex filter input` | Filter by whether from is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `amount` | `StringFilterInput` | Filter by amount |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
@@ -880,19 +880,19 @@ Collection: `org.hypercerts.workscope.tag`
 | Filter field | Type | Notes |
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
-| `referenceDocument` | `PresenceFilterInput` | Filter by whether referenceDocument is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `sameAs` | `PresenceFilterInput` | Filter by whether sameAs is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `referenceDocument` | `Generated complex filter input` | Filter by whether referenceDocument is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `sameAs` | `Generated complex filter input` | Filter by whether sameAs is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `description` | `StringFilterInput` | Filter by description |
-| `supersededBy` | `PresenceFilterInput` | Filter by whether supersededBy is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `supersededBy` | `Generated complex filter input` | Filter by whether supersededBy is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `key` | `StringFilterInput` | Filter by key |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
-| `parent` | `PresenceFilterInput` | Filter by whether parent is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `parent` | `Generated complex filter input` | Filter by whether parent is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `name` | `StringFilterInput` | Filter by name |
 | `status` | `StringFilterInput` | Filter by status |
 | `category` | `StringFilterInput` | Filter by category |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `aliases` | `PresenceFilterInput` | Filter by whether aliases is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
+| `aliases` | `Generated complex filter input` | Filter by whether aliases is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 
 Sort fields: `createdAt`, `description`, `key`, `indexed_at`, `name`, `status`, `category`
 

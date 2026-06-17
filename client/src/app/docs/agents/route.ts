@@ -435,7 +435,7 @@ Typed collection queries accept a \`where\` argument for field-level filtering. 
 
 ### Complex and Nested Field Filtering
 
-Scalar fields keep the typed operators above. Complex fields expose \`isNull\` for presence checks. Arrays, refs, and unions also expose generated nested filters up to three lexicon path segments deep:
+Scalar fields keep the typed operators above. Complex fields expose \`isNull\` for presence checks. Some complex fields use the shared \`PresenceFilterInput\`; arrays, refs, and unions may instead expose generated nested filter inputs up to three lexicon path segments deep. Do not rely on the input type name for presence checks; introspect the field and use \`isNull\`:
 
 \`\`\`graphql
 where: {
