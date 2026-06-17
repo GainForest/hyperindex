@@ -416,6 +416,29 @@ func TestSchemaExposesActivityOneLevelNestedRefAndUnionFilters(t *testing.T) {
 	smokeLog("✓ org.hypercerts.claim.activity exposes one-level ref and union nested filters")
 }
 
+func TestSchemaHidesUnsupportedNestedArrayAnyFilters(t *testing.T) {
+	config := loadSmokeConfig(t)
+	schema := fetchGraphQLSchema(t, config)
+	types := typesByName(schema.Types)
+
+	whereInput := requireSchemaType(t, types, "OrgHypercertsClaimActivityWhereInput")
+	facetsField := requireSchemaInputField(t, inputFieldsByName(whereInput.InputFields), "shortDescriptionFacets")
+	facetsInput := requireSchemaType(t, types, namedTypeName(facetsField.Type))
+
+	anyField := requireSchemaInputField(t, inputFieldsByName(facetsInput.InputFields), "any")
+	facetInput := requireSchemaType(t, types, namedTypeName(anyField.Type))
+
+	featuresField := requireSchemaInputField(t, inputFieldsByName(facetInput.InputFields), "features")
+	featuresInput := requireSchemaType(t, types, namedTypeName(featuresField.Type))
+	featuresFields := inputFieldsByName(featuresInput.InputFields)
+	requireSchemaInputField(t, featuresFields, "isNull")
+	if _, exists := featuresFields["any"]; exists {
+		t.Fatal("shortDescriptionFacets.any.features exposes nested any, but nested array any filters are not executable")
+	}
+
+	smokeLog("✓ nested filters hide unsupported array any filters inside another array any")
+}
+
 func TestSchemaKeepsPresenceOnlyFiltersAtNestedDepthLimit(t *testing.T) {
 	config := loadSmokeConfig(t)
 	schema := fetchGraphQLSchema(t, config)

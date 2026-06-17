@@ -1222,6 +1222,85 @@ func TestExtractFilters_ThreeLevelNestedArrayFilterPath(t *testing.T) {
 	}
 }
 
+func TestBuildWhereInput_HidesNestedArrayAnyInsideArrayAny(t *testing.T) {
+	lexiconID := "com.example.nested.arrays"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "facets", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#facet"}}},
+					{Name: "topFeatures", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#feature"}}},
+				},
+			},
+			Others: map[string]lexicon.Def{
+				"facet": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "features", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#feature"}}},
+					}},
+				},
+				"feature": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "tag", Property: lexicon.Property{Type: lexicon.TypeString}},
+					}},
+				},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput := builder.whereInputTypes[lexiconID]
+	whereFields := whereInput.Fields()
+
+	facetsInput, ok := whereFields["facets"].Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("facets filter type = %T, want *graphql.InputObject", whereFields["facets"].Type)
+	}
+	facetsAny := facetsInput.Fields()["any"]
+	if facetsAny == nil {
+		t.Fatal("top-level facets array should expose any")
+	}
+	facetInput, ok := facetsAny.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("facets.any type = %T, want *graphql.InputObject", facetsAny.Type)
+	}
+
+	featuresField := facetInput.Fields()["features"]
+	if featuresField == nil {
+		t.Fatal("facets.any should expose nested features presence filter")
+	}
+	featuresInput, ok := featuresField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("facets.any.features type = %T, want *graphql.InputObject", featuresField.Type)
+	}
+	if _, ok := featuresInput.Fields()["isNull"]; !ok {
+		t.Fatal("facets.any.features should keep isNull presence filtering")
+	}
+	if _, ok := featuresInput.Fields()["any"]; ok {
+		t.Fatal("facets.any.features should not expose nested any because nested array any filters cannot execute")
+	}
+
+	topFeaturesInput, ok := whereFields["topFeatures"].Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("topFeatures filter type = %T, want *graphql.InputObject", whereFields["topFeatures"].Type)
+	}
+	if _, ok := topFeaturesInput.Fields()["any"]; !ok {
+		t.Fatal("top-level topFeatures array should still expose any")
+	}
+}
+
 func TestBuildWhereInput_ComplexPropertiesUseNestedOrPresenceFilters(t *testing.T) {
 	lexiconID := "com.example.whereinput.presence"
 	lex := &lexicon.Lexicon{
