@@ -95,12 +95,9 @@ query SmokeActivityContributorIdentityNestedFilter($identity: String!) {
   }
 }`
 
-const smokeActivityContributorIdentityCandidatesQuery = `
-query SmokeActivityContributorIdentityCandidates {
-  orgHypercertsClaimActivity(
-    first: 20
-    where: { contributors: { any: { contributorIdentity: { identity: { isNull: false } } } } }
-  ) {
+const smokeActivityNestedFilterCandidatesQuery = `
+query SmokeActivityNestedFilterCandidates {
+  orgHypercertsClaimActivity(first: 100) {
     edges {
       node {
         uri
@@ -112,17 +109,6 @@ query SmokeActivityContributorIdentityCandidates {
             }
           }
         }
-      }
-    }
-  }
-}`
-
-const smokeActivityOneLevelNestedFilterCandidatesQuery = `
-query SmokeActivityOneLevelNestedFilterCandidates {
-  orgHypercertsClaimActivity(first: 100) {
-    edges {
-      node {
-        uri
         rights {
           uri
           cid
@@ -147,6 +133,14 @@ query SmokeActivityContributorIdentityPositiveNestedFilter($identity: String!) {
     edges {
       node {
         uri
+        contributors {
+          contributorIdentity {
+            __typename
+            ... on OrgHypercertsClaimActivityContributorIdentity {
+              identity
+            }
+          }
+        }
       }
     }
   }
@@ -525,7 +519,7 @@ func TestCollectionNestedWhereFilterReturnsMatchingItemURI(t *testing.T) {
 
 func TestActivityContributorIdentityNestedWhereFilterReturnsMatchingRecord(t *testing.T) {
 	config := loadSmokeConfig(t)
-	candidates := fetchActivityContributorIdentityCandidates(t, config)
+	candidates := fetchActivityNestedFilterCandidates(t, config)
 
 	candidateURI, identity, ok := findActivityContributorIdentityCandidate(candidates)
 	if !ok {
@@ -543,13 +537,18 @@ func TestActivityContributorIdentityNestedWhereFilterReturnsMatchingRecord(t *te
 	if !activityResponseContainsURI(filtered, candidateURI) {
 		t.Fatalf("contributor identity nested filter for %q did not return candidate activity %q; returned %v", identity, candidateURI, activityResponseURIs(filtered))
 	}
+	for _, edge := range filtered.OrgHypercertsClaimActivity.Edges {
+		if !activityNodeHasContributorIdentity(edge.Node, identity) {
+			t.Fatalf("contributor identity nested filter returned %q without matching identity=%q", edge.Node.URI, identity)
+		}
+	}
 
 	smokeLog("✓ org.hypercerts.claim.activity contributor identity nested filter returns matching records")
 }
 
 func TestActivityOneLevelNestedFiltersReturnMatchingRecords(t *testing.T) {
 	config := loadSmokeConfig(t)
-	candidates := fetchActivityOneLevelNestedFilterCandidates(t, config)
+	candidates := fetchActivityNestedFilterCandidates(t, config)
 
 	rightsCandidateURI, rightsURI, ok := findActivityRightsCandidate(candidates)
 	if !ok {
@@ -627,26 +626,14 @@ func TestNestedWhereAnyPredicatesMatchSameArrayElement(t *testing.T) {
 	smokeLog("✓ org.hypercerts.collection nested any keeps uri/cid predicates on the same item (candidate %s)", candidateURI)
 }
 
-func fetchActivityContributorIdentityCandidates(t testing.TB, config smokeConfig) activityNestedCandidateResponse {
+func fetchActivityNestedFilterCandidates(t testing.TB, config smokeConfig) activityNestedCandidateResponse {
 	t.Helper()
 
-	response := postGraphQL(t, context.Background(), config, "SmokeActivityContributorIdentityCandidates", smokeActivityContributorIdentityCandidatesQuery, nil)
+	response := postGraphQL(t, context.Background(), config, "SmokeActivityNestedFilterCandidates", smokeActivityNestedFilterCandidatesQuery, nil)
 
 	var candidates activityNestedCandidateResponse
 	if err := json.Unmarshal(response.Data, &candidates); err != nil {
-		t.Fatalf("decode SmokeActivityContributorIdentityCandidates data: %v", err)
-	}
-	return candidates
-}
-
-func fetchActivityOneLevelNestedFilterCandidates(t testing.TB, config smokeConfig) activityNestedCandidateResponse {
-	t.Helper()
-
-	response := postGraphQL(t, context.Background(), config, "SmokeActivityOneLevelNestedFilterCandidates", smokeActivityOneLevelNestedFilterCandidatesQuery, nil)
-
-	var candidates activityNestedCandidateResponse
-	if err := json.Unmarshal(response.Data, &candidates); err != nil {
-		t.Fatalf("decode SmokeActivityOneLevelNestedFilterCandidates data: %v", err)
+		t.Fatalf("decode SmokeActivityNestedFilterCandidates data: %v", err)
 	}
 	return candidates
 }
@@ -723,6 +710,15 @@ func activityResponseURIs(response activityNestedCandidateResponse) []string {
 		uris = append(uris, edge.Node.URI)
 	}
 	return uris
+}
+
+func activityNodeHasContributorIdentity(node activityNestedCandidateNode, identity string) bool {
+	for _, contributor := range node.Contributors {
+		if contributor.ContributorIdentity.Identity == identity {
+			return true
+		}
+	}
+	return false
 }
 
 func findMismatchedItemIdentifierCandidate(response nestedCollectionSameElementResponse) (recordURI string, requestedURI string, requestedCID string, ok bool) {
