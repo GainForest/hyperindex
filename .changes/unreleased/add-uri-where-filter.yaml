@@ -1,4 +1,0 @@
-kind: added
-body: Add a generated `uri` filter to typed public GraphQL record queries so clients can fetch exact AT-URIs or hydrate batches of records by URI without using aliased single-record lookups.
-custom:
-  Affects: user
