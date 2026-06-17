@@ -1,6 +1,6 @@
 # Hyperindex GraphQL Schema Reference
 
-Generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10.
+Last updated on 2026-06-17 for pending schema changes. Baseline generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10.
 
 ## Endpoints
 
