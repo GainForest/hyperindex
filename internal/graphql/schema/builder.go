@@ -32,10 +32,11 @@ type Builder struct {
 	objectBuilder *types.ObjectBuilder
 
 	// Built types
-	recordTypes     map[string]*graphql.Object      // lexiconID -> record type
-	connectionTypes map[string]*graphql.Object      // lexiconID -> connection type
-	sortFieldEnums  map[string]*graphql.Enum        // lexiconID -> sort field enum
-	whereInputTypes map[string]*graphql.InputObject // lexiconID -> where input type
+	recordTypes           map[string]*graphql.Object      // lexiconID -> record type
+	connectionTypes       map[string]*graphql.Object      // lexiconID -> connection type
+	sortFieldEnums        map[string]*graphql.Enum        // lexiconID -> sort field enum
+	whereInputTypes       map[string]*graphql.InputObject // lexiconID -> where input type
+	nestedWhereInputTypes map[string]*graphql.InputObject // generated nested-filter input cache
 
 	genericRecordType       *graphql.Object
 	genericRecordConnection *graphql.Object
@@ -45,13 +46,14 @@ type Builder struct {
 func NewBuilder(registry *lexicon.Registry) *Builder {
 	mapper := types.NewMapper()
 	return &Builder{
-		registry:        registry,
-		mapper:          mapper,
-		objectBuilder:   types.NewObjectBuilder(mapper, registry),
-		recordTypes:     make(map[string]*graphql.Object),
-		connectionTypes: make(map[string]*graphql.Object),
-		sortFieldEnums:  make(map[string]*graphql.Enum),
-		whereInputTypes: make(map[string]*graphql.InputObject),
+		registry:              registry,
+		mapper:                mapper,
+		objectBuilder:         types.NewObjectBuilder(mapper, registry),
+		recordTypes:           make(map[string]*graphql.Object),
+		connectionTypes:       make(map[string]*graphql.Object),
+		sortFieldEnums:        make(map[string]*graphql.Enum),
+		whereInputTypes:       make(map[string]*graphql.InputObject),
+		nestedWhereInputTypes: make(map[string]*graphql.InputObject),
 	}
 }
 
@@ -233,7 +235,7 @@ func (b *Builder) buildWhereInputTypes() {
 			if types.ReservedRecordFields[entry.Name] {
 				continue // Skip properties that collide with reserved metadata fields
 			}
-			filterInput := types.FilterInputForLexiconProperty(entry.Property.Type, entry.Property.Format)
+			filterInput := b.filterInputForTopLevelProperty(lex.ID, entry.Name, entry.Property)
 			if filterInput == nil {
 				continue // Non-filterable type, such as record.
 			}
@@ -241,10 +243,27 @@ func (b *Builder) buildWhereInputTypes() {
 			description := fmt.Sprintf("Filter by %s", entry.Name)
 			if filterInput == types.PresenceFilterInput {
 				description = fmt.Sprintf("Filter by whether %s is missing/null or present; nested values are not filterable", entry.Name)
+			} else if types.FilterInputForLexiconType(entry.Property.Type, entry.Property.Format) == nil {
+				description = fmt.Sprintf("Filter by whether %s is present, or by exact values nested inside it", entry.Name)
 			}
 			fields[entry.Name] = &graphql.InputObjectFieldConfig{
 				Type:        filterInput,
 				Description: description,
+			}
+		}
+
+		if lex.ID == "org.hypercerts.claim.activity" {
+			// contributorDid is a deliberate compatibility exception to the generated
+			// lexicon-property filters. The inline contributors.any.contributorIdentity
+			// shape fits the three-segment nested-filter limit, but matching a
+			// contributorInformation.identifier requires following a strongRef into
+			// another record, which generated nested filters intentionally do not do.
+			// Historical records may also store bare DID strings or object-shaped
+			// identities, so this narrow filter preserves one stable caller contract for
+			// all supported contributor encodings.
+			fields["contributorDid"] = &graphql.InputObjectFieldConfig{
+				Type:        types.DIDFilterInput,
+				Description: "Compatibility filter for activities whose contributors include this DID inline or through an org.hypercerts.claim.contributorInformation strongRef.",
 			}
 		}
 
@@ -666,6 +685,27 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 			continue
 		}
 
+		if fieldName == "contributorDid" && lexiconID == "org.hypercerts.claim.activity" {
+			// contributorDid is not a lexicon field. It routes to a repository-level
+			// compatibility predicate because the strongRef case crosses out of the
+			// activity record into contributorInformation.identifier, beyond the
+			// same-record nested-filter model. It also handles legacy bare DID
+			// contributors and inline contributor objects.
+			for op, val := range filterMap {
+				if val == nil {
+					continue
+				}
+				filters = append(filters, repositories.FieldFilter{
+					Field:     fieldName,
+					Operator:  op,
+					Value:     val,
+					FieldType: lexicon.TypeString,
+					Target:    repositories.FieldFilterTargetContributorDID,
+				})
+			}
+			continue
+		}
+
 		// Determine the filter target and lexicon type for this field so the repository
 		// can read from the correct storage location and CAST correctly. URI is
 		// generated metadata, not a JSON property, so it targets the record column and
@@ -681,6 +721,15 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 					fieldType = "datetime"
 				} else {
 					fieldType = prop.Type
+				}
+
+				if types.FilterInputForLexiconType(prop.Type, prop.Format) == nil {
+					nestedFilters, err := extractNestedPropertyFilters(lexiconID, registry, fieldName, *prop, filterMap)
+					if err != nil {
+						return nil, repositories.DIDFilter{}, repositories.ExternalLabelRecordFilter{}, err
+					}
+					filters = append(filters, nestedFilters...)
+					continue
 				}
 			}
 		}

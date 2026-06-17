@@ -8,53 +8,7 @@ import (
 	"testing"
 )
 
-const (
-	activityWhereInputType = "OrgHypercertsClaimActivityWhereInput"
-	presenceFilterType     = "PresenceFilterInput"
-)
-
-const smokeActivityPresenceSchemaQuery = `
-query SmokeActivityPresenceSchema {
-  whereInput: __type(name: "OrgHypercertsClaimActivityWhereInput") {
-    inputFields {
-      name
-      type {
-        kind
-        name
-        ofType {
-          kind
-          name
-          ofType {
-            kind
-            name
-          }
-        }
-      }
-    }
-  }
-  presenceInput: __type(name: "PresenceFilterInput") {
-    inputFields {
-      name
-      type {
-        kind
-        name
-        ofType {
-          kind
-          name
-        }
-      }
-    }
-  }
-}`
-
-type activityPresenceSchemaResponse struct {
-	WhereInput    schemaInputType `json:"whereInput"`
-	PresenceInput schemaInputType `json:"presenceInput"`
-}
-
-type schemaInputType struct {
-	InputFields []schemaInputField `json:"inputFields"`
-}
+const activityWhereInputType = "OrgHypercertsClaimActivityWhereInput"
 
 type schemaInputField struct {
 	Name string        `json:"name"`
@@ -133,35 +87,25 @@ query SmokeActivityImagePresenceFilter($first: Int!) {
 func assertActivityImagePresenceSchema(t testing.TB, ctx context.Context, config smokeConfig) {
 	t.Helper()
 
-	response := postGraphQL(t, ctx, config, "SmokeActivityPresenceSchema", smokeActivityPresenceSchemaQuery, nil)
+	_ = ctx // Kept in the signature so callers can share one smoke-test context.
+	schema := fetchGraphQLSchema(t, config)
+	types := typesByName(schema.Types)
 
-	var payload activityPresenceSchemaResponse
-	if err := json.Unmarshal(response.Data, &payload); err != nil {
-		t.Fatalf("SmokeActivityPresenceSchema: decode response data: %v", err)
-	}
-	if len(payload.WhereInput.InputFields) == 0 {
+	whereInput := requireSchemaType(t, types, activityWhereInputType)
+	if len(whereInput.InputFields) == 0 {
 		t.Fatalf("SmokeActivityPresenceSchema: %s not found or has no inputFields", activityWhereInputType)
 	}
-	if len(payload.PresenceInput.InputFields) == 0 {
-		t.Fatalf("SmokeActivityPresenceSchema: %s not found or has no inputFields", presenceFilterType)
+
+	imageField := requireSchemaInputField(t, inputFieldsByName(whereInput.InputFields), "image")
+	imageFilterType := namedTypeName(imageField.Type)
+	if imageFilterType == "" {
+		t.Fatalf("SmokeActivityPresenceSchema: %s.image has no named input type: %+v", activityWhereInputType, imageField.Type)
 	}
 
-	whereFields := inputFieldsByName(payload.WhereInput.InputFields)
-	imageField, ok := whereFields["image"]
-	if !ok {
-		t.Fatalf("SmokeActivityPresenceSchema: %s is missing image input field", activityWhereInputType)
-	}
-	if got := namedTypeName(imageField.Type); got != presenceFilterType {
-		t.Fatalf("SmokeActivityPresenceSchema: %s.image type = %q, want %q", activityWhereInputType, got, presenceFilterType)
-	}
-
-	presenceFields := inputFieldsByName(payload.PresenceInput.InputFields)
-	isNullField, ok := presenceFields["isNull"]
-	if !ok {
-		t.Fatalf("SmokeActivityPresenceSchema: %s is missing isNull input field", presenceFilterType)
-	}
-	if isNullField.Type.Kind != "NON_NULL" || isNullField.Type.OfType == nil || isNullField.Type.OfType.Name != "Boolean" {
-		t.Fatalf("SmokeActivityPresenceSchema: %s.isNull type = %+v, want Boolean!", presenceFilterType, isNullField.Type)
+	imageFilterInput := requireSchemaType(t, types, imageFilterType)
+	isNullField := requireSchemaInputField(t, inputFieldsByName(imageFilterInput.InputFields), "isNull")
+	if got := namedTypeName(isNullField.Type); got != "Boolean" {
+		t.Fatalf("SmokeActivityPresenceSchema: %s.isNull type = %+v, want Boolean", imageFilterType, isNullField.Type)
 	}
 }
 

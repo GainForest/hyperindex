@@ -406,6 +406,121 @@ func TestGetByCollectionSortedWithKeysetCursor_URIFilterUsesRecordColumn(t *test
 	}
 }
 
+func TestGetByCollectionSortedWithKeysetCursor_NestedArrayAnyFilter(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	const targetURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
+	insertSortRecord(t, repo, "at://did:plc:alice/org.hypercerts.collection/contains", "cid-contains", "did:plc:alice", "org.hypercerts.collection", `{"title":"Project","items":[{"itemIdentifier":{"uri":"`+targetURI+`","cid":"bafyactivity"}}]}`)
+	insertSortRecord(t, repo, "at://did:plc:alice/org.hypercerts.collection/other", "cid-other", "did:plc:alice", "org.hypercerts.collection", `{"title":"Other","items":[{"itemIdentifier":{"uri":"at://did:plc:maker/org.hypercerts.claim.activity/other","cid":"bafyother"}}]}`)
+
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "org.hypercerts.collection", []FieldFilter{
+		{Field: "items", Path: []string{"itemIdentifier", "uri"}, ArrayPath: []string{"items"}, Operator: "eq", Value: targetURI, FieldType: "string"},
+	}, DIDFilter{}, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("GetByCollectionSortedWithKeysetCursor() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if records[0].URI != "at://did:plc:alice/org.hypercerts.collection/contains" {
+		t.Fatalf("records[0].URI = %q, want contains record", records[0].URI)
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_NestedArrayAnyFilterKeepsPredicatesOnSameElement(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	const targetURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
+	const targetCID = "bafyactivity"
+	insertSortRecord(t, repo, "at://did:plc:alice/org.hypercerts.collection/exact", "cid-exact", "did:plc:alice", "org.hypercerts.collection", `{"title":"Exact","items":[{"itemIdentifier":{"uri":"`+targetURI+`","cid":"`+targetCID+`"}}]}`)
+	insertSortRecord(t, repo, "at://did:plc:alice/org.hypercerts.collection/split", "cid-split", "did:plc:alice", "org.hypercerts.collection", `{"title":"Split","items":[{"itemIdentifier":{"uri":"`+targetURI+`","cid":"wrong-cid"}},{"itemIdentifier":{"uri":"at://did:plc:maker/org.hypercerts.claim.activity/other","cid":"`+targetCID+`"}}]}`)
+
+	filters := []FieldFilter{
+		{Field: "items", Path: []string{"itemIdentifier", "uri"}, ArrayPath: []string{"items"}, Operator: "eq", Value: targetURI, FieldType: "string"},
+		{Field: "items", Path: []string{"itemIdentifier", "cid"}, ArrayPath: []string{"items"}, Operator: "eq", Value: targetCID, FieldType: "string"},
+	}
+	clause, params, err := repo.buildFilterClause(filters, 1)
+	if err != nil {
+		t.Fatalf("buildFilterClause() error = %v", err)
+	}
+	if got := strings.Count(clause, "EXISTS (SELECT 1 FROM json_each"); got != 1 {
+		t.Fatalf("array filters should share one EXISTS clause, got %d in %q", got, clause)
+	}
+	if !strings.Contains(clause, " AND ") {
+		t.Fatalf("array filters should be joined inside the same EXISTS clause: %q", clause)
+	}
+	if len(params) != 2 {
+		t.Fatalf("len(params) = %d, want 2", len(params))
+	}
+
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "org.hypercerts.collection", filters, DIDFilter{}, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("GetByCollectionSortedWithKeysetCursor() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if records[0].URI != "at://did:plc:alice/org.hypercerts.collection/exact" {
+		t.Fatalf("records[0].URI = %q, want exact record", records[0].URI)
+	}
+
+	count, err := repo.GetCollectionCountFiltered(ctx, "org.hypercerts.collection", filters, DIDFilter{})
+	if err != nil {
+		t.Fatalf("GetCollectionCountFiltered() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_NestedThreeLevelJSONPathFilter(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	insertSortRecord(t, repo, "at://did:plc:alice/com.example.nested/target", "cid-target", "did:plc:alice", "com.example.nested", `{"outer":{"middle":{"leaf":"target"}}}`)
+	insertSortRecord(t, repo, "at://did:plc:alice/com.example.nested/other", "cid-other", "did:plc:alice", "com.example.nested", `{"outer":{"middle":{"leaf":"other"}}}`)
+	insertSortRecord(t, repo, "at://did:plc:alice/com.example.nested/missing", "cid-missing", "did:plc:alice", "com.example.nested", `{"outer":{"middle":{}}}`)
+
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "com.example.nested", []FieldFilter{
+		{Field: "outer", Path: []string{"outer", "middle", "leaf"}, Operator: "eq", Value: "target", FieldType: "string"},
+	}, DIDFilter{}, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("GetByCollectionSortedWithKeysetCursor() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("len(records) = %d, want 1", len(records))
+	}
+	if records[0].URI != "at://did:plc:alice/com.example.nested/target" {
+		t.Fatalf("records[0].URI = %q, want target record", records[0].URI)
+	}
+}
+
+func TestGetByCollectionSortedWithKeysetCursor_ContributorDIDCompatibilityFilter(t *testing.T) {
+	repo, _ := newSortTestRepo(t)
+	ctx := context.Background()
+
+	const contributorURI = "at://did:plc:contributor/org.hypercerts.claim.contributorInformation/info-1"
+	insertSortRecord(t, repo, contributorURI, "cid-info", "did:plc:contributor", "org.hypercerts.claim.contributorInformation", `{"identifier":"did:plc:alice"}`)
+	insertSortRecord(t, repo, "at://did:plc:author/org.hypercerts.claim.activity/inline", "cid-inline", "did:plc:author", "org.hypercerts.claim.activity", `{"contributors":[{"contributorIdentity":{"identity":"did:plc:alice"}}]}`)
+	insertSortRecord(t, repo, "at://did:plc:author/org.hypercerts.claim.activity/ref", "cid-ref", "did:plc:author", "org.hypercerts.claim.activity", `{"contributors":[{"contributorIdentity":{"uri":"`+contributorURI+`","cid":"cid-info"}}]}`)
+	insertSortRecord(t, repo, "at://did:plc:author/org.hypercerts.claim.activity/direct", "cid-direct", "did:plc:author", "org.hypercerts.claim.activity", `{"contributors":[{"identity":"did:plc:alice"}]}`)
+	insertSortRecord(t, repo, "at://did:plc:author/org.hypercerts.claim.activity/bare", "cid-bare", "did:plc:author", "org.hypercerts.claim.activity", `{"contributors":["did:plc:alice"]}`)
+	insertSortRecord(t, repo, "at://did:plc:author/org.hypercerts.claim.activity/other", "cid-other", "did:plc:author", "org.hypercerts.claim.activity", `{"contributors":[{"contributorIdentity":{"identity":"did:plc:bob"}}]}`)
+	insertSortRecord(t, repo, "at://did:plc:author/org.hypercerts.claim.activity/bare-other", "cid-bare-other", "did:plc:author", "org.hypercerts.claim.activity", `{"contributors":["did:plc:bob"]}`)
+
+	records, err := repo.GetByCollectionSortedWithKeysetCursor(ctx, "org.hypercerts.claim.activity", []FieldFilter{
+		{Field: "contributorDid", Operator: "eq", Value: "did:plc:alice", FieldType: "string", Target: FieldFilterTargetContributorDID},
+	}, DIDFilter{}, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("GetByCollectionSortedWithKeysetCursor() error = %v", err)
+	}
+	if len(records) != 4 {
+		t.Fatalf("len(records) = %d, want 4", len(records))
+	}
+}
+
 // newSortTestRepo creates a RecordsRepository with a fresh in-memory SQLite DB and the record table.
 // Returns the repo and a helper function for running raw SQL (e.g., to set indexed_at).
 func newSortTestRepo(t *testing.T) (*RecordsRepository, func(query string, args ...any)) {

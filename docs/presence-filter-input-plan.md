@@ -1,5 +1,7 @@
 # Presence Filter Input Implementation Plan
 
+> Historical implementation plan: Hyperindex now also generates nested filters for arrays, refs, and unions. The reusable `PresenceFilterInput` still exists for presence-only fields, but many complex fields now use generated nested filter input types that also expose `isNull`. Current user-facing docs should describe `isNull` presence checks rather than promising the `PresenceFilterInput` type name for every complex field.
+
 ## Goal
 
 Add basic presence filtering for non-scalar top-level lexicon fields in generated collection queries.
