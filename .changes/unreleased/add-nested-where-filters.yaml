@@ -1,0 +1,4 @@
+kind: added
+body: Add generated exact nested filters for typed GraphQL queries so clients can filter arrays, refs, and unions up to three lexicon path segments deep. Hypercerts activity queries also gain a `contributorDid` compatibility filter for inline contributor DIDs, legacy bare DID entries, and contributorInformation strong refs.
+custom:
+  Affects: user

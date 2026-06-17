@@ -55,24 +55,34 @@ type Record struct {
 }
 
 // FieldFilterTarget identifies where a record field filter reads its value
-// from. Use JSON for lexicon-defined record properties and Column only for
-// generated metadata filters that intentionally target record table columns.
+// from. Use JSON for lexicon-defined record properties, Column only for
+// generated metadata filters that intentionally target record table columns, and
+// ContributorDID only for the temporary Hypercerts contributor compatibility
+// filter.
 type FieldFilterTarget string
 
 const (
-	// FieldFilterTargetJSON reads from a top-level field in the record JSON
-	// payload. It is also the default when FieldFilter.Target is empty, which
-	// keeps older callers on the safe lexicon-property path.
+	// FieldFilterTargetJSON reads from the record JSON payload. It is also the
+	// default when FieldFilter.Target is empty, which keeps older callers on the
+	// safe lexicon-property path.
 	FieldFilterTargetJSON FieldFilterTarget = "json"
 
 	// FieldFilterTargetColumn reads from a whitelisted metadata column on the
 	// record table. Use it only for generated metadata filters such as uri.
 	FieldFilterTargetColumn FieldFilterTarget = "column"
+
+	// FieldFilterTargetContributorDID is a narrow compatibility filter for
+	// org.hypercerts.claim.activity contributor lookups. It matches inline
+	// contributor DID strings and contributorInformation strongRefs whose target
+	// record has a matching identifier.
+	FieldFilterTargetContributorDID FieldFilterTarget = "contributor_did"
 )
 
 // FieldFilter represents a single condition on a filterable record field.
 type FieldFilter struct {
-	Field     string            // Field name. JSON targets use a top-level JSON property; column targets use a whitelisted metadata column.
+	Field     string            // Field name for diagnostics. JSON targets use a top-level JSON property unless Path is set; column targets use a whitelisted metadata column.
+	Path      []string          // Optional JSON path from the record root for nested filters. Empty means Field is the JSON path.
+	ArrayPath []string          // Optional JSON path to an array field whose elements should be searched with any-semantics; Path is evaluated relative to each array element.
 	Operator  string            // One of: "eq", "neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith", "isNull"
 	Value     interface{}       // The comparison value. For "in", must be []interface{}. For "isNull", must be bool.
 	FieldType string            // Lexicon type used for SQL casting. Numeric types are cast; complex types are presence-filtered with isNull.
@@ -454,98 +464,275 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 	var params []database.Value
 	placeholderIdx := startPlaceholder
 
-	for _, f := range filters {
-		extract, err := r.filterFieldExpr(f)
+	for i, f := range filters {
+		condition, conditionParams, consumed, err := r.buildFieldFilterCondition(f, placeholderIdx, i)
 		if err != nil {
 			return "", nil, err
 		}
-
-		// Wrap numeric types in a CAST for proper comparison
-		isNumeric := f.FieldType == "integer" || f.FieldType == "number"
-		if isNumeric {
-			switch r.db.Dialect() {
-			case database.PostgreSQL:
-				extract = fmt.Sprintf("(%s)::numeric", extract)
-			default:
-				extract = fmt.Sprintf("CAST(%s AS REAL)", extract)
-			}
-		}
-
-		switch f.Operator {
-		case "eq":
-			conditions = append(conditions, fmt.Sprintf("%s = %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "neq":
-			conditions = append(conditions, fmt.Sprintf("%s != %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "gt":
-			conditions = append(conditions, fmt.Sprintf("%s > %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "lt":
-			conditions = append(conditions, fmt.Sprintf("%s < %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "gte":
-			conditions = append(conditions, fmt.Sprintf("%s >= %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "lte":
-			conditions = append(conditions, fmt.Sprintf("%s <= %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "contains":
-			likeOp := "LIKE"
-			if r.db.Dialect() == database.PostgreSQL {
-				likeOp = "ILIKE"
-			}
-			conditions = append(conditions, fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)))
-			val := fmt.Sprintf("%%%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
-			params = append(params, database.Text(val))
-			placeholderIdx++
-		case "startsWith":
-			likeOp := "LIKE"
-			if r.db.Dialect() == database.PostgreSQL {
-				likeOp = "ILIKE"
-			}
-			conditions = append(conditions, fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)))
-			val := fmt.Sprintf("%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
-			params = append(params, database.Text(val))
-			placeholderIdx++
-		case "isNull":
-			isNull, ok := f.Value.(bool)
-			if !ok {
-				return "", nil, fmt.Errorf("isNull filter on field %q must be a boolean, got %T", f.Field, f.Value)
-			}
-			if isNull {
-				conditions = append(conditions, fmt.Sprintf("%s IS NULL", extract))
-			} else {
-				conditions = append(conditions, fmt.Sprintf("%s IS NOT NULL", extract))
-			}
-		case "in":
-			inVals, _ := f.Value.([]interface{})
-			if len(inVals) == 0 {
-				// Empty IN list — always false
-				conditions = append(conditions, "1 = 0")
-				continue
-			}
-			if len(inVals) > MaxINListSize {
-				return "", nil, fmt.Errorf("IN filter on field %q exceeds maximum of %d values", f.Field, MaxINListSize)
-			}
-			placeholders := r.db.Placeholders(len(inVals), placeholderIdx)
-			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", extract, placeholders))
-			for _, v := range inVals {
-				params = append(params, toDBValue(v))
-				placeholderIdx++
-			}
-		default:
-			return "", nil, fmt.Errorf("unsupported filter operator %q for field %q", f.Operator, f.Field)
-		}
+		conditions = append(conditions, condition)
+		params = append(params, conditionParams...)
+		placeholderIdx += consumed
 	}
 
 	return strings.Join(conditions, " AND "), params, nil
+}
+
+func (r *RecordsRepository) buildFieldFilterCondition(f FieldFilter, placeholderIdx, filterIndex int) (string, []database.Value, int, error) {
+	switch f.Target {
+	case FieldFilterTargetContributorDID:
+		return r.buildContributorDIDFilterCondition(f, placeholderIdx)
+	case "", FieldFilterTargetJSON:
+		if len(f.ArrayPath) > 0 {
+			return r.buildArrayAnyFilterCondition(f, placeholderIdx, filterIndex)
+		}
+	}
+
+	extract, err := r.filterFieldExpr(f)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	return r.buildScalarFilterCondition(extract, f, placeholderIdx)
+}
+
+func (r *RecordsRepository) buildScalarFilterCondition(extract string, f FieldFilter, placeholderIdx int) (string, []database.Value, int, error) {
+	// Wrap numeric types in a CAST for proper comparison.
+	isNumeric := f.FieldType == "integer" || f.FieldType == "number"
+	if isNumeric {
+		switch r.db.Dialect() {
+		case database.PostgreSQL:
+			extract = fmt.Sprintf("(%s)::numeric", extract)
+		default:
+			extract = fmt.Sprintf("CAST(%s AS REAL)", extract)
+		}
+	}
+
+	switch f.Operator {
+	case "eq":
+		return fmt.Sprintf("%s = %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "neq":
+		return fmt.Sprintf("%s != %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "gt":
+		return fmt.Sprintf("%s > %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "lt":
+		return fmt.Sprintf("%s < %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "gte":
+		return fmt.Sprintf("%s >= %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "lte":
+		return fmt.Sprintf("%s <= %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "contains":
+		likeOp := "LIKE"
+		if r.db.Dialect() == database.PostgreSQL {
+			likeOp = "ILIKE"
+		}
+		val := fmt.Sprintf("%%%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
+		return fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)), []database.Value{database.Text(val)}, 1, nil
+	case "startsWith":
+		likeOp := "LIKE"
+		if r.db.Dialect() == database.PostgreSQL {
+			likeOp = "ILIKE"
+		}
+		val := fmt.Sprintf("%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
+		return fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)), []database.Value{database.Text(val)}, 1, nil
+	case "isNull":
+		isNull, ok := f.Value.(bool)
+		if !ok {
+			return "", nil, 0, fmt.Errorf("isNull filter on field %q must be a boolean, got %T", f.Field, f.Value)
+		}
+		if isNull {
+			return fmt.Sprintf("%s IS NULL", extract), nil, 0, nil
+		}
+		return fmt.Sprintf("%s IS NOT NULL", extract), nil, 0, nil
+	case "in":
+		inVals, ok := f.Value.([]interface{})
+		if !ok {
+			return "", nil, 0, fmt.Errorf("IN filter on field %q must be a list, got %T", f.Field, f.Value)
+		}
+		if len(inVals) == 0 {
+			return "1 = 0", nil, 0, nil
+		}
+		if len(inVals) > MaxINListSize {
+			return "", nil, 0, fmt.Errorf("IN filter on field %q exceeds maximum of %d values", f.Field, MaxINListSize)
+		}
+		placeholders := r.db.Placeholders(len(inVals), placeholderIdx)
+		params := make([]database.Value, 0, len(inVals))
+		for _, v := range inVals {
+			params = append(params, toDBValue(v))
+		}
+		return fmt.Sprintf("%s IN (%s)", extract, placeholders), params, len(params), nil
+	default:
+		return "", nil, 0, fmt.Errorf("unsupported filter operator %q for field %q", f.Operator, f.Field)
+	}
+}
+
+func (r *RecordsRepository) buildArrayAnyFilterCondition(f FieldFilter, placeholderIdx, filterIndex int) (string, []database.Value, int, error) {
+	alias := fmt.Sprintf("nested_filter_%d", filterIndex)
+	arrayExpr := r.jsonValuePathExpr("record.json", f.ArrayPath)
+	innerExpr := r.jsonTextPathExpr(alias+".value", f.Path)
+
+	innerCondition, params, consumed, err := r.buildScalarFilterCondition(innerExpr, f, placeholderIdx)
+	if err != nil {
+		return "", nil, 0, err
+	}
+
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		safeArrayExpr := fmt.Sprintf("CASE WHEN jsonb_typeof(%s) = 'array' THEN %s ELSE '[]'::jsonb END", arrayExpr, arrayExpr)
+		return fmt.Sprintf("EXISTS (SELECT 1 FROM jsonb_array_elements(%s) AS %s(value) WHERE %s)", safeArrayExpr, alias, innerCondition), params, consumed, nil
+	default:
+		arrayTypeExpr := r.sqliteJSONTypePathExpr("record.json", f.ArrayPath)
+		safeArrayExpr := fmt.Sprintf("CASE WHEN %s = 'array' THEN %s ELSE '[]' END", arrayTypeExpr, arrayExpr)
+		return fmt.Sprintf("%s = 'array' AND EXISTS (SELECT 1 FROM json_each(%s) AS %s WHERE %s)", arrayTypeExpr, safeArrayExpr, alias, innerCondition), params, consumed, nil
+	}
+}
+
+func (r *RecordsRepository) jsonTextPathExpr(column string, path []string) string {
+	if len(path) == 0 {
+		if r.db.Dialect() == database.PostgreSQL {
+			return fmt.Sprintf("%s #>> '{}'", column)
+		}
+		return column
+	}
+	if r.db.Dialect() != database.PostgreSQL {
+		return fmt.Sprintf("CASE WHEN json_valid(%s) THEN %s ELSE NULL END", column, r.db.JSONExtractPath(column, path))
+	}
+	return r.db.JSONExtractPath(column, path)
+}
+
+func (r *RecordsRepository) sqliteJSONTypePathExpr(column string, path []string) string {
+	_ = r.db.JSONExtractPath(column, path)
+	return fmt.Sprintf("json_type(%s, '%s')", column, sqliteJSONPath(path))
+}
+
+func sqliteJSONPath(path []string) string {
+	if len(path) == 0 {
+		return "$"
+	}
+	return "$." + strings.Join(path, ".")
+}
+
+func (r *RecordsRepository) jsonValuePathExpr(column string, path []string) string {
+	if len(path) == 0 {
+		return column
+	}
+
+	// Reuse the executor's path validation before building dialect-specific JSON
+	// value expressions.
+	_ = r.db.JSONExtractPath(column, path)
+
+	if r.db.Dialect() != database.PostgreSQL {
+		return r.db.JSONExtractPath(column, path)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(column)
+	for _, segment := range path {
+		sb.WriteString("->'")
+		sb.WriteString(segment)
+		sb.WriteString("'")
+	}
+	return sb.String()
+}
+
+func (r *RecordsRepository) buildContributorDIDFilterCondition(f FieldFilter, placeholderIdx int) (string, []database.Value, int, error) {
+	values, err := contributorDIDFilterValues(f)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	if len(values) == 0 {
+		return "1 = 0", nil, 0, nil
+	}
+	if len(values) > MaxINListSize {
+		return "", nil, 0, fmt.Errorf("contributor DID filter exceeds maximum of %d values", MaxINListSize)
+	}
+
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		params := contributorDIDParams(values, 2)
+		placeholders := r.db.Placeholders(len(values), placeholderIdx)
+		refPlaceholders := r.db.Placeholders(len(values), placeholderIdx+len(values))
+		return fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(record.json->'contributors') = 'array' THEN record.json->'contributors' ELSE '[]'::jsonb END) AS contributor(value)
+			WHERE contributor.value #>> '{}' IN (%[1]s)
+				OR contributor.value->>'identity' IN (%[1]s)
+				OR contributor.value->'contributorIdentity'->>'identity' IN (%[1]s)
+				OR contributor.value->'contributorIdentity'->>'did' IN (%[1]s)
+				OR EXISTS (
+					SELECT 1 FROM record contributor_info
+					WHERE contributor_info.uri = contributor.value->'contributorIdentity'->>'uri'
+						AND contributor_info.collection = 'org.hypercerts.claim.contributorInformation'
+						AND contributor_info.json->>'identifier' IN (%[2]s)
+				)
+		)`, placeholders, refPlaceholders), params, len(params), nil
+	default:
+		params := contributorDIDParams(values, 5)
+		barePlaceholders := r.db.Placeholders(len(values), placeholderIdx)
+		directIdentityPlaceholders := r.db.Placeholders(len(values), placeholderIdx+len(values))
+		identityPlaceholders := r.db.Placeholders(len(values), placeholderIdx+(len(values)*2))
+		didPlaceholders := r.db.Placeholders(len(values), placeholderIdx+(len(values)*3))
+		refPlaceholders := r.db.Placeholders(len(values), placeholderIdx+(len(values)*4))
+		directIdentityExpr := r.jsonTextPathExpr("contributor.value", []string{"identity"})
+		identityExpr := r.jsonTextPathExpr("contributor.value", []string{"contributorIdentity", "identity"})
+		didExpr := r.jsonTextPathExpr("contributor.value", []string{"contributorIdentity", "did"})
+		contributorInfoURIExpr := r.jsonTextPathExpr("contributor.value", []string{"contributorIdentity", "uri"})
+		contributorsExpr := r.jsonValuePathExpr("record.json", []string{"contributors"})
+		contributorsTypeExpr := r.sqliteJSONTypePathExpr("record.json", []string{"contributors"})
+		safeContributorsExpr := fmt.Sprintf("CASE WHEN %s = 'array' THEN %s ELSE '[]' END", contributorsTypeExpr, contributorsExpr)
+		return fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM json_each(%[10]s) AS contributor
+			WHERE contributor.value IN (%[1]s)
+				OR %[2]s IN (%[3]s)
+				OR %[4]s IN (%[5]s)
+				OR %[6]s IN (%[7]s)
+				OR EXISTS (
+					SELECT 1 FROM record contributor_info
+					WHERE contributor_info.uri = %[8]s
+						AND contributor_info.collection = 'org.hypercerts.claim.contributorInformation'
+						AND json_extract(contributor_info.json, '$.identifier') IN (%[9]s)
+				)
+		)`, barePlaceholders, directIdentityExpr, directIdentityPlaceholders, identityExpr, identityPlaceholders, didExpr, didPlaceholders, contributorInfoURIExpr, refPlaceholders, safeContributorsExpr), params, len(params), nil
+	}
+}
+
+func contributorDIDParams(values []string, copies int) []database.Value {
+	params := make([]database.Value, 0, len(values)*copies)
+	for range copies {
+		for _, value := range values {
+			params = append(params, database.Text(value))
+		}
+	}
+	return params
+}
+
+func contributorDIDFilterValues(f FieldFilter) ([]string, error) {
+	switch f.Operator {
+	case "eq":
+		value, ok := f.Value.(string)
+		if !ok {
+			return nil, fmt.Errorf("contributor DID eq filter must be a string, got %T", f.Value)
+		}
+		if value == "" {
+			return nil, nil
+		}
+		return []string{value}, nil
+	case "in":
+		values, ok := f.Value.([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("contributor DID in filter must be a list, got %T", f.Value)
+		}
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("contributor DID in filter values must be strings, got %T", value)
+			}
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unsupported contributor DID filter operator %q", f.Operator)
+	}
 }
 
 // metadataFilterColumns is the set of record table columns that generated
@@ -561,6 +748,9 @@ var metadataFilterColumns = map[string]bool{
 func (r *RecordsRepository) filterFieldExpr(f FieldFilter) (string, error) {
 	switch f.Target {
 	case "", FieldFilterTargetJSON:
+		if len(f.Path) > 0 {
+			return r.db.JSONExtractPath("json", f.Path), nil
+		}
 		return r.db.JSONExtract("json", f.Field), nil
 	case FieldFilterTargetColumn:
 		if !metadataFilterColumns[f.Field] {

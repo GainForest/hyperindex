@@ -907,7 +907,248 @@ func TestExtractFilters_URIFilterKeepsMetadataStringType(t *testing.T) {
 	}
 }
 
-func TestBuildWhereInput_ComplexPropertiesUsePresenceFilter(t *testing.T) {
+func TestBuildWhereInput_UnresolvedRefsUsePresenceOnlyFilter(t *testing.T) {
+	lexiconID := "com.example.unresolved.ref"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{Main: &lexicon.RecordDef{
+			Type: "record",
+			Key:  "tid",
+			Properties: []lexicon.PropertyEntry{
+				{Name: "target", Property: lexicon.Property{Type: lexicon.TypeRef, Ref: "com.example.missing#main"}},
+			},
+		}},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput := builder.whereInputTypes[lexiconID]
+	targetField := whereInput.Fields()["target"]
+	if targetField == nil {
+		t.Fatal("WhereInput missing target field")
+	}
+	inputObj, ok := targetField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("target type = %T, want *graphql.InputObject", targetField.Type)
+	}
+	fields := inputObj.Fields()
+	if _, ok := fields["isNull"]; !ok {
+		t.Fatalf("unresolved ref filter missing isNull")
+	}
+	if _, ok := fields["eq"]; ok {
+		t.Fatalf("unresolved ref filter exposes eq but extraction cannot apply it")
+	}
+}
+
+func TestBuildWhereInput_UnionConflictOmitAmbiguousNestedField(t *testing.T) {
+	lexiconID := "com.example.union.conflict"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "subject", Property: lexicon.Property{Type: lexicon.TypeUnion, Refs: []string{"#stringSubject", "#intSubject"}}},
+				},
+			},
+			Others: map[string]lexicon.Def{
+				"stringSubject": {Type: "object", Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{{Name: "value", Property: lexicon.Property{Type: lexicon.TypeString}}}}},
+				"intSubject":    {Type: "object", Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{{Name: "value", Property: lexicon.Property{Type: lexicon.TypeInteger}}}}},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	subjectField := builder.whereInputTypes[lexiconID].Fields()["subject"]
+	inputObj, ok := subjectField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("subject type = %T, want *graphql.InputObject", subjectField.Type)
+	}
+	if _, ok := inputObj.Fields()["value"]; ok {
+		t.Fatalf("ambiguous union field value should be omitted from generated filter input")
+	}
+}
+
+func TestBuildWhereInput_ThreeLevelNestedFilters(t *testing.T) {
+	lexiconID := "com.example.nested.depth"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "one", Property: lexicon.Property{Type: lexicon.TypeRef, Ref: "#one"}},
+				},
+			},
+			Others: map[string]lexicon.Def{
+				"one": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "two", Property: lexicon.Property{Type: lexicon.TypeRef, Ref: "#two"}},
+					}},
+				},
+				"two": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "three", Property: lexicon.Property{Type: lexicon.TypeString}},
+						{Name: "threeObject", Property: lexicon.Property{Type: lexicon.TypeRef, Ref: "#threeObject"}},
+					}},
+				},
+				"threeObject": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "four", Property: lexicon.Property{Type: lexicon.TypeString}},
+					}},
+				},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput := builder.whereInputTypes[lexiconID]
+	oneField := whereInput.Fields()["one"]
+	oneInput, ok := oneField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("one type = %T, want *graphql.InputObject", oneField.Type)
+	}
+	twoField := oneInput.Fields()["two"]
+	if twoField == nil {
+		t.Fatal("one filter missing second-level field two")
+	}
+	twoInput, ok := twoField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("two type = %T, want *graphql.InputObject", twoField.Type)
+	}
+	threeField := twoInput.Fields()["three"]
+	if threeField == nil {
+		t.Fatal("two filter missing third-level scalar field three")
+	}
+	if got := threeField.Type.String(); got != "ExactStringFilterInput" {
+		t.Fatalf("three filter type = %q, want ExactStringFilterInput", got)
+	}
+	threeObjectField := twoInput.Fields()["threeObject"]
+	if threeObjectField == nil {
+		t.Fatal("two filter missing third-level object field threeObject")
+	}
+	threeObjectInput, ok := threeObjectField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("threeObject type = %T, want *graphql.InputObject", threeObjectField.Type)
+	}
+	if _, ok := threeObjectInput.Fields()["four"]; ok {
+		t.Fatal("fourth-level scalar field four should not be generated")
+	}
+	if _, ok := threeObjectInput.Fields()["isNull"]; !ok {
+		t.Fatal("third-level object filter should still expose isNull")
+	}
+}
+
+func TestExtractFilters_ThreeLevelNestedArrayFilterPath(t *testing.T) {
+	const lexiconID = "org.hypercerts.collection"
+	const targetURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
+
+	registry := lexicon.NewRegistry()
+	registry.Register(&lexicon.Lexicon{
+		ID: "com.atproto.repo.strongRef",
+		Defs: lexicon.Defs{Main: &lexicon.RecordDef{
+			Type: lexicon.TypeObject,
+			Properties: []lexicon.PropertyEntry{
+				{Name: "uri", Property: lexicon.Property{Type: lexicon.TypeString, Format: lexicon.FormatATURI}},
+				{Name: "cid", Property: lexicon.Property{Type: lexicon.TypeString, Format: lexicon.FormatCID}},
+			},
+		}},
+	})
+	registry.Register(&lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "items", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#item"}}},
+				},
+			},
+			Others: map[string]lexicon.Def{
+				"item": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "itemIdentifier", Property: lexicon.Property{Type: lexicon.TypeRef, Ref: "com.atproto.repo.strongRef"}},
+					}},
+				},
+			},
+		},
+	})
+
+	filters, didFilter, err := extractFilters(map[string]interface{}{
+		"items": map[string]interface{}{
+			"any": map[string]interface{}{
+				"itemIdentifier": map[string]interface{}{
+					"uri": map[string]interface{}{
+						"eq": targetURI,
+					},
+				},
+			},
+		},
+	}, lexiconID, registry)
+	if err != nil {
+		t.Fatalf("extractFilters() error = %v", err)
+	}
+	if !didFilter.IsEmpty() {
+		t.Fatalf("didFilter = %#v, want empty", didFilter)
+	}
+	if len(filters) != 1 {
+		t.Fatalf("len(filters) = %d, want 1: %#v", len(filters), filters)
+	}
+
+	filter := filters[0]
+	if filter.Field != "items" {
+		t.Fatalf("filter.Field = %q, want items", filter.Field)
+	}
+	if !reflect.DeepEqual(filter.ArrayPath, []string{"items"}) {
+		t.Fatalf("filter.ArrayPath = %#v, want [items]", filter.ArrayPath)
+	}
+	if !reflect.DeepEqual(filter.Path, []string{"itemIdentifier", "uri"}) {
+		t.Fatalf("filter.Path = %#v, want [itemIdentifier uri]", filter.Path)
+	}
+	if filter.Operator != "eq" {
+		t.Fatalf("filter.Operator = %q, want eq", filter.Operator)
+	}
+	if filter.Value != targetURI {
+		t.Fatalf("filter.Value = %#v, want %q", filter.Value, targetURI)
+	}
+	if filter.FieldType != lexicon.TypeString {
+		t.Fatalf("filter.FieldType = %q, want string", filter.FieldType)
+	}
+	if filter.Target != "" {
+		t.Fatalf("filter.Target = %q, want zero-value JSON target", filter.Target)
+	}
+}
+
+func TestBuildWhereInput_ComplexPropertiesUseNestedOrPresenceFilters(t *testing.T) {
 	lexiconID := "com.example.whereinput.presence"
 	lex := &lexicon.Lexicon{
 		ID: lexiconID,
@@ -949,7 +1190,7 @@ func TestBuildWhereInput_ComplexPropertiesUsePresenceFilter(t *testing.T) {
 		"externalLabels": "ExternalLabelWhereInput",
 		"title":          "StringFilterInput",
 		"createdAt":      "DateTimeFilterInput",
-		"contributors":   "PresenceFilterInput",
+		"contributors":   "ComExampleWhereinputPresenceContributorsArrayFilterInput",
 		"image":          "PresenceFilterInput",
 		"root":           "PresenceFilterInput",
 		"raw":            "PresenceFilterInput",
@@ -1137,21 +1378,26 @@ func setupCoercionTestDB(t *testing.T, recordJSON string) context.Context {
 // inserts a single record, and returns a context that carries the repositories.
 func setupSchemaRecordTestDB(t *testing.T, rec *repositories.Record) context.Context {
 	t.Helper()
+	return setupSchemaRecordsTestDB(t, []*repositories.Record{rec})
+}
+
+func setupSchemaRecordsTestDB(t *testing.T, recordsToInsert []*repositories.Record) context.Context {
+	t.Helper()
 
 	exec, err := sqlite.NewExecutor("sqlite::memory:")
 	if err != nil {
-		t.Fatalf("setupSchemaRecordTestDB: failed to create SQLite executor: %v", err)
+		t.Fatalf("setupSchemaRecordsTestDB: failed to create SQLite executor: %v", err)
 	}
 	t.Cleanup(func() { exec.Close() })
 
 	ctx := context.Background()
 	if err := migrations.Run(ctx, exec); err != nil {
-		t.Fatalf("setupSchemaRecordTestDB: failed to run migrations: %v", err)
+		t.Fatalf("setupSchemaRecordsTestDB: failed to run migrations: %v", err)
 	}
 
 	records := repositories.NewRecordsRepository(exec)
-	if err := records.BatchInsert(ctx, []*repositories.Record{rec}); err != nil {
-		t.Fatalf("setupSchemaRecordTestDB: failed to insert record: %v", err)
+	if err := records.BatchInsert(ctx, recordsToInsert); err != nil {
+		t.Fatalf("setupSchemaRecordsTestDB: failed to insert records: %v", err)
 	}
 
 	repos := &resolver.Repositories{
@@ -1251,6 +1497,63 @@ func TestCIDLinkSerializationInBuiltSchema(t *testing.T) {
 	assertRawCIDLinkShape(t, value, cid)
 }
 
+func executeConnectionQuery(ctx context.Context, t *testing.T, schema *graphql.Schema, query, fieldName string) map[string]interface{} {
+	t.Helper()
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected GraphQL errors: %v", result.Errors)
+	}
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+	conn, ok := data[fieldName].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s is %T, want map[string]interface{}", fieldName, data[fieldName])
+	}
+	return conn
+}
+
+func assertConnectionURIs(t *testing.T, conn map[string]interface{}, wantURIs []string) {
+	t.Helper()
+
+	edges, ok := conn["edges"].([]interface{})
+	if !ok {
+		t.Fatalf("edges is %T, want []interface{}", conn["edges"])
+	}
+	if len(edges) != len(wantURIs) {
+		t.Fatalf("len(edges) = %d, want %d: %v", len(edges), len(wantURIs), edges)
+	}
+
+	got := map[string]bool{}
+	for _, edgeValue := range edges {
+		edge, ok := edgeValue.(map[string]interface{})
+		if !ok {
+			t.Fatalf("edge is %T, want map[string]interface{}", edgeValue)
+		}
+		node, ok := edge["node"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("node is %T, want map[string]interface{}", edge["node"])
+		}
+		uri, ok := node["uri"].(string)
+		if !ok {
+			t.Fatalf("node.uri is %T, want string", node["uri"])
+		}
+		got[uri] = true
+	}
+
+	for _, wantURI := range wantURIs {
+		if !got[wantURI] {
+			t.Fatalf("missing URI %q in result set %v", wantURI, got)
+		}
+	}
+}
+
 func firstConnectionNode(t *testing.T, connectionValue interface{}, fieldName string) map[string]interface{} {
 	t.Helper()
 
@@ -1313,6 +1616,25 @@ func assertRawCIDLinkShape(t *testing.T, value map[string]interface{}, cid strin
 }
 
 // buildActivitySchema builds a GraphQL schema from the org.hypercerts.claim.activity lexicon.
+func buildAllTestdataSchema(t *testing.T) *graphql.Schema {
+	t.Helper()
+
+	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
+	if err != nil {
+		t.Fatalf("buildAllTestdataSchema: failed to load lexicons: %v", err)
+	}
+	registry := lexicon.NewRegistry()
+	for _, lex := range lexicons {
+		registry.Register(lex)
+	}
+
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("buildAllTestdataSchema: failed to build schema: %v", err)
+	}
+	return schema
+}
+
 func buildActivitySchema(t *testing.T) *graphql.Schema {
 	t.Helper()
 
@@ -1407,6 +1729,190 @@ func TestCollectionResolver_URIWhereFilterRejectsSubstringOperators(t *testing.T
 
 	if len(result.Errors) == 0 {
 		t.Fatal("expected GraphQL validation error for unsupported uri.contains filter")
+	}
+	if !strings.Contains(result.Errors[0].Message, "Unknown field") {
+		t.Fatalf("error = %q, want unknown field validation", result.Errors[0].Message)
+	}
+}
+
+func TestCollectionResolver_NestedUnionFilterFindsBadgeAwardRecipientDID(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:issuer/app.certified.badge.award/award-alice",
+			CID:        "bafyawardalice",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"at://did:plc:issuer/app.certified.badge.definition/1","cid":"bafybadge"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:alice"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:issuer/app.certified.badge.award/award-bob",
+			CID:        "bafyawardbob",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"at://did:plc:issuer/app.certified.badge.definition/1","cid":"bafybadge"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bob"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+	})
+
+	query := `{
+		appCertifiedBadgeAward(
+			first: 10
+			where: { subject: { did: { eq: "did:plc:alice" } } }
+		) {
+			totalCount
+			edges { node { uri } }
+		}
+	}`
+
+	conn := executeConnectionQuery(ctx, t, schema, query, "appCertifiedBadgeAward")
+	assertConnectionURIs(t, conn, []string{"at://did:plc:issuer/app.certified.badge.award/award-alice"})
+	if got := conn["totalCount"]; got != 1 {
+		t.Fatalf("totalCount = %v, want 1", got)
+	}
+}
+
+func TestCollectionResolver_NestedArrayFilterFindsCollectionContainingItemURI(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const activityURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:alice/org.hypercerts.collection/contains-activity",
+			CID:        "bafycollection1",
+			DID:        "did:plc:alice",
+			Collection: "org.hypercerts.collection",
+			JSON:       `{"title":"Project","createdAt":"2026-01-01T00:00:00Z","items":[{"itemIdentifier":{"uri":"` + activityURI + `","cid":"bafyactivity"},"itemWeight":"1"}]}`,
+		},
+		{
+			URI:        "at://did:plc:alice/org.hypercerts.collection/other",
+			CID:        "bafycollection2",
+			DID:        "did:plc:alice",
+			Collection: "org.hypercerts.collection",
+			JSON:       `{"title":"Other","createdAt":"2026-01-01T00:00:00Z","items":[{"itemIdentifier":{"uri":"at://did:plc:maker/org.hypercerts.claim.activity/other","cid":"bafyother"}}]}`,
+		},
+	})
+
+	query := `{
+		orgHypercertsCollection(
+			first: 10
+			where: { items: { any: { itemIdentifier: { uri: { eq: "` + activityURI + `" } } } } }
+		) {
+			totalCount
+			edges { node { uri } }
+		}
+	}`
+
+	conn := executeConnectionQuery(ctx, t, schema, query, "orgHypercertsCollection")
+	assertConnectionURIs(t, conn, []string{"at://did:plc:alice/org.hypercerts.collection/contains-activity"})
+	if got := conn["totalCount"]; got != 1 {
+		t.Fatalf("totalCount = %v, want 1", got)
+	}
+}
+
+func TestCollectionResolver_ContributorDidCompatibilityFilter(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const contributorURI = "at://did:plc:contributor/org.hypercerts.claim.contributorInformation/info-1"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        contributorURI,
+			CID:        "bafycontributorinfo",
+			DID:        "did:plc:contributor",
+			Collection: "org.hypercerts.claim.contributorInformation",
+			JSON:       `{"identifier":"did:plc:alice","displayName":"Alice","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/inline",
+			CID:        "bafyactivityinline",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Inline","shortDescription":"Inline contributor","createdAt":"2026-01-01T00:00:00Z","contributors":[{"contributorIdentity":{"identity":"did:plc:alice"}}]}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/strongref",
+			CID:        "bafyactivityref",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"StrongRef","shortDescription":"Strong ref contributor","createdAt":"2026-01-01T00:00:00Z","contributors":[{"contributorIdentity":{"uri":"` + contributorURI + `","cid":"bafycontributorinfo"}}]}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/direct",
+			CID:        "bafyactivitydirect",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Direct","shortDescription":"Direct contributor identity","createdAt":"2026-01-01T00:00:00Z","contributors":[{"identity":"did:plc:alice"}]}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/bare",
+			CID:        "bafyactivitybare",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Bare","shortDescription":"Bare contributor","createdAt":"2026-01-01T00:00:00Z","contributors":["did:plc:alice"]}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/bob",
+			CID:        "bafyactivitybob",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Bob","shortDescription":"Other contributor","createdAt":"2026-01-01T00:00:00Z","contributors":[{"contributorIdentity":{"identity":"did:plc:bob"}}]}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/bare-bob",
+			CID:        "bafyactivitybarebob",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Bare Bob","shortDescription":"Other bare contributor","createdAt":"2026-01-01T00:00:00Z","contributors":["did:plc:bob"]}`,
+		},
+	})
+
+	query := `{
+		orgHypercertsClaimActivity(
+			first: 10
+			where: { contributorDid: { eq: "did:plc:alice" } }
+		) {
+			totalCount
+			edges { node { uri } }
+		}
+	}`
+
+	conn := executeConnectionQuery(ctx, t, schema, query, "orgHypercertsClaimActivity")
+	assertConnectionURIs(t, conn, []string{
+		"at://did:plc:author/org.hypercerts.claim.activity/inline",
+		"at://did:plc:author/org.hypercerts.claim.activity/strongref",
+		"at://did:plc:author/org.hypercerts.claim.activity/direct",
+		"at://did:plc:author/org.hypercerts.claim.activity/bare",
+	})
+	if got := conn["totalCount"]; got != 4 {
+		t.Fatalf("totalCount = %v, want 4", got)
+	}
+}
+
+func TestCollectionResolver_NestedFiltersRejectSubstringOperators(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/inline",
+			CID:        "bafyactivityinline",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Inline","shortDescription":"Inline contributor","createdAt":"2026-01-01T00:00:00Z","contributors":[{"contributorIdentity":{"identity":"did:plc:alice"}}]}`,
+		},
+	})
+
+	query := `{
+		orgHypercertsClaimActivity(
+			first: 10
+			where: { contributors: { any: { contributorIdentity: { identity: { contains: "did:plc" } } } } }
+		) {
+			edges { node { uri } }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL validation error for unsupported nested contains filter")
 	}
 	if !strings.Contains(result.Errors[0].Message, "Unknown field") {
 		t.Fatalf("error = %q, want unknown field validation", result.Errors[0].Message)

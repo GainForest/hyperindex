@@ -49,7 +49,7 @@ Use production by default for consumer examples. `api.indexer.hypercerts.dev` is
 3. Always include pagination (`first`, `after`, `pageInfo { hasNextPage endCursor }`) in list examples.
 4. Keep selection sets small. Add fields only when needed for the workflow.
 5. Use inline fragments for union fields such as descriptions, images, attachment content, proof fields, and strong references.
-6. Use `search(query: ..., collection: ...)` when the caller needs to match a nested URI/string inside JSON. Typed `where` inputs only support scalar comparisons and top-level presence checks for complex fields.
+6. Use generated nested `where` filters for exact matches inside arrays, refs, and unions when the endpoint exposes them. Fall back to `search(query: ..., collection: ...)` for substring discovery, unsupported nested shapes, or deployed endpoints that have not rolled out nested filters yet.
 
 Detailed schema reference: [references/schema-reference.md](references/schema-reference.md)
 
@@ -95,17 +95,24 @@ where: { endDate: { isNull: false } }
 
 `uri` filters are record metadata filters, not JSON-field filters. They support exact lookup with `eq` and batched lookup with `in`.
 
-Complex top-level fields such as arrays, refs, objects, blobs, and unions use `PresenceFilterInput`. That means you can ask whether the field is present, but not match nested values through typed `where` inputs:
+Complex fields expose `isNull` for presence checks. Arrays, refs, and unions can also expose generated nested filters up to three lexicon path segments deep. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`.
 
 ```graphql
 where: { image: { isNull: false } }
 where: { subjects: { isNull: false } }
-where: { rights: { isNull: true } }
+where: { contributors: { any: { contributorIdentity: { identity: { eq: "did:plc:..." } } } } }
+where: { items: { any: { itemIdentifier: { uri: { eq: "at://did:plc:.../org.hypercerts.claim.activity/rkey" } } } } }
 ```
 
-If a workflow needs nested matching, use one of these patterns:
+Nested filters do not support `contains`, `startsWith`, nested sorting, arbitrary JSON paths, or automatic strong-ref dereferencing. For Hypercerts activities, use `contributorDid` when the caller needs to match inline contributor DIDs, legacy bare DID array entries, or `org.hypercerts.claim.contributorInformation` strong refs by referenced `identifier`:
 
-- Use typed presence filters to narrow the set, then filter nested fields client-side.
+```graphql
+where: { contributorDid: { eq: "did:plc:..." } }
+```
+
+If a workflow needs unsupported nested matching, use one of these patterns:
+
+- Use typed nested/presence filters to narrow the set, then filter client-side.
 - Use `search(query: ..., collection: ...)` to find records whose JSON contains a referenced AT-URI or string.
 - Use `records(collection: ...)` as a fallback for collections without typed schema coverage.
 
@@ -573,6 +580,6 @@ query HypercertCollectionStats {
 - Say “attachment” for `org.hypercerts.context.attachment` records.
 - Say “certified profile” for `app.certified.actor.profile` records.
 - Say “EVM link” or “wallet link” for `app.certified.link.evm` records.
-- Do not claim typed filters can match nested values inside refs, arrays, blobs, objects, or unions. Production exposes those fields as presence filters only.
+- Do not assume every deployed endpoint has nested filters. When nested filtering matters, introspect the target endpoint and then use generated exact nested filters for arrays/refs/unions if present; otherwise fall back to search or client-side filtering.
 - When giving user-facing parameterized examples, include both the query and variables.
 - When the schema has changed, prefer live introspection over this file and mention the endpoint used.

@@ -154,16 +154,24 @@ The generated `uri` filter is a record metadata filter for exact AT-URI lookup a
 
 Scalar fields support value filters such as `eq`, `neq`, `in`, `contains`, `startsWith`, `gt`, `lt`, `gte`, `lte`, and `isNull`, depending on the scalar type.
 
-Complex top-level fields such as arrays, refs, unions, blobs, and objects support presence checks only:
+Complex fields support presence checks. Arrays, refs, and unions also expose generated nested filters up to three lexicon path segments deep. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`. Use array `any` when at least one array item should match.
 
 ```graphql
 where: {
   image: { isNull: false }
-  contributors: { isNull: false }
+  contributors: {
+    any: {
+      contributorIdentity: { identity: { eq: "did:plc:example" } }
+    }
+  }
 }
 ```
 
-Typed filters do not match nested values inside arrays, refs, unions, blobs, or objects. If you need nested matching, use `search(query: ..., collection: ...)`, fetch a narrower result set and filter client-side, or follow referenced `uri` values with `ByUri` queries.
+Nested filters do not support `contains`, `startsWith`, nested sorting, arbitrary JSON paths, or dereferencing strong refs. For Hypercerts activity contributors that may be inline, legacy bare DID strings, or `org.hypercerts.claim.contributorInformation` strong refs, use the compatibility filter:
+
+```graphql
+where: { contributorDid: { eq: "did:plc:example" } }
+```
 
 ## Quickstart
 
@@ -271,7 +279,7 @@ Variables:
 
 ## Example: search record JSON
 
-Use `search` for simple discovery or to find nested AT-URI references that typed filters cannot inspect.
+Use `search` for simple discovery, substring matching, or nested AT-URI references that are not covered by generated exact nested filters.
 
 ```graphql
 query SearchAttachments($hypercertUri: String!, $after: String) {
@@ -348,7 +356,7 @@ In addition to GraphQL, hosted Hyperindex exposes lightweight status endpoints:
 - Keep selection sets small.
 - Use `uri` for stable record identity.
 - Use `uri` plus `cid` for version-sensitive data.
-- Use `search` or client-side filtering for nested fields that typed filters cannot inspect.
+- Use generated nested filters for exact nested matches when available; use `search` or client-side filtering for substring matching or unsupported nested shapes.
 - Request `totalCount` only when your UI needs it.
 
 ## Troubleshooting
@@ -359,7 +367,7 @@ The selected endpoint's schema does not expose that field. Check that you are us
 
 ### A nested filter does not work
 
-Typed filters support scalar comparisons and top-level presence checks. They do not inspect nested arrays, refs, unions, blobs, or objects. Use `search`, follow a referenced `uri`, or filter client-side.
+Generated nested filters only cover arrays, refs, and unions up to three lexicon path segments deep, and nested scalar leaves only support `eq`, `in`, and `isNull`. They do not support `contains`, `startsWith`, arbitrary JSON paths, nested sorting, or automatic strong-ref dereferencing. Introspect the target endpoint's `WhereInput`; if the nested input is absent, use `search`, follow a referenced `uri`, or filter client-side.
 
 ### A recently written record is missing
 

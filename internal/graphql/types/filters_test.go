@@ -21,6 +21,12 @@ func TestFilterInputTypes(t *testing.T) {
 			wantFields: []string{"eq", "neq", "in", "contains", "startsWith", "isNull"},
 		},
 		{
+			name:       "ExactStringFilterInput fields",
+			inputObj:   ExactStringFilterInput,
+			wantFields: []string{"eq", "in", "isNull"},
+			wantAbsent: []string{"neq", "contains", "startsWith", "gt", "lt", "gte", "lte"},
+		},
+		{
 			name:       "IntFilterInput fields",
 			inputObj:   IntFilterInput,
 			wantFields: []string{"eq", "neq", "gt", "lt", "gte", "lte", "in", "isNull"},
@@ -33,16 +39,40 @@ func TestFilterInputTypes(t *testing.T) {
 			wantAbsent: []string{"in", "contains", "startsWith"},
 		},
 		{
+			name:       "ExactIntFilterInput fields",
+			inputObj:   ExactIntFilterInput,
+			wantFields: []string{"eq", "in", "isNull"},
+			wantAbsent: []string{"neq", "contains", "startsWith", "gt", "lt", "gte", "lte"},
+		},
+		{
+			name:       "ExactFloatFilterInput fields",
+			inputObj:   ExactFloatFilterInput,
+			wantFields: []string{"eq", "in", "isNull"},
+			wantAbsent: []string{"neq", "contains", "startsWith", "gt", "lt", "gte", "lte"},
+		},
+		{
 			name:       "BooleanFilterInput fields",
 			inputObj:   BooleanFilterInput,
 			wantFields: []string{"eq", "isNull"},
 			wantAbsent: []string{"neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith"},
 		},
 		{
+			name:       "ExactBooleanFilterInput fields",
+			inputObj:   ExactBooleanFilterInput,
+			wantFields: []string{"eq", "isNull"},
+			wantAbsent: []string{"neq", "contains", "startsWith", "gt", "lt", "gte", "lte", "in"},
+		},
+		{
 			name:       "DateTimeFilterInput fields",
 			inputObj:   DateTimeFilterInput,
 			wantFields: []string{"eq", "neq", "gt", "lt", "gte", "lte", "isNull"},
 			wantAbsent: []string{"in", "contains", "startsWith"},
+		},
+		{
+			name:       "ExactDateTimeFilterInput fields",
+			inputObj:   ExactDateTimeFilterInput,
+			wantFields: []string{"eq", "in", "isNull"},
+			wantAbsent: []string{"neq", "contains", "startsWith", "gt", "lt", "gte", "lte"},
 		},
 		{
 			name:       "URIFilterInput fields",
@@ -283,6 +313,39 @@ func TestFilterInputForLexiconType(t *testing.T) {
 	}
 }
 
+func TestExactFilterInputForLexiconType(t *testing.T) {
+	tests := []struct {
+		name        string
+		lexiconType string
+		format      string
+		wantInput   *graphql.InputObject
+		wantNil     bool
+	}{
+		{name: "string", lexiconType: "string", wantInput: ExactStringFilterInput},
+		{name: "datetime", lexiconType: "string", format: "datetime", wantInput: ExactDateTimeFilterInput},
+		{name: "integer", lexiconType: "integer", wantInput: ExactIntFilterInput},
+		{name: "number", lexiconType: "number", wantInput: ExactFloatFilterInput},
+		{name: "boolean", lexiconType: "boolean", wantInput: ExactBooleanFilterInput},
+		{name: "array", lexiconType: "array", wantNil: true},
+		{name: "ref", lexiconType: "ref", wantNil: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ExactFilterInputForLexiconType(tt.lexiconType, tt.format)
+			if tt.wantNil {
+				if got != nil {
+					t.Fatalf("ExactFilterInputForLexiconType(%q, %q) = %s, want nil", tt.lexiconType, tt.format, got.Name())
+				}
+				return
+			}
+			if got != tt.wantInput {
+				t.Fatalf("ExactFilterInputForLexiconType(%q, %q) = %v, want %s", tt.lexiconType, tt.format, got, tt.wantInput.Name())
+			}
+		})
+	}
+}
+
 func TestFilterInputForLexiconProperty(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -340,10 +403,15 @@ func TestFilterInputNames(t *testing.T) {
 		wantName string
 	}{
 		{StringFilterInput, "StringFilterInput"},
+		{ExactStringFilterInput, "ExactStringFilterInput"},
 		{IntFilterInput, "IntFilterInput"},
+		{ExactIntFilterInput, "ExactIntFilterInput"},
 		{FloatFilterInput, "FloatFilterInput"},
+		{ExactFloatFilterInput, "ExactFloatFilterInput"},
 		{BooleanFilterInput, "BooleanFilterInput"},
+		{ExactBooleanFilterInput, "ExactBooleanFilterInput"},
 		{DateTimeFilterInput, "DateTimeFilterInput"},
+		{ExactDateTimeFilterInput, "ExactDateTimeFilterInput"},
 		{DIDFilterInput, "DIDFilterInput"},
 		{URIFilterInput, "URIFilterInput"},
 		{PresenceFilterInput, "PresenceFilterInput"},
