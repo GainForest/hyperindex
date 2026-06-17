@@ -433,22 +433,32 @@ Typed collection queries accept a \`where\` argument for field-level filtering. 
 | \`startsWith\` | String | Prefix match | \`{ name: { startsWith: "Gain" } }\` |
 | \`isNull\` | Scalar fields and complex top-level fields | Missing/null or present check | \`{ optionalField: { isNull: true } }\` |
 
-### Complex Field Presence Filtering
+### Complex and Nested Field Filtering
 
-Scalar fields keep the typed operators above. Complex top-level lexicon fields such as arrays, refs, unions, objects, blobs, bytes, unknown values, and CID links expose only a presence filter:
+Scalar fields keep the typed operators above. Complex fields expose \`isNull\` for presence checks. Some complex fields use the shared \`PresenceFilterInput\`; arrays, refs, and unions may instead expose generated nested filter inputs up to three lexicon path segments deep. Do not rely on the input type name for presence checks; introspect the field and use \`isNull\`:
 
 \`\`\`graphql
 where: {
   image: { isNull: false }
-  contributors: { isNull: false }
+  contributors: {
+    any: {
+      contributorIdentity: { identity: { eq: "did:plc:example" } }
+    }
+  }
 }
 \`\`\`
 
-Presence filtering is top-level only. It does not support nested filters such as \`image.type.eq\` or \`contributors.identity.eq\`.
+Nested scalar leaves support exact operators only: \`eq\`, \`in\`, and \`isNull\`. Multiple predicates inside the same array \`any\` must match the same array item. Nested filters do not support substring operators (\`contains\`, \`startsWith\`), comparison operators (\`gt\`, \`lt\`, \`gte\`, \`lte\`), nested sorting, arbitrary JSON paths, or strong-ref dereferencing.
 
-\`isNull: true\` matches records where the top-level JSON field is missing or explicitly \`null\`. \`isNull: false\` matches records where the field is present and non-null. Empty arrays \`[]\`, empty objects \`{}\`, and empty strings \`""\` count as present.
+\`isNull: true\` matches records where the JSON field is missing or explicitly \`null\`. \`isNull: false\` matches records where the field is present and non-null. Empty arrays \`[]\`, empty objects \`{}\`, and empty strings \`""\` count as present.
 
 Presence filtering does not guarantee a complex value conforms to the generated typed GraphQL field. Nullable union fields with unknown \`$type\` values or missing required top-level fields resolve to \`null\` instead of being coerced to another union member.
+
+For Hypercerts activities, \`contributorDid\` is a compatibility filter that matches inline contributor DIDs, legacy bare DID array items, and contributorInformation strong refs by their referenced \`identifier\`:
+
+\`\`\`graphql
+where: { contributorDid: { eq: "did:plc:example" } }
+\`\`\`
 
 The generic \`records(collection: ...)\` query is unchanged and does not accept generated \`where\` filters.
 
