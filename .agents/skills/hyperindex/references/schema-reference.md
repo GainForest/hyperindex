@@ -301,6 +301,7 @@ Collection: `app.certified.badge.award`
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `note` | `StringFilterInput` | Filter by note |
+| `badgeType` | `StringFilterInput` | Collection filter extension for awards whose referenced `app.certified.badge.definition` has this `badgeType`; supports the same string operators as badge definition `badgeType`. |
 | `badge` | generated nested strong-ref filter | Filter by whether badge is present or by nested exact fields such as `uri` and `cid` |
 | `subject` | generated nested union filter | Filter by whether subject is present or by nested exact fields such as `did`, `uri`, and `cid` |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |

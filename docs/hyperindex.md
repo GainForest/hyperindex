@@ -167,11 +167,21 @@ where: {
 }
 ```
 
-Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), nested sorting, arbitrary JSON paths, or dereferencing strong refs. For Hypercerts activity contributors that may be inline, legacy bare DID strings, or `org.hypercerts.claim.contributorInformation` strong refs, use the compatibility filter:
+Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), nested sorting, arbitrary JSON paths, or automatic strong-ref dereferencing. A small set of explicit collection filter extensions may perform product-specific cross-record lookups; uploaded lexicons do not get these fields automatically.
+
+For Hypercerts activity contributors that may be inline, legacy bare DID strings, or `org.hypercerts.claim.contributorInformation` strong refs, use the compatibility filter:
 
 ```graphql
 where: { contributorDid: { eq: "did:plc:example" } }
 ```
+
+For Certified badge awards, use `badgeType` to filter by the referenced `app.certified.badge.definition.badgeType` without joining badge definitions client-side:
+
+```graphql
+where: { badgeType: { eq: "endorsement" } }
+```
+
+`badgeType` uses `StringFilterInput`, so it supports the same string operators exposed for badge definitions. Awards whose referenced badge definition is missing or has no `badgeType` do not match positive value filters.
 
 ## Quickstart
 
