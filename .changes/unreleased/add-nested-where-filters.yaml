@@ -1,4 +1,0 @@
-kind: added
-body: Add generated exact nested filters for typed GraphQL queries so clients can filter arrays, refs, and unions up to three lexicon path segments deep. Array `any` filters keep multiple predicates scoped to the same array item. Hypercerts activity queries also gain `contributorDid` as a compatibility exception for contributor matching that may need legacy bare DID handling or contributorInformation strongRef dereferencing beyond the same-record nested filter model.
-custom:
-  Affects: user
