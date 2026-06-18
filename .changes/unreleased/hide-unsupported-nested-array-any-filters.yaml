@@ -1,5 +1,0 @@
-kind: fixed
-body: Stop advertising nested-array `any` filters inside another array `any` scope because those filters were accepted by GraphQL validation but could not execute. Nested arrays still expose `isNull` presence checks, while supported single-array `any` filters continue to work.
-time: 2026-06-17T17:05:00+06:00
-custom:
-  Affects: user
