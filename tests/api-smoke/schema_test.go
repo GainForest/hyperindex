@@ -204,6 +204,26 @@ func TestSchemaExposesURIWhereFilter(t *testing.T) {
 	smokeLog("✓ Typed collection schemas expose uri where filters")
 }
 
+func TestSchemaExposesBadgeAwardBadgeTypeFilter(t *testing.T) {
+	config := loadSmokeConfig(t)
+	schema := fetchGraphQLSchema(t, config)
+	types := typesByName(schema.Types)
+
+	awardWhereInput := requireSchemaType(t, types, "AppCertifiedBadgeAwardWhereInput")
+	badgeTypeField := requireSchemaInputField(t, inputFieldsByName(awardWhereInput.InputFields), "badgeType")
+	if got := namedTypeName(badgeTypeField.Type); got != "StringFilterInput" {
+		t.Fatalf("AppCertifiedBadgeAwardWhereInput.badgeType filter type = %q, want StringFilterInput", got)
+	}
+
+	definitionWhereInput := requireSchemaType(t, types, "AppCertifiedBadgeDefinitionWhereInput")
+	definitionBadgeTypeField := requireSchemaInputField(t, inputFieldsByName(definitionWhereInput.InputFields), "badgeType")
+	if got := namedTypeName(definitionBadgeTypeField.Type); got != "StringFilterInput" {
+		t.Fatalf("AppCertifiedBadgeDefinitionWhereInput.badgeType filter type = %q, want StringFilterInput", got)
+	}
+
+	smokeLog("✓ Badge award schemas expose badgeType where filters")
+}
+
 func TestSchemaExcludesNonRecordLexiconsFromTypedCollectionQueries(t *testing.T) {
 	config := loadSmokeConfig(t)
 	schema := fetchGraphQLSchema(t, config)

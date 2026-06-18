@@ -1,6 +1,6 @@
 # Hyperindex GraphQL Schema Reference
 
-Generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10.
+Last updated on 2026-06-17 for pending schema changes. Baseline generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10.
 
 ## Endpoints
 
@@ -83,7 +83,7 @@ Typed list queries accept Relay-style pagination arguments (`first`, `after`, `l
 
 ## Filter inputs
 
-Scalar field filters support value comparisons. Generated typed `where` inputs also include a metadata-level `uri: URIFilterInput` field so clients can filter by exact AT-URI or batch hydrate records by URI without querying JSON payload fields. Complex fields expose `isNull` presence checks. Arrays, refs, and unions may also expose generated nested filters up to three lexicon path segments deep; nested scalar leaves use exact filters (`eq`, `in`, `isNull`) and array filters use `any`. Multiple predicates inside the same array `any` must match the same array item. Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), arbitrary JSON paths, nested sorting, or automatic strong-ref dereferencing. For example, `items.any.itemIdentifier.uri.contains` and `items.any.itemWeight.gt` are rejected at query validation time because nested leaves expose exact-match inputs only.
+Scalar field filters support value comparisons. Generated typed `where` inputs also include a metadata-level `uri: URIFilterInput` field so clients can filter by exact AT-URI or batch hydrate records by URI without querying JSON payload fields. Complex fields expose `isNull` presence checks. Arrays, refs, and unions may also expose generated nested filters up to three lexicon path segments deep; nested scalar leaves use exact filters (`eq`, `in`, `isNull`) and array filters use `any`. Multiple predicates inside the same array `any` must match the same array item. Nested array fields inside an existing `any` scope expose presence checks only, not another `any`. Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), arbitrary JSON paths, nested sorting, or automatic strong-ref dereferencing. For example, `items.any.itemIdentifier.uri.contains` and `items.any.itemWeight.gt` are rejected at query validation time because nested leaves expose exact-match inputs only.
 
 ### `StringFilterInput`
 
@@ -301,6 +301,7 @@ Collection: `app.certified.badge.award`
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
 | `note` | `StringFilterInput` | Filter by note |
+| `badgeType` | `StringFilterInput` | Collection filter extension for awards whose referenced `app.certified.badge.definition` has this `badgeType`; supports the same string operators as badge definition `badgeType`. |
 | `badge` | generated nested strong-ref filter | Filter by whether badge is present or by nested exact fields such as `uri` and `cid` |
 | `subject` | generated nested union filter | Filter by whether subject is present or by nested exact fields such as `did`, `uri`, and `cid` |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |

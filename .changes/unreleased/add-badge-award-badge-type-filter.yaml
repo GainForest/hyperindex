@@ -1,0 +1,5 @@
+kind: added
+body: Add a `badgeType` filter to `app.certified.badge.award` GraphQL queries so clients can fetch awards by the referenced badge definition type without joining badge definitions client-side.
+time: 2026-06-17T16:19:18+06:00
+custom:
+  Affects: user

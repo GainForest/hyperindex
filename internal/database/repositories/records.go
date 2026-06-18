@@ -57,8 +57,8 @@ type Record struct {
 // FieldFilterTarget identifies where a record field filter reads its value
 // from. Use JSON for lexicon-defined record properties, Column only for
 // generated metadata filters that intentionally target record table columns, and
-// ContributorDID only for the temporary Hypercerts contributor compatibility
-// filter.
+// explicit collection filter extensions for hand-authored product queries that
+// are not expressible as same-record lexicon JSON paths.
 type FieldFilterTarget string
 
 const (
@@ -76,6 +76,11 @@ const (
 	// contributor DID strings and contributorInformation strongRefs whose target
 	// record has a matching identifier.
 	FieldFilterTargetContributorDID FieldFilterTarget = "contributor_did"
+
+	// FieldFilterTargetBadgeAwardBadgeType is a collection filter extension for
+	// app.certified.badge.award. It reads the award's badge strongRef URI and
+	// filters against the referenced app.certified.badge.definition badgeType.
+	FieldFilterTargetBadgeAwardBadgeType FieldFilterTarget = "badge_award_badge_type"
 )
 
 // FieldFilter represents a single condition on a filterable record field.
@@ -517,6 +522,8 @@ func (r *RecordsRepository) buildFieldFilterCondition(f FieldFilter, placeholder
 	switch f.Target {
 	case FieldFilterTargetContributorDID:
 		return r.buildContributorDIDFilterCondition(f, placeholderIdx)
+	case FieldFilterTargetBadgeAwardBadgeType:
+		return r.buildBadgeAwardBadgeTypeFilterCondition(f, placeholderIdx)
 	case "", FieldFilterTargetJSON:
 		if len(f.ArrayPath) > 0 {
 			return r.buildArrayAnyFilterCondition([]FieldFilter{f}, placeholderIdx, filterIndex)
@@ -697,6 +704,23 @@ func (r *RecordsRepository) jsonValuePathExpr(column string, path []string) stri
 		sb.WriteString("'")
 	}
 	return sb.String()
+}
+
+func (r *RecordsRepository) buildBadgeAwardBadgeTypeFilterCondition(f FieldFilter, placeholderIdx int) (string, []database.Value, int, error) {
+	badgeTypeExpr := r.badgeAwardBadgeTypeExpr()
+	return r.buildScalarFilterCondition(badgeTypeExpr, f, placeholderIdx)
+}
+
+func (r *RecordsRepository) badgeAwardBadgeTypeExpr() string {
+	badgeURIExpr := r.jsonTextPathExpr("record.json", []string{"badge", "uri"})
+	badgeTypeExpr := r.jsonTextPathExpr("badge_definition.json", []string{"badgeType"})
+	return fmt.Sprintf(`(
+		SELECT %s
+		FROM record badge_definition
+		WHERE badge_definition.uri = %s
+			AND badge_definition.collection = 'app.certified.badge.definition'
+		LIMIT 1
+	)`, badgeTypeExpr, badgeURIExpr)
 }
 
 func (r *RecordsRepository) buildContributorDIDFilterCondition(f FieldFilter, placeholderIdx int) (string, []database.Value, int, error) {

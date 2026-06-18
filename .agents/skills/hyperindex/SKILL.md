@@ -95,7 +95,7 @@ where: { endDate: { isNull: false } }
 
 `uri` filters are record metadata filters, not JSON-field filters. They support exact lookup with `eq` and batched lookup with `in`.
 
-Complex fields expose `isNull` for presence checks. Some complex fields use the shared `PresenceFilterInput`; arrays, refs, and unions can instead expose generated nested filter inputs up to three lexicon path segments deep. Do not rely on the input type name for presence checks; introspect the field and use `isNull`. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`. Multiple predicates inside the same array `any` must match the same array item.
+Complex fields expose `isNull` for presence checks. Some complex fields use the shared `PresenceFilterInput`; arrays, refs, and unions can instead expose generated nested filter inputs up to three lexicon path segments deep. Do not rely on the input type name for presence checks; introspect the field and use `isNull`. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`. Multiple predicates inside the same array `any` must match the same array item. Nested array fields inside an existing `any` scope expose presence checks only; Hyperindex does not advertise nested `any` within another `any`.
 
 ```graphql
 where: { image: { isNull: false } }
@@ -104,11 +104,21 @@ where: { contributors: { any: { contributorIdentity: { identity: { eq: "did:plc:
 where: { items: { any: { itemIdentifier: { uri: { eq: "at://did:plc:.../org.hypercerts.claim.activity/rkey" } } } } }
 ```
 
-Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), nested sorting, arbitrary JSON paths, or automatic strong-ref dereferencing. For Hypercerts activities, use `contributorDid` when the caller needs to match inline contributor DIDs, legacy bare DID array entries, or `org.hypercerts.claim.contributorInformation` strong refs by referenced `identifier`:
+Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), nested-array `any` filters inside another `any`, nested sorting, arbitrary JSON paths, or automatic strong-ref dereferencing. A small set of explicit collection filter extensions may perform product-specific cross-record lookups; uploaded lexicons do not get these fields automatically.
+
+For Hypercerts activities, use `contributorDid` when the caller needs to match inline contributor DIDs, legacy bare DID array entries, or `org.hypercerts.claim.contributorInformation` strong refs by referenced `identifier`:
 
 ```graphql
 where: { contributorDid: { eq: "did:plc:..." } }
 ```
+
+For Certified badge awards, use `badgeType` to filter by the referenced `app.certified.badge.definition.badgeType` without joining badge definitions client-side:
+
+```graphql
+where: { badgeType: { eq: "endorsement" } }
+```
+
+`badgeType` uses `StringFilterInput`, so it supports the same string operators exposed for badge definitions. Awards whose referenced badge definition is missing or has no `badgeType` do not match positive value filters.
 
 If a workflow needs unsupported nested matching, use one of these patterns:
 
