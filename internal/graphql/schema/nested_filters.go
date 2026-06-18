@@ -19,21 +19,21 @@ func (b *Builder) filterInputForTopLevelProperty(contextLexiconID, fieldName str
 		return input
 	}
 
-	return b.nestedFilterInputForProperty(contextLexiconID, lexicon.ToTypeName(contextLexiconID)+inputNamePart(fieldName), prop, 1)
+	return b.nestedFilterInputForProperty(contextLexiconID, lexicon.ToTypeName(contextLexiconID)+inputNamePart(fieldName), prop, 1, false)
 }
 
-func (b *Builder) nestedFilterInputForProperty(contextLexiconID, typeName string, prop lexicon.Property, depth int) *graphql.InputObject {
+func (b *Builder) nestedFilterInputForProperty(contextLexiconID, typeName string, prop lexicon.Property, depth int, insideArrayAny bool) *graphql.InputObject {
 	if input := types.ExactFilterInputForLexiconType(prop.Type, prop.Format); input != nil {
 		return input
 	}
 
 	switch prop.Type {
 	case lexicon.TypeArray:
-		return b.nestedFilterInputForArray(contextLexiconID, typeName, prop.Items, depth)
+		return b.nestedFilterInputForArray(contextLexiconID, typeName, prop.Items, depth, insideArrayAny)
 	case lexicon.TypeRef:
-		return b.nestedFilterInputForRef(contextLexiconID, typeName, prop.Ref, depth)
+		return b.nestedFilterInputForRef(contextLexiconID, typeName, prop.Ref, depth, insideArrayAny)
 	case lexicon.TypeUnion:
-		return b.nestedFilterInputForUnion(contextLexiconID, typeName, prop.Refs, depth)
+		return b.nestedFilterInputForUnion(contextLexiconID, typeName, prop.Refs, depth, insideArrayAny)
 	case lexicon.TypeObject:
 		// Inline object properties are not represented in lexicon.Property today, so
 		// only presence can be generated safely.
@@ -43,44 +43,51 @@ func (b *Builder) nestedFilterInputForProperty(contextLexiconID, typeName string
 	}
 }
 
-func (b *Builder) nestedFilterInputForArray(contextLexiconID, typeName string, items *lexicon.ArrayItems, depth int) *graphql.InputObject {
+func (b *Builder) nestedFilterInputForArray(contextLexiconID, typeName string, items *lexicon.ArrayItems, depth int, insideArrayAny bool) *graphql.InputObject {
 	if items == nil {
 		return types.PresenceFilterInput
 	}
-	if existing := b.nestedWhereInputTypes[typeName+"ArrayFilterInput"]; existing != nil {
+
+	inputName := typeName + "ArrayFilterInput"
+	if existing := b.nestedWhereInputTypes[inputName]; existing != nil {
 		return existing
 	}
 
-	itemInput := b.nestedFilterInputForArrayItems(contextLexiconID, typeName+"Item", items, depth)
 	fields := graphql.InputObjectConfigFieldMap{
 		"isNull": &graphql.InputObjectFieldConfig{
 			Type:        graphql.Boolean,
 			Description: "True matches missing or null arrays; false matches present arrays.",
 		},
 	}
-	if itemInput != nil {
-		fields["any"] = &graphql.InputObjectFieldConfig{
-			Type:        itemInput,
-			Description: "Keep records where at least one array item matches this filter.",
+
+	// Repository extraction currently supports one array any scope. Once this input
+	// is already inside another array any item, keep nested array fields presence-only
+	// instead of advertising a second any filter that would fail at execution time.
+	if !insideArrayAny {
+		itemInput := b.nestedFilterInputForArrayItems(contextLexiconID, typeName+"Item", items, depth, true)
+		if itemInput != nil {
+			fields["any"] = &graphql.InputObjectFieldConfig{
+				Type:        itemInput,
+				Description: "Keep records where at least one array item matches this filter.",
+			}
 		}
 	}
 
-	inputName := typeName + "ArrayFilterInput"
 	input := graphql.NewInputObject(graphql.InputObjectConfig{
 		Name:        inputName,
-		Description: "Filter conditions for an array field, including any-item matching.",
+		Description: "Filter conditions for an array field, including any-item matching when supported.",
 		Fields:      fields,
 	})
 	b.nestedWhereInputTypes[inputName] = input
 	return input
 }
 
-func (b *Builder) nestedFilterInputForArrayItems(contextLexiconID, typeName string, items *lexicon.ArrayItems, depth int) *graphql.InputObject {
+func (b *Builder) nestedFilterInputForArrayItems(contextLexiconID, typeName string, items *lexicon.ArrayItems, depth int, insideArrayAny bool) *graphql.InputObject {
 	prop := lexicon.Property{Type: items.Type, Ref: items.Ref, Refs: items.Refs}
-	return b.nestedFilterInputForProperty(contextLexiconID, typeName, prop, depth)
+	return b.nestedFilterInputForProperty(contextLexiconID, typeName, prop, depth, insideArrayAny)
 }
 
-func (b *Builder) nestedFilterInputForRef(contextLexiconID, typeName, ref string, depth int) *graphql.InputObject {
+func (b *Builder) nestedFilterInputForRef(contextLexiconID, typeName, ref string, depth int, insideArrayAny bool) *graphql.InputObject {
 	resolved, ok := b.registry.ResolveRef(ref, contextLexiconID)
 	if !ok {
 		return b.presenceOnlyNestedInput(typeName)
@@ -88,15 +95,15 @@ func (b *Builder) nestedFilterInputForRef(contextLexiconID, typeName, ref string
 
 	switch def := resolved.(type) {
 	case *lexicon.ObjectDef:
-		return b.nestedFilterInputForObjectDef(contextLexiconID, typeName, def, depth)
+		return b.nestedFilterInputForObjectDef(contextLexiconID, typeName, def, depth, insideArrayAny)
 	case *lexicon.RecordDef:
-		return b.nestedFilterInputForRecordDef(contextLexiconID, typeName, def, depth)
+		return b.nestedFilterInputForRecordDef(contextLexiconID, typeName, def, depth, insideArrayAny)
 	default:
 		return b.presenceOnlyNestedInput(typeName)
 	}
 }
 
-func (b *Builder) nestedFilterInputForUnion(contextLexiconID, typeName string, refs []string, depth int) *graphql.InputObject {
+func (b *Builder) nestedFilterInputForUnion(contextLexiconID, typeName string, refs []string, depth int, insideArrayAny bool) *graphql.InputObject {
 	inputName := typeName + "UnionFilterInput"
 	if existing := b.nestedWhereInputTypes[inputName]; existing != nil {
 		return existing
@@ -112,9 +119,9 @@ func (b *Builder) nestedFilterInputForUnion(contextLexiconID, typeName string, r
 		var memberFields graphql.InputObjectConfigFieldMap
 		switch def := resolved.(type) {
 		case *lexicon.ObjectDef:
-			memberFields = b.nestedFilterFieldsForObjectDef(contextLexiconID, typeName+inputNamePart(ref), def, depth)
+			memberFields = b.nestedFilterFieldsForObjectDef(contextLexiconID, typeName+inputNamePart(ref), def, depth, insideArrayAny)
 		case *lexicon.RecordDef:
-			memberFields = b.nestedFilterFieldsForRecordDef(contextLexiconID, typeName+inputNamePart(ref), def, depth)
+			memberFields = b.nestedFilterFieldsForRecordDef(contextLexiconID, typeName+inputNamePart(ref), def, depth, insideArrayAny)
 		}
 		mergeNestedFilterFields(fields, memberFields, conflicts)
 	}
@@ -128,13 +135,13 @@ func (b *Builder) nestedFilterInputForUnion(contextLexiconID, typeName string, r
 	return input
 }
 
-func (b *Builder) nestedFilterInputForObjectDef(contextLexiconID, typeName string, def *lexicon.ObjectDef, depth int) *graphql.InputObject {
+func (b *Builder) nestedFilterInputForObjectDef(contextLexiconID, typeName string, def *lexicon.ObjectDef, depth int, insideArrayAny bool) *graphql.InputObject {
 	inputName := typeName + "ObjectFilterInput"
 	if existing := b.nestedWhereInputTypes[inputName]; existing != nil {
 		return existing
 	}
 
-	fields := b.nestedFilterFieldsForObjectDef(contextLexiconID, typeName, def, depth)
+	fields := b.nestedFilterFieldsForObjectDef(contextLexiconID, typeName, def, depth, insideArrayAny)
 	input := graphql.NewInputObject(graphql.InputObjectConfig{
 		Name:        inputName,
 		Description: "Filter conditions for a nested object field.",
@@ -144,13 +151,13 @@ func (b *Builder) nestedFilterInputForObjectDef(contextLexiconID, typeName strin
 	return input
 }
 
-func (b *Builder) nestedFilterInputForRecordDef(contextLexiconID, typeName string, def *lexicon.RecordDef, depth int) *graphql.InputObject {
+func (b *Builder) nestedFilterInputForRecordDef(contextLexiconID, typeName string, def *lexicon.RecordDef, depth int, insideArrayAny bool) *graphql.InputObject {
 	inputName := typeName + "ObjectFilterInput"
 	if existing := b.nestedWhereInputTypes[inputName]; existing != nil {
 		return existing
 	}
 
-	fields := b.nestedFilterFieldsForRecordDef(contextLexiconID, typeName, def, depth)
+	fields := b.nestedFilterFieldsForRecordDef(contextLexiconID, typeName, def, depth, insideArrayAny)
 	input := graphql.NewInputObject(graphql.InputObjectConfig{
 		Name:        inputName,
 		Description: "Filter conditions for a nested record-shaped field.",
@@ -160,22 +167,22 @@ func (b *Builder) nestedFilterInputForRecordDef(contextLexiconID, typeName strin
 	return input
 }
 
-func (b *Builder) nestedFilterFieldsForObjectDef(contextLexiconID, typeName string, def *lexicon.ObjectDef, depth int) graphql.InputObjectConfigFieldMap {
-	return b.nestedFilterFieldsForProperties(contextLexiconID, typeName, def.Properties, depth)
+func (b *Builder) nestedFilterFieldsForObjectDef(contextLexiconID, typeName string, def *lexicon.ObjectDef, depth int, insideArrayAny bool) graphql.InputObjectConfigFieldMap {
+	return b.nestedFilterFieldsForProperties(contextLexiconID, typeName, def.Properties, depth, insideArrayAny)
 }
 
-func (b *Builder) nestedFilterFieldsForRecordDef(contextLexiconID, typeName string, def *lexicon.RecordDef, depth int) graphql.InputObjectConfigFieldMap {
-	return b.nestedFilterFieldsForProperties(contextLexiconID, typeName, def.Properties, depth)
+func (b *Builder) nestedFilterFieldsForRecordDef(contextLexiconID, typeName string, def *lexicon.RecordDef, depth int, insideArrayAny bool) graphql.InputObjectConfigFieldMap {
+	return b.nestedFilterFieldsForProperties(contextLexiconID, typeName, def.Properties, depth, insideArrayAny)
 }
 
-func (b *Builder) nestedFilterFieldsForProperties(contextLexiconID, typeName string, properties []lexicon.PropertyEntry, depth int) graphql.InputObjectConfigFieldMap {
+func (b *Builder) nestedFilterFieldsForProperties(contextLexiconID, typeName string, properties []lexicon.PropertyEntry, depth int, insideArrayAny bool) graphql.InputObjectConfigFieldMap {
 	fields := presenceNestedFields()
 	for _, entry := range properties {
 		nextDepth := depth + 1
 		if nextDepth > nestedFilterMaxLexiconDepth {
 			continue
 		}
-		input := b.nestedFilterInputForProperty(contextLexiconID, typeName+inputNamePart(entry.Name), entry.Property, nextDepth)
+		input := b.nestedFilterInputForProperty(contextLexiconID, typeName+inputNamePart(entry.Name), entry.Property, nextDepth, insideArrayAny)
 		if input == nil {
 			continue
 		}

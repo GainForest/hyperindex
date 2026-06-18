@@ -549,6 +549,82 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 	}
 }
 
+func TestBuildWhereInput_CollectionFilterExtensions(t *testing.T) {
+	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
+	if err != nil {
+		t.Fatalf("load lexicons: %v", err)
+	}
+	registry := lexicon.NewRegistry()
+	for _, lex := range lexicons {
+		registry.Register(lex)
+	}
+
+	builder := NewBuilder(registry)
+	_, err = builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	activityWhereInput := builder.whereInputTypes["org.hypercerts.claim.activity"]
+	if activityWhereInput == nil {
+		t.Fatal("activity WhereInput type not found after Build()")
+	}
+	contributorDidField, ok := activityWhereInput.Fields()["contributorDid"]
+	if !ok {
+		t.Fatal("activity WhereInput missing contributorDid collection filter extension")
+	}
+	if got := contributorDidField.Type.String(); got != "DIDFilterInput" {
+		t.Fatalf("contributorDid filter type = %q, want DIDFilterInput", got)
+	}
+
+	awardWhereInput := builder.whereInputTypes["app.certified.badge.award"]
+	if awardWhereInput == nil {
+		t.Fatal("badge award WhereInput type not found after Build()")
+	}
+	badgeTypeField, ok := awardWhereInput.Fields()["badgeType"]
+	if !ok {
+		t.Fatal("badge award WhereInput missing badgeType collection filter extension")
+	}
+	if got := badgeTypeField.Type.String(); got != "StringFilterInput" {
+		t.Fatalf("badgeType filter type = %q, want StringFilterInput", got)
+	}
+
+	definitionWhereInput := builder.whereInputTypes["app.certified.badge.definition"]
+	if definitionWhereInput == nil {
+		t.Fatal("badge definition WhereInput type not found after Build()")
+	}
+	definitionBadgeTypeField, ok := definitionWhereInput.Fields()["badgeType"]
+	if !ok {
+		t.Fatal("badge definition WhereInput missing lexicon-defined badgeType filter")
+	}
+	if got := definitionBadgeTypeField.Type.String(); got != "StringFilterInput" {
+		t.Fatalf("definition badgeType filter type = %q, want StringFilterInput", got)
+	}
+}
+
+func TestBuildWhereInput_CollectionFilterExtensionCollisionFailsBuild(t *testing.T) {
+	lex := &lexicon.Lexicon{
+		ID: "app.certified.badge.award",
+		Defs: lexicon.Defs{Main: &lexicon.RecordDef{
+			Type: "record",
+			Key:  "tid",
+			Properties: []lexicon.PropertyEntry{
+				{Name: "badgeType", Property: lexicon.Property{Type: lexicon.TypeString}},
+			},
+		}},
+	}
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	_, err := NewBuilder(registry).Build()
+	if err == nil {
+		t.Fatal("Build() succeeded, want collection filter extension collision error")
+	}
+	if !strings.Contains(err.Error(), "collection filter extension app.certified.badge.award.badgeType conflicts") {
+		t.Fatalf("Build() error = %q, want badgeType collision message", err.Error())
+	}
+}
+
 // TestExtractFilters_DIDFilter verifies that extractFilters correctly populates
 // DIDFilter for both eq and in operators, and does not treat DID as a JSON field filter.
 func TestExtractFilters_DIDFilter(t *testing.T) {
@@ -1143,6 +1219,85 @@ func TestExtractFilters_ThreeLevelNestedArrayFilterPath(t *testing.T) {
 	}
 	if filter.Target != "" {
 		t.Fatalf("filter.Target = %q, want zero-value JSON target", filter.Target)
+	}
+}
+
+func TestBuildWhereInput_HidesNestedArrayAnyInsideArrayAny(t *testing.T) {
+	lexiconID := "com.example.nested.arrays"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "facets", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#facet"}}},
+					{Name: "topFeatures", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#feature"}}},
+				},
+			},
+			Others: map[string]lexicon.Def{
+				"facet": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "features", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#feature"}}},
+					}},
+				},
+				"feature": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "tag", Property: lexicon.Property{Type: lexicon.TypeString}},
+					}},
+				},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput := builder.whereInputTypes[lexiconID]
+	whereFields := whereInput.Fields()
+
+	facetsInput, ok := whereFields["facets"].Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("facets filter type = %T, want *graphql.InputObject", whereFields["facets"].Type)
+	}
+	facetsAny := facetsInput.Fields()["any"]
+	if facetsAny == nil {
+		t.Fatal("top-level facets array should expose any")
+	}
+	facetInput, ok := facetsAny.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("facets.any type = %T, want *graphql.InputObject", facetsAny.Type)
+	}
+
+	featuresField := facetInput.Fields()["features"]
+	if featuresField == nil {
+		t.Fatal("facets.any should expose nested features presence filter")
+	}
+	featuresInput, ok := featuresField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("facets.any.features type = %T, want *graphql.InputObject", featuresField.Type)
+	}
+	if _, ok := featuresInput.Fields()["isNull"]; !ok {
+		t.Fatal("facets.any.features should keep isNull presence filtering")
+	}
+	if _, ok := featuresInput.Fields()["any"]; ok {
+		t.Fatal("facets.any.features should not expose nested any because nested array any filters cannot execute")
+	}
+
+	topFeaturesInput, ok := whereFields["topFeatures"].Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("topFeatures filter type = %T, want *graphql.InputObject", whereFields["topFeatures"].Type)
+	}
+	if _, ok := topFeaturesInput.Fields()["any"]; !ok {
+		t.Fatal("top-level topFeatures array should still expose any")
 	}
 }
 
@@ -1754,6 +1909,65 @@ func TestCollectionResolver_NestedUnionFilterFindsBadgeAwardRecipientDID(t *test
 
 	conn := executeConnectionQuery(ctx, t, schema, query, "appCertifiedBadgeAward")
 	assertConnectionURIs(t, conn, []string{"at://did:plc:issuer/app.certified.badge.award/award-alice"})
+	if got := conn["totalCount"]; got != 1 {
+		t.Fatalf("totalCount = %v, want 1", got)
+	}
+}
+
+func TestCollectionResolver_BadgeAwardBadgeTypeFilterFindsReferencedDefinitionType(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement"
+	const otherBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/other"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        endorsementBadgeURI,
+			CID:        "bafybadgeendorsement",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.definition",
+			JSON:       `{"title":"Endorsement","badgeType":"endorsement","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        otherBadgeURI,
+			CID:        "bafybadgeother",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.definition",
+			JSON:       `{"title":"Other","badgeType":"credential","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:issuer/app.certified.badge.award/award-endorsement",
+			CID:        "bafyawardendorsement",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"bafybadgeendorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:alice"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:issuer/app.certified.badge.award/award-other",
+			CID:        "bafyawardother",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + otherBadgeURI + `","cid":"bafybadgeother"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bob"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:issuer/app.certified.badge.award/award-missing-definition",
+			CID:        "bafyawardmissing",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"at://did:plc:issuer/app.certified.badge.definition/missing","cid":"bafymissing"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:carol"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+	})
+
+	query := `{
+		appCertifiedBadgeAward(
+			first: 10
+			where: { badgeType: { eq: "endorsement" } }
+		) {
+			totalCount
+			edges { node { uri } }
+		}
+	}`
+
+	conn := executeConnectionQuery(ctx, t, schema, query, "appCertifiedBadgeAward")
+	assertConnectionURIs(t, conn, []string{"at://did:plc:issuer/app.certified.badge.award/award-endorsement"})
 	if got := conn["totalCount"]; got != 1 {
 		t.Fatalf("totalCount = %v, want 1", got)
 	}

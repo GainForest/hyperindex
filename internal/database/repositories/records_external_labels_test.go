@@ -170,12 +170,23 @@ func assertRecordURISet(t *testing.T, records []*repositories.Record, want []str
 	if len(records) != len(want) {
 		t.Fatalf("records length = %d, want %d: %v", len(records), len(want), recordURIs(records))
 	}
-	gotSet := make(map[string]bool, len(records))
+
+	wantSet := make(map[string]bool, len(want))
+	for _, uri := range want {
+		wantSet[uri] = true
+	}
+	seen := make(map[string]bool, len(records))
 	for _, rec := range records {
-		gotSet[rec.URI] = true
+		if !wantSet[rec.URI] {
+			t.Fatalf("unexpected URI %s in records %v; want %v", rec.URI, recordURIs(records), want)
+		}
+		if seen[rec.URI] {
+			t.Fatalf("duplicate URI %s in records %v", rec.URI, recordURIs(records))
+		}
+		seen[rec.URI] = true
 	}
 	for _, uri := range want {
-		if !gotSet[uri] {
+		if !seen[uri] {
 			t.Fatalf("missing URI %s in records %v", uri, recordURIs(records))
 		}
 	}

@@ -69,7 +69,9 @@ func (b *Builder) Build() (*graphql.Schema, error) {
 	b.buildGenericRecordTypes()
 
 	// Phase 2c: Build per-collection WhereInput types
-	b.buildWhereInputTypes()
+	if err := b.buildWhereInputTypes(); err != nil {
+		return nil, err
+	}
 
 	// Phase 3: Build connection types
 	b.buildConnectionTypes()
@@ -202,7 +204,7 @@ var externalLabelWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
 // For each collection lexicon, it creates a WhereInput type with scalar
 // operators for scalar properties, presence-only filters for complex top-level
 // properties, and explicit metadata filters.
-func (b *Builder) buildWhereInputTypes() {
+func (b *Builder) buildWhereInputTypes() error {
 	for _, lex := range b.registry.GetCollectionLexicons() {
 		if lex.Defs.Main == nil {
 			continue
@@ -252,19 +254,8 @@ func (b *Builder) buildWhereInputTypes() {
 			}
 		}
 
-		if lex.ID == "org.hypercerts.claim.activity" {
-			// contributorDid is a deliberate compatibility exception to the generated
-			// lexicon-property filters. The inline contributors.any.contributorIdentity
-			// shape fits the three-segment nested-filter limit, but matching a
-			// contributorInformation.identifier requires following a strongRef into
-			// another record, which generated nested filters intentionally do not do.
-			// Historical records may also store bare DID strings or object-shaped
-			// identities, so this narrow filter preserves one stable caller contract for
-			// all supported contributor encodings.
-			fields["contributorDid"] = &graphql.InputObjectFieldConfig{
-				Type:        types.DIDFilterInput,
-				Description: "Compatibility filter for activities whose contributors include this DID inline or through an org.hypercerts.claim.contributorInformation strongRef.",
-			}
+		if err := addCollectionFilterExtensionFields(lex.ID, fields); err != nil {
+			return err
 		}
 
 		whereInput := graphql.NewInputObject(graphql.InputObjectConfig{
@@ -275,6 +266,7 @@ func (b *Builder) buildWhereInputTypes() {
 
 		b.whereInputTypes[lex.ID] = whereInput
 	}
+	return nil
 }
 
 // RecordEvent GraphQL type for subscriptions
@@ -685,24 +677,8 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 			continue
 		}
 
-		if fieldName == "contributorDid" && lexiconID == "org.hypercerts.claim.activity" {
-			// contributorDid is not a lexicon field. It routes to a repository-level
-			// compatibility predicate because the strongRef case crosses out of the
-			// activity record into contributorInformation.identifier, beyond the
-			// same-record nested-filter model. It also handles legacy bare DID
-			// contributors and inline contributor objects.
-			for op, val := range filterMap {
-				if val == nil {
-					continue
-				}
-				filters = append(filters, repositories.FieldFilter{
-					Field:     fieldName,
-					Operator:  op,
-					Value:     val,
-					FieldType: lexicon.TypeString,
-					Target:    repositories.FieldFilterTargetContributorDID,
-				})
-			}
+		if extension, ok := collectionFilterExtensionForField(lexiconID, fieldName); ok {
+			filters = append(filters, extractCollectionFilterExtensionFilters(extension, filterMap)...)
 			continue
 		}
 

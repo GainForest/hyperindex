@@ -154,7 +154,7 @@ The generated `uri` filter is a record metadata filter for exact AT-URI lookup a
 
 Scalar fields support value filters such as `eq`, `neq`, `in`, `contains`, `startsWith`, `gt`, `lt`, `gte`, `lte`, and `isNull`, depending on the scalar type.
 
-Complex fields support presence checks with `isNull`. Some complex fields use the shared `PresenceFilterInput`; arrays, refs, and unions may instead expose generated nested filter inputs that also include `isNull`. Do not rely on the input type name for presence checks; introspect the field and use `isNull`. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`. Use array `any` when at least one array item should match; multiple predicates inside the same `any` must match the same array item.
+Complex fields support presence checks with `isNull`. Some complex fields use the shared `PresenceFilterInput`; arrays, refs, and unions may instead expose generated nested filter inputs that also include `isNull`. Do not rely on the input type name for presence checks; introspect the field and use `isNull`. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`. Use array `any` when at least one array item should match; multiple predicates inside the same `any` must match the same array item. Nested array fields inside an existing `any` scope expose presence checks only; Hyperindex does not advertise nested `any` within another `any`.
 
 ```graphql
 where: {
@@ -167,11 +167,21 @@ where: {
 }
 ```
 
-Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), nested sorting, arbitrary JSON paths, or dereferencing strong refs. For Hypercerts activity contributors that may be inline, legacy bare DID strings, or `org.hypercerts.claim.contributorInformation` strong refs, use the compatibility filter:
+Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), nested-array `any` filters inside another `any`, nested sorting, arbitrary JSON paths, or automatic strong-ref dereferencing. A small set of explicit collection filter extensions may perform product-specific cross-record lookups; uploaded lexicons do not get these fields automatically.
+
+For Hypercerts activity contributors that may be inline, legacy bare DID strings, or `org.hypercerts.claim.contributorInformation` strong refs, use the compatibility filter:
 
 ```graphql
 where: { contributorDid: { eq: "did:plc:example" } }
 ```
+
+For Certified badge awards, use `badgeType` to filter by the referenced `app.certified.badge.definition.badgeType` without joining badge definitions client-side:
+
+```graphql
+where: { badgeType: { eq: "endorsement" } }
+```
+
+`badgeType` uses `StringFilterInput`, so it supports the same string operators exposed for badge definitions. Awards whose referenced badge definition is missing or has no `badgeType` do not match positive value filters.
 
 ## Quickstart
 
@@ -367,7 +377,7 @@ The selected endpoint's schema does not expose that field. Check that you are us
 
 ### A nested filter does not work
 
-Generated nested filters only cover arrays, refs, and unions up to three lexicon path segments deep, and nested scalar leaves only support `eq`, `in`, and `isNull`. Multiple predicates inside the same array `any` are evaluated against the same array item. They do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), arbitrary JSON paths, nested sorting, or automatic strong-ref dereferencing. Introspect the target endpoint's `WhereInput`; if the nested input is absent, use `search`, follow a referenced `uri`, or filter client-side.
+Generated nested filters only cover arrays, refs, and unions up to three lexicon path segments deep, and nested scalar leaves only support `eq`, `in`, and `isNull`. Multiple predicates inside the same array `any` are evaluated against the same array item. Nested array fields inside an existing `any` scope expose presence checks only, not another `any`. They do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), arbitrary JSON paths, nested sorting, or automatic strong-ref dereferencing. Introspect the target endpoint's `WhereInput`; if the nested input is absent, use `search`, follow a referenced `uri`, or filter client-side.
 
 ### A recently written record is missing
 
