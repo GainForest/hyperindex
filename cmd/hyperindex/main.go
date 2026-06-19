@@ -262,19 +262,6 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// CORS — uses AllowedOrigins from config; defaults to "*" if not set
-	var allowedOrigins []string
-	if cfg.AllowedOrigins != "" {
-		for _, o := range strings.Split(cfg.AllowedOrigins, ",") {
-			allowedOrigins = append(allowedOrigins, strings.TrimSpace(o))
-		}
-	}
-	allowAdminAPIKeyAuth := cfg.AdminAPIKey != ""
-	r.Use(server.CORSMiddleware(server.CORSConfig{
-		AllowedOrigins:       allowedOrigins,
-		AllowAdminAPIKeyAuth: allowAdminAPIKeyAuth,
-	}))
-
 	// Health check reports process liveness only. Dependency readiness and
 	// deterministic labeler cursor failures are exposed via GET /ready.
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
@@ -535,34 +522,59 @@ func setupOAuth(r *chi.Mux, cfg *config.Config, svc *services, bg *backgroundSer
 		AuthorizationCodeExpiration: 600,     // 10 minutes
 	}, svc.db)
 
-	// Discovery endpoints
-	r.Get("/.well-known/oauth-authorization-server", oauthHandlers.HandleAuthorizationServerMetadata)
-	r.Get("/.well-known/oauth-protected-resource", oauthHandlers.HandleProtectedResourceMetadata)
+	publicCORS := server.CORSMiddleware(server.CORSConfig{
+		AllowedOrigins: cfg.PublicAllowedOriginList(),
+	})
 
-	// Client metadata (this server as an OAuth client)
-	r.Get("/oauth-client-metadata.json", server.HandleClientMetadata(server.ClientMetadataConfig{
-		ExternalBaseURL: cfg.ExternalBaseURL,
-		ClientName:      "Hyperindex",
-		Scope:           "atproto transition:generic",
-	}))
+	r.Group(func(r chi.Router) {
+		r.Use(publicCORS)
 
-	// OAuth flow endpoints
-	r.Get("/oauth/authorize", oauthHandlers.HandleAuthorize)
-	r.Post("/oauth/authorize", oauthHandlers.HandleAuthorize)
-	r.Get("/oauth/callback", oauthHandlers.HandleCallback)
-	r.Post("/oauth/token", oauthHandlers.HandleToken)
-	r.Get("/oauth/jwks", oauthHandlers.HandleJWKS)
-	r.Post("/oauth/revoke", oauthHandlers.HandleRevoke)
+		// Discovery endpoints
+		r.Get("/.well-known/oauth-authorization-server", oauthHandlers.HandleAuthorizationServerMetadata)
+		r.Get("/.well-known/oauth-protected-resource", oauthHandlers.HandleProtectedResourceMetadata)
 
-	// Additional OAuth endpoints
-	registerHandler := server.NewOAuthRegisterHandler(svc.db)
-	r.Post("/oauth/register", registerHandler.HandleRegister)
+		// Client metadata (this server as an OAuth client)
+		r.Get("/oauth-client-metadata.json", server.HandleClientMetadata(server.ClientMetadataConfig{
+			ExternalBaseURL: cfg.ExternalBaseURL,
+			ClientName:      "Hyperindex",
+			Scope:           "atproto transition:generic",
+		}))
 
-	parHandler := server.NewOAuthPARHandler(svc.db)
-	r.Post("/oauth/par", parHandler.HandlePAR)
+		// OAuth flow endpoints
+		r.Get("/oauth/authorize", oauthHandlers.HandleAuthorize)
+		r.Post("/oauth/authorize", oauthHandlers.HandleAuthorize)
+		r.Get("/oauth/callback", oauthHandlers.HandleCallback)
+		r.Post("/oauth/token", oauthHandlers.HandleToken)
+		r.Get("/oauth/jwks", oauthHandlers.HandleJWKS)
+		r.Post("/oauth/revoke", oauthHandlers.HandleRevoke)
 
-	r.Get("/oauth/dpop/nonce", server.HandleDPoPNonce)
-	r.Post("/oauth/dpop/nonce", server.HandleDPoPNonce)
+		// Additional OAuth endpoints
+		registerHandler := server.NewOAuthRegisterHandler(svc.db)
+		r.Post("/oauth/register", registerHandler.HandleRegister)
+
+		parHandler := server.NewOAuthPARHandler(svc.db)
+		r.Post("/oauth/par", parHandler.HandlePAR)
+
+		r.Get("/oauth/dpop/nonce", server.HandleDPoPNonce)
+		r.Post("/oauth/dpop/nonce", server.HandleDPoPNonce)
+
+		corsPreflight := func(w http.ResponseWriter, r *http.Request) {}
+		for _, path := range []string{
+			"/.well-known/oauth-authorization-server",
+			"/.well-known/oauth-protected-resource",
+			"/oauth-client-metadata.json",
+			"/oauth/authorize",
+			"/oauth/callback",
+			"/oauth/token",
+			"/oauth/jwks",
+			"/oauth/revoke",
+			"/oauth/register",
+			"/oauth/par",
+			"/oauth/dpop/nonce",
+		} {
+			r.Options(path, corsPreflight)
+		}
+	})
 
 	// Start cleanup worker
 	oauthCleanupCtx, oauthCleanupCancel := context.WithCancel(context.Background())
@@ -614,9 +626,14 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 	// Wire up backfill callbacks for the admin UI
 	configureBackfillCallbacks(adminHandler, cfg, svc)
 
-	// Admin endpoint with optional auth (allows introspection without auth)
-	r.Handle("/admin/graphql", adminHandler.OptionalAuth())
-	r.Handle("/admin/graphql/", adminHandler.OptionalAuth())
+	// Admin endpoint with optional auth (allows introspection without auth).
+	// Cross-origin browser access is restricted to explicit admin origins.
+	adminGraphQLHandler := server.CORSMiddleware(server.CORSConfig{
+		AllowedOrigins:       cfg.AdminAllowedOriginList(),
+		AllowAdminAPIKeyAuth: cfg.AdminAPIKey != "",
+	})(adminHandler.OptionalAuth())
+	r.Handle("/admin/graphql", adminGraphQLHandler)
+	r.Handle("/admin/graphql/", adminGraphQLHandler)
 	slog.Info("Admin GraphQL endpoint enabled", "path", "/admin/graphql")
 
 	// GraphiQL playgrounds
@@ -775,19 +792,16 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 	if err != nil {
 		slog.Error("Failed to create GraphQL handler", "error", err)
 	} else {
-		r.Handle("/graphql", graphqlHandler)
-		r.Handle("/graphql/", graphqlHandler)
+		publicOrigins := cfg.PublicAllowedOriginList()
+		publicGraphQLHandler := server.CORSMiddleware(server.CORSConfig{
+			AllowedOrigins: publicOrigins,
+		})(graphqlHandler)
+		r.Handle("/graphql", publicGraphQLHandler)
+		r.Handle("/graphql/", publicGraphQLHandler)
 		slog.Info("GraphQL endpoint enabled", "path", "/graphql")
 
 		// WebSocket subscription endpoint
-		var allowedOrigins []string
-		if cfg.AllowedOrigins != "" {
-			allowedOrigins = strings.Split(cfg.AllowedOrigins, ",")
-			for i := range allowedOrigins {
-				allowedOrigins[i] = strings.TrimSpace(allowedOrigins[i])
-			}
-		}
-		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema(), pubsub, allowedOrigins)
+		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema(), pubsub, publicOrigins)
 		r.Handle("/graphql/ws", subscriptionHandler)
 		slog.Info("GraphQL subscriptions enabled", "path", "/graphql/ws")
 	}

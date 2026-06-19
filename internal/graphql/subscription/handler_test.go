@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -13,15 +14,21 @@ func TestMakeOriginChecker(t *testing.T) {
 		want           bool
 	}{
 		{
-			name:           "nil origins allows all",
+			name:           "nil origins reject cross-origin",
 			allowedOrigins: nil,
 			requestOrigin:  "https://example.com",
-			want:           true,
+			want:           false,
 		},
 		{
-			name:           "empty origins allows all",
+			name:           "empty origins reject cross-origin",
 			allowedOrigins: []string{},
 			requestOrigin:  "https://example.com",
+			want:           false,
+		},
+		{
+			name:           "empty origins allow same-origin",
+			allowedOrigins: []string{},
+			requestOrigin:  "https://api.example",
 			want:           true,
 		},
 		{
@@ -65,7 +72,7 @@ func TestMakeOriginChecker(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			checker := makeOriginChecker(tt.allowedOrigins)
-			req, _ := http.NewRequest("GET", "/graphql/ws", nil)
+			req := httptest.NewRequest(http.MethodGet, "https://api.example/graphql/ws", nil)
 			if tt.requestOrigin != "" {
 				req.Header.Set("Origin", tt.requestOrigin)
 			}

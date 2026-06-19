@@ -30,7 +30,7 @@ func NewHandler(registry *lexicon.Registry, repos *resolver.Repositories) (*Hand
 }
 
 // ServeHTTP handles GraphQL HTTP requests.
-// CORS is handled by the router-level middleware; not duplicated here.
+// CORS is handled by route-level middleware; not duplicated here.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse the request
 	var params struct {
