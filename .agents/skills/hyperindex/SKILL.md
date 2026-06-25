@@ -95,6 +95,8 @@ where: { endDate: { isNull: false } }
 
 `uri` filters are record metadata filters, not JSON-field filters. They support exact lookup with `eq` and batched lookup with `in`.
 
+Any single `in` operator accepts up to 100 values. For larger DID, URI, label source/value, or scalar batches, split the values into multiple GraphQL requests and merge the paginated results client-side. This limit is separate from connection page size.
+
 Complex fields expose `isNull` for presence checks. Some complex fields use the shared `PresenceFilterInput`; arrays, refs, and unions can instead expose generated nested filter inputs up to three lexicon path segments deep. Do not rely on the input type name for presence checks; introspect the field and use `isNull`. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`. Multiple predicates inside the same array `any` must match the same array item. Nested array fields inside an existing `any` scope expose presence checks only; Hyperindex does not advertise nested `any` within another `any`.
 
 ```graphql

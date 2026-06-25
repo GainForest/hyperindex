@@ -85,6 +85,8 @@ Typed list queries accept Relay-style pagination arguments (`first`, `after`, `l
 
 Scalar field filters support value comparisons. Generated typed `where` inputs also include a metadata-level `uri: URIFilterInput` field so clients can filter by exact AT-URI or batch hydrate records by URI without querying JSON payload fields. Complex fields expose `isNull` presence checks. Arrays, refs, and unions may also expose generated nested filters up to three lexicon path segments deep; nested scalar leaves use exact filters (`eq`, `in`, `isNull`) and array filters use `any`. Multiple predicates inside the same array `any` must match the same array item. Nested array fields inside an existing `any` scope expose presence checks only, not another `any`. Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), arbitrary JSON paths, nested sorting, or automatic strong-ref dereferencing. For example, `items.any.itemIdentifier.uri.contains` and `items.any.itemWeight.gt` are rejected at query validation time because nested leaves expose exact-match inputs only.
 
+A single `in` operator is capped at 100 values, including metadata filters such as `uri`, DID filters, scalar JSON filters, contributor-DID filters, and external-label source/value filters. Batch larger value sets into multiple GraphQL requests.
+
 ### `StringFilterInput`
 
 Filter conditions for string fields
