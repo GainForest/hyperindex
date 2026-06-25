@@ -346,6 +346,8 @@ Typed collection queries accept a `where` argument with per-field filters:
 | `startsWith` | String | `{ name: { startsWith: "Gain" } }` |
 | `isNull` | Scalar fields and complex top-level fields | `{ optionalField: { isNull: true } }` |
 
+Each `in` list is capped at 100 values. For larger DID, URI, label source/value, or scalar batches, split the values into multiple GraphQL requests and merge the paginated results client-side.
+
 Complex top-level fields such as arrays, refs, unions, objects, blobs, bytes, unknown values, and CID links support presence filtering only:
 
 ```graphql

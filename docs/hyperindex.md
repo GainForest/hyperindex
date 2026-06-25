@@ -152,6 +152,8 @@ where: { image: { isNull: false } }
 
 The generated `uri` filter is a record metadata filter for exact AT-URI lookup and batched hydration. It supports `eq` and `in` and does not search the JSON payload.
 
+Any single `in` operator accepts up to 100 values. For larger DID, URI, label source/value, or scalar batches, split the values into multiple GraphQL requests and merge the paginated results client-side. This limit is separate from connection page size.
+
 Scalar fields support value filters such as `eq`, `neq`, `in`, `contains`, `startsWith`, `gt`, `lt`, `gte`, `lte`, and `isNull`, depending on the scalar type.
 
 Complex fields support presence checks with `isNull`. Some complex fields use the shared `PresenceFilterInput`; arrays, refs, and unions may instead expose generated nested filter inputs that also include `isNull`. Do not rely on the input type name for presence checks; introspect the field and use `isNull`. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`. Use array `any` when at least one array item should match; multiple predicates inside the same `any` must match the same array item. Nested array fields inside an existing `any` scope expose presence checks only; Hyperindex does not advertise nested `any` within another `any`.
