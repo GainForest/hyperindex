@@ -69,13 +69,23 @@ type externalLabelActivityLabelExpectation struct {
 }
 
 type authorLabelActivityClaimsExpectation struct {
-	SourceDID                 string                                  `json:"sourceDID"`
-	SourceDIDEnv              string                                  `json:"sourceDIDEnv"`
-	PageSize                  int                                     `json:"pageSize"`
-	Labels                    []externalLabelActivityLabelExpectation `json:"labels"`
-	NoneValue                 string                                  `json:"noneValue"`
-	MultipleHasValues         []string                                `json:"multipleHasValues"`
-	MultipleHasMinimumRecords int                                     `json:"multipleHasMinimumRecords"`
+	SourceDID    string `json:"sourceDID"`
+	SourceDIDEnv string `json:"sourceDIDEnv"`
+	PageSize     int    `json:"pageSize"`
+
+	// Labels defines positive `authorLabels.has` fixture contracts. Each label
+	// must have enough matching activity claims to fill the first smoke-test page.
+	Labels []externalLabelActivityLabelExpectation `json:"labels"`
+
+	// NoneValue is the author label value excluded by the `authorLabels.none` smoke check.
+	NoneValue string `json:"noneValue"`
+	// NoneMinimumRecords documents how many activity claims the target dataset
+	// should expose whose author does not have NoneValue. This is a fixture/data
+	// contract, not a special label named "none".
+	NoneMinimumRecords int `json:"noneMinimumRecords"`
+
+	MultipleHasValues         []string `json:"multipleHasValues"`
+	MultipleHasMinimumRecords int      `json:"multipleHasMinimumRecords"`
 }
 
 func loadSmokeConfig(t testing.TB) smokeConfig {
@@ -295,7 +305,7 @@ func (e externalLabelActivityClaimsExpectation) validate(requiredNSIDs map[strin
 }
 
 func (e authorLabelActivityClaimsExpectation) configured() bool {
-	return e.SourceDID != "" || e.SourceDIDEnv != "" || e.PageSize != 0 || len(e.Labels) > 0 || e.NoneValue != "" || len(e.MultipleHasValues) > 0 || e.MultipleHasMinimumRecords != 0
+	return e.SourceDID != "" || e.SourceDIDEnv != "" || e.PageSize != 0 || len(e.Labels) > 0 || e.NoneValue != "" || e.NoneMinimumRecords != 0 || len(e.MultipleHasValues) > 0 || e.MultipleHasMinimumRecords != 0
 }
 
 func (e authorLabelActivityClaimsExpectation) validate(requiredNSIDs map[string]bool, nonRecordNSIDs map[string]bool, typedQueryFields map[string]string) error {
@@ -325,6 +335,9 @@ func (e authorLabelActivityClaimsExpectation) validate(requiredNSIDs map[string]
 	}
 	if e.NoneValue == "" {
 		return fmt.Errorf("authorLabelActivityClaims.noneValue is required")
+	}
+	if e.NoneMinimumRecords < 1 {
+		return fmt.Errorf("authorLabelActivityClaims.noneMinimumRecords must be positive")
 	}
 	if len(e.MultipleHasValues) == 0 {
 		return fmt.Errorf("authorLabelActivityClaims.multipleHasValues must include at least one label value")
@@ -542,6 +555,19 @@ func TestExpectationsValidationRejectsAuthorLabelActivityClaimsMissingSource(t *
 	err = loaded.validate()
 	if err == nil || !strings.Contains(err.Error(), "authorLabelActivityClaims.sourceDID or sourceDIDEnv is required") {
 		t.Fatalf("validate() error = %v, want missing author label source DID error", err)
+	}
+}
+
+func TestExpectationsValidationRejectsAuthorLabelActivityClaimsMissingNoneMinimumRecords(t *testing.T) {
+	loaded, err := loadExpectations(defaultExpectationsPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.AuthorLabelActivityClaims.NoneMinimumRecords = 0
+
+	err = loaded.validate()
+	if err == nil || !strings.Contains(err.Error(), "authorLabelActivityClaims.noneMinimumRecords must be positive") {
+		t.Fatalf("validate() error = %v, want missing author label none minimumRecords error", err)
 	}
 }
 

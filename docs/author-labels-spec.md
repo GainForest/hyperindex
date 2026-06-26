@@ -6,8 +6,6 @@ Proposed implementation spec for GitHub issue #92.
 
 This spec covers Hyperindex GraphQL filtering for labels attached to a record author's account DID. It does not change how external labeler events are ingested; it uses the existing `external_label` table populated by configured external label subscriptions.
 
-Related architecture visualization: [`author-labels-architecture.html`](author-labels-architecture.html).
-
 ## Problem
 
 Hyperindex already supports record-level external label filtering:

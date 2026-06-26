@@ -100,9 +100,13 @@ func TestAuthorLabelActivityClaimsSmoke(t *testing.T) {
 			Value:     expectation.NoneValue,
 		}
 		page := queryAuthorLabelActivityClaimsPage(t, ctx, config, typedField, expectation.PageSize, "", &filter)
-		nodes := assertAuthorLabelActivityClaimsPage(t, "authorLabels.none first page", page, expectation.PageSize, "", sourceDID)
+		if page.TotalCount < expectation.NoneMinimumRecords {
+			t.Fatalf("author label none count failed for source DID %q and value %q: totalCount = %d, want at least %d %s records whose authors do not have that label", sourceDID, expectation.NoneValue, page.TotalCount, expectation.NoneMinimumRecords, externalLabelActivityClaimsCollection)
+		}
+		expectedEdges := min(page.TotalCount, expectation.PageSize)
+		nodes := assertAuthorLabelActivityClaimsPage(t, "authorLabels.none first page", page, expectedEdges, "", sourceDID)
 		assertAuthorDIDsHaveNoLabel(t, ctx, config, sourceDID, expectation.NoneValue, nodes)
-		smokeLog("✓ author label none %q activity claims from %s exclude matching authors", expectation.NoneValue, sourceDID)
+		smokeLog("✓ author label none %q activity claims from %s returned at least %d records whose authors do not have that label", expectation.NoneValue, sourceDID, expectation.NoneMinimumRecords)
 	})
 
 	t.Run("has_in_pagination", func(t *testing.T) {

@@ -221,7 +221,7 @@ where: {
 }
 ```
 
-`authorLabels` only matches DID-subject labels with no CID. It does not infer labels from `app.certified.actor.profile/self` or organization records. There is no node `authorLabels` field; use the root `externalLabels(subjects: [...])` query when you need to display labels for known author DIDs.
+`authorLabels` only matches DID-subject labels with no CID. It does not infer labels from `app.certified.actor.profile/self` or organization records. There is no node-level `authorLabels` field; use the root `externalLabels(subjects: [...])` query when you need to display labels for known author DIDs.
 
 To combine record label filtering with author account label filtering, include both predicates:
 

@@ -114,6 +114,8 @@ If `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` is unset, the external label smo
 
 The default expectations file requires active DID-subject labels from the orglabeler source DID `did:plc:pswneepkd5lesumj7ejmkbal`. The check queries `where.authorLabels` for `likely-test`, `standard`, and `high-quality`, verifies `none` and multi-value `has` filters, paginates the multi-value result, and uses the root `externalLabels(subjects: [did])` query to confirm returned author DIDs have the expected non-CID DID-subject labels.
 
+For the negative `none` filter, `authorLabelActivityClaims.noneValue` is the label to exclude from author DIDs and `authorLabelActivityClaims.noneMinimumRecords` is the minimum number of activity claims expected whose authors do not have that label. It is a dataset-size contract for the smoke target, not a label value named `none`.
+
 API smoke should validate indexed data as served by the target API; it does not seed author labels. The isolated local Tap expectations omit `authorLabelActivityClaims`, so local full-stack smoke skips this check unless you provide a custom expectations file for a target with real author-label data. Environment-specific expectations can override `authorLabelActivityClaims.sourceDID` directly or set `authorLabelActivityClaims.sourceDIDEnv` to read the source DID from an environment variable.
 
 ## Optional write-through smoke check

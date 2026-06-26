@@ -113,6 +113,7 @@
       }
     ],
     "noneValue": "likely-test",
+    "noneMinimumRecords": 10,
     "multipleHasValues": [
       "standard",
       "high-quality"
