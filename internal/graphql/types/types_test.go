@@ -406,6 +406,44 @@ func TestObjectBuilder_BuildRecordType_SkipsReservedFields(t *testing.T) {
 	}
 }
 
+func TestObjectBuilder_BuildRecordType_DoesNotExposeAuthorLabelsVirtualField(t *testing.T) {
+	registry := lexicon.NewRegistry()
+	mapper := NewMapper()
+	builder := NewObjectBuilder(mapper, registry)
+
+	recordDef := &lexicon.RecordDef{
+		Type: "record",
+		Key:  "tid",
+		Properties: []lexicon.PropertyEntry{
+			{
+				Name: "authorLabels",
+				Property: lexicon.Property{
+					Type:        "integer",
+					Description: "Colliding property",
+				},
+			},
+			{
+				Name: "title",
+				Property: lexicon.Property{
+					Type: "string",
+				},
+			},
+		},
+	}
+
+	obj := builder.BuildRecordType("com.example.test.authorlabelscollision", recordDef)
+	if obj == nil {
+		t.Fatal("BuildRecordType returned nil")
+	}
+	fields := obj.Fields()
+	if _, ok := fields["authorLabels"]; ok {
+		t.Fatal("record type exposed authorLabels; this release only supports where.authorLabels filtering")
+	}
+	if _, ok := fields["title"]; !ok {
+		t.Fatal("non-colliding property 'title' is missing from the type")
+	}
+}
+
 func TestObjectBuilder_GeneratedCIDLinkFieldResolver(t *testing.T) {
 	tests := []struct {
 		name  string

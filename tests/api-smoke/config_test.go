@@ -38,6 +38,7 @@ type expectations struct {
 	DataBearingCollections      []dataBearingExpectation               `json:"dataBearingCollections"`
 	PaginationCollections       []paginationExpectation                `json:"paginationCollections"`
 	ExternalLabelActivityClaims externalLabelActivityClaimsExpectation `json:"externalLabelActivityClaims"`
+	AuthorLabelActivityClaims   authorLabelActivityClaimsExpectation   `json:"authorLabelActivityClaims"`
 	Search                      searchExpectation                      `json:"search"`
 }
 
@@ -65,6 +66,26 @@ type externalLabelActivityClaimsExpectation struct {
 type externalLabelActivityLabelExpectation struct {
 	Value          string `json:"value"`
 	MinimumRecords int    `json:"minimumRecords"`
+}
+
+type authorLabelActivityClaimsExpectation struct {
+	SourceDID    string `json:"sourceDID"`
+	SourceDIDEnv string `json:"sourceDIDEnv"`
+	PageSize     int    `json:"pageSize"`
+
+	// Labels defines positive `authorLabels.has` fixture contracts. Each label
+	// must have enough matching activity claims to fill the first smoke-test page.
+	Labels []externalLabelActivityLabelExpectation `json:"labels"`
+
+	// NoneValue is the author label value excluded by the `authorLabels.none` smoke check.
+	NoneValue string `json:"noneValue"`
+	// NoneMinimumRecords documents how many activity claims the target dataset
+	// should expose whose author does not have NoneValue. This is a fixture/data
+	// contract, not a special label named "none".
+	NoneMinimumRecords int `json:"noneMinimumRecords"`
+
+	MultipleHasValues         []string `json:"multipleHasValues"`
+	MultipleHasMinimumRecords int      `json:"multipleHasMinimumRecords"`
 }
 
 func loadSmokeConfig(t testing.TB) smokeConfig {
@@ -224,6 +245,9 @@ func (e expectations) validate() error {
 	if err := e.ExternalLabelActivityClaims.validate(requiredNSIDs, nonRecordNSIDs, e.TypedQueryFields); err != nil {
 		return err
 	}
+	if err := e.AuthorLabelActivityClaims.validate(requiredNSIDs, nonRecordNSIDs, e.TypedQueryFields); err != nil {
+		return err
+	}
 
 	if e.Search.Query == "" {
 		return fmt.Errorf("search.query is required")
@@ -275,6 +299,76 @@ func (e externalLabelActivityClaimsExpectation) validate(requiredNSIDs map[strin
 		if label.MinimumRecords < requiredMinimumRecords {
 			return fmt.Errorf("externalLabelActivityClaims label %q requires minimumRecords >= %d for two full pages, got %d", label.Value, requiredMinimumRecords, label.MinimumRecords)
 		}
+	}
+
+	return nil
+}
+
+func (e authorLabelActivityClaimsExpectation) configured() bool {
+	return e.SourceDID != "" || e.SourceDIDEnv != "" || e.PageSize != 0 || len(e.Labels) > 0 || e.NoneValue != "" || e.NoneMinimumRecords != 0 || len(e.MultipleHasValues) > 0 || e.MultipleHasMinimumRecords != 0
+}
+
+func (e authorLabelActivityClaimsExpectation) validate(requiredNSIDs map[string]bool, nonRecordNSIDs map[string]bool, typedQueryFields map[string]string) error {
+	if !e.configured() {
+		return nil
+	}
+	if e.SourceDID == "" && e.SourceDIDEnv == "" {
+		return fmt.Errorf("authorLabelActivityClaims.sourceDID or sourceDIDEnv is required when authorLabelActivityClaims is configured")
+	}
+	if e.SourceDID != "" && !strings.HasPrefix(e.SourceDID, "did:") {
+		return fmt.Errorf("authorLabelActivityClaims.sourceDID must start with did:, got %q", e.SourceDID)
+	}
+	if e.PageSize < 1 {
+		return fmt.Errorf("authorLabelActivityClaims.pageSize must be positive")
+	}
+	if len(e.Labels) == 0 {
+		return fmt.Errorf("authorLabelActivityClaims.labels must include at least one label expectation")
+	}
+	if !requiredNSIDs[externalLabelActivityClaimsCollection] {
+		return fmt.Errorf("authorLabelActivityClaims collection %q is missing from requiredNSIDs", externalLabelActivityClaimsCollection)
+	}
+	if nonRecordNSIDs[externalLabelActivityClaimsCollection] {
+		return fmt.Errorf("authorLabelActivityClaims collection %q cannot be listed in nonRecordNSIDs", externalLabelActivityClaimsCollection)
+	}
+	if typedQueryFields[externalLabelActivityClaimsCollection] == "" {
+		return fmt.Errorf("authorLabelActivityClaims collection %q is missing from typedQueryFields", externalLabelActivityClaimsCollection)
+	}
+	if e.NoneValue == "" {
+		return fmt.Errorf("authorLabelActivityClaims.noneValue is required")
+	}
+	if e.NoneMinimumRecords < 1 {
+		return fmt.Errorf("authorLabelActivityClaims.noneMinimumRecords must be positive")
+	}
+	if len(e.MultipleHasValues) == 0 {
+		return fmt.Errorf("authorLabelActivityClaims.multipleHasValues must include at least one label value")
+	}
+	if e.MultipleHasMinimumRecords < 2*e.PageSize {
+		return fmt.Errorf("authorLabelActivityClaims.multipleHasMinimumRecords requires at least %d records for two full pages, got %d", 2*e.PageSize, e.MultipleHasMinimumRecords)
+	}
+
+	seenValues := make(map[string]bool, len(e.Labels))
+	for _, label := range e.Labels {
+		if label.Value == "" {
+			return fmt.Errorf("authorLabelActivityClaims.labels must not contain an empty value")
+		}
+		if seenValues[label.Value] {
+			return fmt.Errorf("authorLabelActivityClaims.labels contains duplicate value %q", label.Value)
+		}
+		seenValues[label.Value] = true
+		if label.MinimumRecords < e.PageSize {
+			return fmt.Errorf("authorLabelActivityClaims label %q requires minimumRecords >= %d, got %d", label.Value, e.PageSize, label.MinimumRecords)
+		}
+	}
+
+	seenMultipleValues := make(map[string]bool, len(e.MultipleHasValues))
+	for _, value := range e.MultipleHasValues {
+		if value == "" {
+			return fmt.Errorf("authorLabelActivityClaims.multipleHasValues must not contain an empty value")
+		}
+		if seenMultipleValues[value] {
+			return fmt.Errorf("authorLabelActivityClaims.multipleHasValues contains duplicate value %q", value)
+		}
+		seenMultipleValues[value] = true
 	}
 
 	return nil
@@ -447,6 +541,54 @@ func TestExpectationsValidationRejectsExternalLabelActivityClaimsWithoutTwoFullP
 	requiredMinimum := 2 * pageSize
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("externalLabelActivityClaims label %q requires minimumRecords >= %d", loaded.ExternalLabelActivityClaims.Labels[0].Value, requiredMinimum)) || !strings.Contains(err.Error(), fmt.Sprintf("got %d", actualMinimum)) {
 		t.Fatalf("validate() error = %v, want external label activity claim minimumRecords error", err)
+	}
+}
+
+func TestExpectationsValidationRejectsAuthorLabelActivityClaimsMissingSource(t *testing.T) {
+	loaded, err := loadExpectations(defaultExpectationsPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.AuthorLabelActivityClaims.SourceDID = ""
+	loaded.AuthorLabelActivityClaims.SourceDIDEnv = ""
+
+	err = loaded.validate()
+	if err == nil || !strings.Contains(err.Error(), "authorLabelActivityClaims.sourceDID or sourceDIDEnv is required") {
+		t.Fatalf("validate() error = %v, want missing author label source DID error", err)
+	}
+}
+
+func TestExpectationsValidationRejectsAuthorLabelActivityClaimsMissingNoneMinimumRecords(t *testing.T) {
+	loaded, err := loadExpectations(defaultExpectationsPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded.AuthorLabelActivityClaims.NoneMinimumRecords = 0
+
+	err = loaded.validate()
+	if err == nil || !strings.Contains(err.Error(), "authorLabelActivityClaims.noneMinimumRecords must be positive") {
+		t.Fatalf("validate() error = %v, want missing author label none minimumRecords error", err)
+	}
+}
+
+func TestExpectationsValidationRejectsAuthorLabelActivityClaimsWithoutTwoFullPages(t *testing.T) {
+	loaded, err := loadExpectations(defaultExpectationsPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pageSize := loaded.AuthorLabelActivityClaims.PageSize
+	if pageSize == 0 {
+		t.Fatal("test fixture authorLabelActivityClaims is not configured")
+	}
+
+	actualMinimum := 2*pageSize - 1
+	loaded.AuthorLabelActivityClaims.MultipleHasMinimumRecords = actualMinimum
+
+	err = loaded.validate()
+	requiredMinimum := 2 * pageSize
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("authorLabelActivityClaims.multipleHasMinimumRecords requires at least %d", requiredMinimum)) || !strings.Contains(err.Error(), fmt.Sprintf("got %d", actualMinimum)) {
+		t.Fatalf("validate() error = %v, want author label activity claim minimumRecords error", err)
 	}
 }
 

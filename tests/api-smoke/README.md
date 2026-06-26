@@ -92,7 +92,8 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - Positive and negative nested activity-claim filters for contributor identities, one-level refs/unions such as `rights.uri` and `image.uri`, depth-limited presence filters such as `description.facets.any.index.isNull`, and schema coverage that nested arrays inside an existing `any` expose presence checks but not another `any`
 - `app.certified.badge.award` exposes the derived `badgeType: StringFilterInput` where filter
 - `org.hypercerts.claim.activity` image presence filtering with `where: { image: { isNull: false } }`
-- Optional external label filtering and pagination for `org.hypercerts.claim.activity`
+- Optional external record-label filtering and pagination for `org.hypercerts.claim.activity`
+- Author-account label filtering for likely-test, standard, high-quality, no-filter, `has`, `none`, multi-value `has`, and pagination on `org.hypercerts.claim.activity` when configured in the expectations file
 - Optional ATProto write-through lifecycle for `app.certified.actor.profile` and `org.hypercerts.claim.activity`
 
 ## Optional external label smoke check
@@ -108,6 +109,14 @@ HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID=did:plc:example \
 ```
 
 If `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` is unset, the external label smoke test is skipped. Environment-specific expectations can override `externalLabelActivityClaims` in the expectations JSON to change the source DID env var name, page size, label values, or minimum record counts.
+
+## Author label smoke check
+
+The default expectations file requires active DID-subject labels from the orglabeler source DID `did:plc:pswneepkd5lesumj7ejmkbal`. The check queries `where.authorLabels` for `likely-test`, `standard`, and `high-quality`, verifies `none` and multi-value `has` filters, paginates the multi-value result, and uses the root `externalLabels(subjects: [did])` query to confirm returned author DIDs have the expected non-CID DID-subject labels.
+
+For the negative `none` filter, `authorLabelActivityClaims.noneValue` is the label to exclude from author DIDs and `authorLabelActivityClaims.noneMinimumRecords` is the minimum number of activity claims expected whose authors do not have that label. It is a dataset-size contract for the smoke target, not a label value named `none`.
+
+API smoke should validate indexed data as served by the target API; it does not seed author labels. The isolated local Tap expectations omit `authorLabelActivityClaims`, so local full-stack smoke skips this check unless you provide a custom expectations file for a target with real author-label data. Environment-specific expectations can override `authorLabelActivityClaims.sourceDID` directly or set `authorLabelActivityClaims.sourceDIDEnv` to read the source DID from an environment variable.
 
 ## Optional write-through smoke check
 
@@ -144,4 +153,4 @@ The target deployment must have enough public data for read-path checks. These c
 
 At least one `org.hypercerts.claim.activity` record must have a non-null top-level `image` field for the image presence smoke check.
 
-The label smoke checks also assume `org.hypercerts.claim.activity` has active external labels from the source DID configured by `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` or the expectation file's `externalLabelActivityClaims.sourceDIDEnv` setting.
+The record-label smoke checks also assume `org.hypercerts.claim.activity` has active external labels from the source DID configured by `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` or the expectation file's `externalLabelActivityClaims.sourceDIDEnv` setting. The author-label smoke checks assume activity authors have active non-CID DID-subject labels from the expectation file's `authorLabelActivityClaims.sourceDID` setting, or from `authorLabelActivityClaims.sourceDIDEnv` when an environment-specific expectations file opts into env-based configuration.

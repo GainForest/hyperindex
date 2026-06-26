@@ -136,7 +136,8 @@ Supported schemas expose:
 
 - Root query: `externalLabels(subjects: ..., sources: ..., values: ..., activeOnly: ...)`
 - Record field: `externalLabels(sources: ..., values: ..., activeOnly: ...)`
-- Typed predicates: `where.externalLabels.has` and `where.externalLabels.none`
+- Record-label predicates: `where.externalLabels.has` and `where.externalLabels.none`
+- Author-account label predicates: `where.authorLabels.has` and `where.authorLabels.none`
 
 Use this pattern to get `high-quality` activity claims from source DID `did:plc:antf7bsm6f4ohkqfdckefyt7`:
 
@@ -194,15 +195,51 @@ Variables:
 { "labeler": "did:plc:antf7bsm6f4ohkqfdckefyt7", "after": null }
 ```
 
-To combine label filtering with author filtering, add a normal DID filter beside `externalLabels`:
+`externalLabels` matches labels attached to the record AT-URI. To filter by labels attached to the record author's DID, use `authorLabels` instead. This is the right shape for orglabeler account labels such as `likely-test`, `standard`, and `high-quality` from `did:plc:pswneepkd5lesumj7ejmkbal`:
 
 ```graphql
 where: {
-  did: { eq: "did:plc:activity-author..." }
+  authorLabels: {
+    none: {
+      src: { eq: "did:plc:pswneepkd5lesumj7ejmkbal" }
+      val: { eq: "likely-test" }
+      activeOnly: true
+    }
+  }
+}
+```
+
+To require standard or high-quality authors:
+
+```graphql
+where: {
+  authorLabels: {
+    has: {
+      src: { eq: "did:plc:pswneepkd5lesumj7ejmkbal" }
+      val: { in: ["standard", "high-quality"] }
+      activeOnly: true
+    }
+  }
+}
+```
+
+`authorLabels` only matches DID-subject labels with no CID. It does not infer labels from `app.certified.actor.profile/self` or organization records. There is no node-level `authorLabels` field; use the root `externalLabels(subjects: [...])` query when you need to display labels for known author DIDs.
+
+To combine record label filtering with author account label filtering, include both predicates:
+
+```graphql
+where: {
   externalLabels: {
     has: {
-      src: { eq: "did:plc:antf7bsm6f4ohkqfdckefyt7" }
-      val: { eq: "high-quality" }
+      src: { eq: "did:plc:activity-labeler" }
+      val: { eq: "verified-impact" }
+      activeOnly: true
+    }
+  }
+  authorLabels: {
+    none: {
+      src: { eq: "did:plc:pswneepkd5lesumj7ejmkbal" }
+      val: { eq: "likely-test" }
       activeOnly: true
     }
   }
