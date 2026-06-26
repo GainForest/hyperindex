@@ -124,9 +124,10 @@ type ExternalLabelPredicate struct {
 	ActiveOnly bool
 }
 
-// ExternalLabelRecordFilter applies external-label existence predicates to
-// record queries. Has keeps records with a matching label. None excludes records
-// with a matching label. When both are set, both conditions must hold.
+// ExternalLabelRecordFilter applies external-label existence predicates to one
+// bound label subject in record queries. Has keeps records with a matching
+// label. None excludes records with a matching label. When both are set, both
+// conditions must hold.
 type ExternalLabelRecordFilter struct {
 	Has  *ExternalLabelPredicate
 	None *ExternalLabelPredicate
@@ -135,6 +136,26 @@ type ExternalLabelRecordFilter struct {
 // IsEmpty reports whether no external-label conditions are configured.
 func (f ExternalLabelRecordFilter) IsEmpty() bool {
 	return f.Has == nil && f.None == nil
+}
+
+type externalLabelSubject int
+
+const (
+	externalLabelSubjectRecord externalLabelSubject = iota
+	externalLabelSubjectAuthor
+)
+
+// ExternalLabelFilterSet groups external-label predicates by subject binding.
+// Record powers where.externalLabels; Author powers where.authorLabels.
+type ExternalLabelFilterSet struct {
+	Record ExternalLabelRecordFilter
+	Author ExternalLabelRecordFilter
+}
+
+// IsEmpty reports whether no external-label conditions are configured for any
+// subject binding.
+func (f ExternalLabelFilterSet) IsEmpty() bool {
+	return f.Record.IsEmpty() && f.Author.IsEmpty()
 }
 
 // SortOption specifies a sort field and direction for record queries.
@@ -884,7 +905,7 @@ func (r *RecordsRepository) buildDIDFilterClause(f DIDFilter, startPlaceholder i
 	return clause, params, len(f.IN), nil
 }
 
-func (r *RecordsRepository) buildExternalLabelRecordFilterClause(filter ExternalLabelRecordFilter, startPlaceholder int) (string, []database.Value, error) {
+func (r *RecordsRepository) buildExternalLabelFilterSetClause(filter ExternalLabelFilterSet, startPlaceholder int) (string, []database.Value, error) {
 	if filter.IsEmpty() {
 		return "", nil, nil
 	}
@@ -893,10 +914,42 @@ func (r *RecordsRepository) buildExternalLabelRecordFilterClause(filter External
 	var params []database.Value
 	placeholderIdx := startPlaceholder
 
-	if filter.Has != nil {
-		clause, clauseParams, consumed, err := r.buildExternalLabelExistsSubquery("el_has", *filter.Has, placeholderIdx)
+	for _, subjectFilter := range []struct {
+		subject externalLabelSubject
+		alias   string
+		filter  ExternalLabelRecordFilter
+	}{
+		{subject: externalLabelSubjectRecord, alias: "el_record", filter: filter.Record},
+		{subject: externalLabelSubjectAuthor, alias: "el_author", filter: filter.Author},
+	} {
+		clause, clauseParams, consumed, err := r.buildExternalLabelSubjectFilterClause(subjectFilter.subject, subjectFilter.alias, subjectFilter.filter, placeholderIdx)
 		if err != nil {
 			return "", nil, err
+		}
+		if clause == "" {
+			continue
+		}
+		clauses = append(clauses, clause)
+		params = append(params, clauseParams...)
+		placeholderIdx += consumed
+	}
+
+	return strings.Join(clauses, " AND "), params, nil
+}
+
+func (r *RecordsRepository) buildExternalLabelSubjectFilterClause(subject externalLabelSubject, aliasPrefix string, filter ExternalLabelRecordFilter, startPlaceholder int) (string, []database.Value, int, error) {
+	if filter.IsEmpty() {
+		return "", nil, 0, nil
+	}
+
+	var clauses []string
+	var params []database.Value
+	placeholderIdx := startPlaceholder
+
+	if filter.Has != nil {
+		clause, clauseParams, consumed, err := r.buildExternalLabelExistsSubquery(aliasPrefix+"_has", subject, *filter.Has, placeholderIdx)
+		if err != nil {
+			return "", nil, 0, err
 		}
 		clauses = append(clauses, fmt.Sprintf("EXISTS (%s)", clause))
 		params = append(params, clauseParams...)
@@ -904,21 +957,22 @@ func (r *RecordsRepository) buildExternalLabelRecordFilterClause(filter External
 	}
 
 	if filter.None != nil {
-		clause, clauseParams, _, err := r.buildExternalLabelExistsSubquery("el_none", *filter.None, placeholderIdx)
+		clause, clauseParams, consumed, err := r.buildExternalLabelExistsSubquery(aliasPrefix+"_none", subject, *filter.None, placeholderIdx)
 		if err != nil {
-			return "", nil, err
+			return "", nil, 0, err
 		}
 		clauses = append(clauses, fmt.Sprintf("NOT EXISTS (%s)", clause))
 		params = append(params, clauseParams...)
+		placeholderIdx += consumed
 	}
 
-	return strings.Join(clauses, " AND "), params, nil
+	return strings.Join(clauses, " AND "), params, placeholderIdx - startPlaceholder, nil
 }
 
-func (r *RecordsRepository) buildExternalLabelExistsSubquery(alias string, predicate ExternalLabelPredicate, startPlaceholder int) (string, []database.Value, int, error) {
-	conditions := []string{
-		fmt.Sprintf("%s.uri = record.uri", alias),
-		fmt.Sprintf("(%s.cid IS NULL OR %s.cid = record.cid)", alias, alias),
+func (r *RecordsRepository) buildExternalLabelExistsSubquery(alias string, subject externalLabelSubject, predicate ExternalLabelPredicate, startPlaceholder int) (string, []database.Value, int, error) {
+	conditions, err := externalLabelSubjectConditions(alias, subject)
+	if err != nil {
+		return "", nil, 0, err
 	}
 	var params []database.Value
 	placeholderIdx := startPlaceholder
@@ -944,6 +998,23 @@ func (r *RecordsRepository) buildExternalLabelExistsSubquery(alias string, predi
 	}
 
 	return fmt.Sprintf("SELECT 1 FROM external_label %s WHERE %s", alias, strings.Join(conditions, " AND ")), params, placeholderIdx - startPlaceholder, nil
+}
+
+func externalLabelSubjectConditions(alias string, subject externalLabelSubject) ([]string, error) {
+	switch subject {
+	case externalLabelSubjectRecord:
+		return []string{
+			fmt.Sprintf("%s.uri = record.uri", alias),
+			fmt.Sprintf("(%s.cid IS NULL OR %s.cid = record.cid)", alias, alias),
+		}, nil
+	case externalLabelSubjectAuthor:
+		return []string{
+			fmt.Sprintf("%s.uri = record.did", alias),
+			fmt.Sprintf("%s.cid IS NULL", alias),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown external label subject %d", subject)
+	}
 }
 
 func (r *RecordsRepository) buildExternalLabelStringFilterConditions(column string, filters []ExternalLabelStringFilter, startPlaceholder int) ([]string, []database.Value, int, error) {
@@ -1270,18 +1341,35 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	limit int,
 	afterCursorValues []string,
 ) ([]*Record, error) {
-	return r.GetByCollectionSortedWithKeysetCursorAndExternalLabels(ctx, collection, filters, didFilter, ExternalLabelRecordFilter{}, sort, limit, afterCursorValues)
+	return r.GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{}, sort, limit, afterCursorValues)
 }
 
 // GetByCollectionSortedWithKeysetCursorAndExternalLabels retrieves records for a
-// collection with JSON field filters, DID filters, external-label filters, a
-// configurable sort order, and keyset-based pagination.
+// collection with JSON field filters, DID filters, record-level external-label
+// filters, a configurable sort order, and keyset-based pagination.
 func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursorAndExternalLabels(
 	ctx context.Context,
 	collection string,
 	filters []FieldFilter,
 	didFilter DIDFilter,
 	externalLabelFilter ExternalLabelRecordFilter,
+	sort *SortOption,
+	limit int,
+	afterCursorValues []string,
+) ([]*Record, error) {
+	return r.GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{Record: externalLabelFilter}, sort, limit, afterCursorValues)
+}
+
+// GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters retrieves records
+// for a collection with JSON field filters, DID filters, record-level and
+// author-level external-label filters, a configurable sort order, and
+// keyset-based pagination.
+func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
 	sort *SortOption,
 	limit int,
 	afterCursorValues []string,
@@ -1352,7 +1440,7 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursorAndExternalLabe
 	}
 
 	// External label filters
-	if labelClause, labelParams, err := r.buildExternalLabelRecordFilterClause(externalLabelFilter, nextPlaceholder); err != nil {
+	if labelClause, labelParams, err := r.buildExternalLabelFilterSetClause(externalLabelFilters, nextPlaceholder); err != nil {
 		return nil, fmt.Errorf("failed to build external label filter clause: %w", err)
 	} else if labelClause != "" {
 		whereParts = append(whereParts, labelClause)
@@ -1400,18 +1488,35 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	limit int,
 	beforeCursorValues []string,
 ) ([]*Record, error) {
-	return r.GetByCollectionReversedWithKeysetCursorAndExternalLabels(ctx, collection, filters, didFilter, ExternalLabelRecordFilter{}, sort, limit, beforeCursorValues)
+	return r.GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{}, sort, limit, beforeCursorValues)
 }
 
 // GetByCollectionReversedWithKeysetCursorAndExternalLabels retrieves records for
-// backward pagination while applying JSON field, DID, and external-label filters
-// before LIMIT so Relay pagination stays correct.
+// backward pagination while applying JSON field, DID, and record-level
+// external-label filters before LIMIT so Relay pagination stays correct.
 func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursorAndExternalLabels(
 	ctx context.Context,
 	collection string,
 	filters []FieldFilter,
 	didFilter DIDFilter,
 	externalLabelFilter ExternalLabelRecordFilter,
+	sort *SortOption,
+	limit int,
+	beforeCursorValues []string,
+) ([]*Record, error) {
+	return r.GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{Record: externalLabelFilter}, sort, limit, beforeCursorValues)
+}
+
+// GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters retrieves
+// records for backward pagination while applying JSON field, DID, record-level,
+// and author-level external-label filters before LIMIT so Relay pagination stays
+// correct.
+func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
 	sort *SortOption,
 	limit int,
 	beforeCursorValues []string,
@@ -1496,7 +1601,7 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursorAndExternalLa
 	}
 
 	// External label filters
-	if labelClause, labelParams, err := r.buildExternalLabelRecordFilterClause(externalLabelFilter, nextPlaceholder); err != nil {
+	if labelClause, labelParams, err := r.buildExternalLabelFilterSetClause(externalLabelFilters, nextPlaceholder); err != nil {
 		return nil, fmt.Errorf("failed to build external label filter clause: %w", err)
 	} else if labelClause != "" {
 		whereParts = append(whereParts, labelClause)
@@ -1617,17 +1722,30 @@ func (r *RecordsRepository) GetCountByDID(ctx context.Context, did string) (int6
 func (r *RecordsRepository) GetCollectionCountFiltered(
 	ctx context.Context, collection string, filters []FieldFilter, didFilter DIDFilter,
 ) (int64, error) {
-	return r.GetCollectionCountFilteredWithExternalLabels(ctx, collection, filters, didFilter, ExternalLabelRecordFilter{})
+	return r.GetCollectionCountFilteredWithExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{})
 }
 
 // GetCollectionCountFilteredWithExternalLabels returns the count with optional
-// DID, JSON field, and external-label filters applied.
+// DID, JSON field, and record-level external-label filters applied.
 func (r *RecordsRepository) GetCollectionCountFilteredWithExternalLabels(
 	ctx context.Context,
 	collection string,
 	filters []FieldFilter,
 	didFilter DIDFilter,
 	externalLabelFilter ExternalLabelRecordFilter,
+) (int64, error) {
+	return r.GetCollectionCountFilteredWithExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{Record: externalLabelFilter})
+}
+
+// GetCollectionCountFilteredWithExternalLabelFilters returns the count with
+// optional DID, JSON field, record-level external-label, and author-level
+// external-label filters applied.
+func (r *RecordsRepository) GetCollectionCountFilteredWithExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
 ) (int64, error) {
 	var whereParts []string
 	var params []database.Value
@@ -1658,7 +1776,7 @@ func (r *RecordsRepository) GetCollectionCountFilteredWithExternalLabels(
 	}
 
 	// External label filters
-	if labelClause, labelParams, err := r.buildExternalLabelRecordFilterClause(externalLabelFilter, nextPlaceholder); err != nil {
+	if labelClause, labelParams, err := r.buildExternalLabelFilterSetClause(externalLabelFilters, nextPlaceholder); err != nil {
 		return 0, fmt.Errorf("failed to build external label filter clause: %w", err)
 	} else if labelClause != "" {
 		whereParts = append(whereParts, labelClause)

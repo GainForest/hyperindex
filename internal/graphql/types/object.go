@@ -19,6 +19,7 @@ var ReservedRecordFields = map[string]bool{
 	"did":                  true,
 	"rkey":                 true,
 	"externalLabels":       true,
+	"authorLabels":         true,
 	"certifiedProfileData": true,
 }
 

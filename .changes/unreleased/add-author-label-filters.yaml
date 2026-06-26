@@ -1,0 +1,4 @@
+kind: added
+body: Add GraphQL `authorLabels` filters so record connections can include or exclude records by labels attached to the author's DID before pagination and counts are calculated.
+custom:
+  Affects: user

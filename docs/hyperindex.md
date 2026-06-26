@@ -183,6 +183,56 @@ where: { badgeType: { eq: "endorsement" } }
 
 `badgeType` uses `StringFilterInput`, so it supports the same string operators exposed for badge definitions. Awards whose referenced badge definition is missing or has no `badgeType` do not match positive value filters.
 
+## External and author label filters
+
+Hyperindex can filter typed record connections by locally ingested external ATProto labels before pagination and `totalCount` are calculated.
+
+Use `where.externalLabels` when the label subject is the record AT-URI:
+
+```graphql
+where: {
+  externalLabels: {
+    has: {
+      src: { eq: "did:plc:labeler" }
+      val: { eq: "high-quality" }
+      activeOnly: true
+    }
+  }
+}
+```
+
+Use `where.authorLabels` when the label subject is the record author's account DID:
+
+```graphql
+where: {
+  authorLabels: {
+    none: {
+      src: { eq: "did:plc:pswneepkd5lesumj7ejmkbal" }
+      val: { eq: "likely-test" }
+      activeOnly: true
+    }
+  }
+}
+```
+
+`authorLabels` only matches DID-subject labels such as `uri: "did:plc:..."` with no CID. It does not infer account labels from profile or organization records. Unlabeled authors pass `none` predicates and fail `has` predicates.
+
+To require certified authors, use `has` with multiple values:
+
+```graphql
+where: {
+  authorLabels: {
+    has: {
+      src: { eq: "did:plc:pswneepkd5lesumj7ejmkbal" }
+      val: { in: ["standard", "high-quality"] }
+      activeOnly: true
+    }
+  }
+}
+```
+
+There is no node-level `authorLabels` field. To display account labels for known DIDs, use the root `externalLabels(subjects: [...])` query with those DID subjects.
+
 ## Quickstart
 
 Send a POST request with a GraphQL query and optional variables.

@@ -1,0 +1,1019 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hyperindex Author Labels Architecture</title>
+  <style>
+    :root {
+      --ink: #10130f;
+      --paper: #f5f0df;
+      --paper-2: #ebe2c7;
+      --grid: rgba(16, 19, 15, 0.08);
+      --moss: #284533;
+      --moss-2: #496c45;
+      --lichen: #b8d66f;
+      --acid: #dfff4f;
+      --clay: #c95c3f;
+      --rust: #8f321f;
+      --blue: #2b6684;
+      --shadow: rgba(16, 19, 15, 0.22);
+      --line: rgba(16, 19, 15, 0.18);
+      --mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", monospace;
+      --serif: Iowan Old Style, Palatino, Palatino Linotype, Georgia, serif;
+      --sans: Avenir Next, Segoe UI, Helvetica Neue, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      min-height: 100%;
+      background:
+        radial-gradient(circle at 12% 14%, rgba(223, 255, 79, 0.28), transparent 28rem),
+        radial-gradient(circle at 86% 16%, rgba(201, 92, 63, 0.22), transparent 24rem),
+        linear-gradient(135deg, #f9f2dc 0%, #eee3c0 48%, #d9cfaa 100%);
+    }
+
+    body {
+      margin: 0;
+      min-height: 100%;
+      color: var(--ink);
+      font-family: var(--sans);
+      background-image:
+        linear-gradient(var(--grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+      background-size: 34px 34px;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.18;
+      mix-blend-mode: multiply;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
+    }
+
+    a { color: inherit; }
+
+    .page {
+      width: min(1440px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }
+
+    .hero {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+      gap: 24px;
+      align-items: stretch;
+      margin-bottom: 24px;
+    }
+
+    .hero-title {
+      position: relative;
+      overflow: hidden;
+      min-height: 310px;
+      padding: 28px;
+      border: 2px solid var(--ink);
+      border-radius: 26px;
+      background:
+        linear-gradient(160deg, rgba(255,255,255,0.28), rgba(245,240,223,0.72)),
+        repeating-linear-gradient(-18deg, rgba(16,19,15,0.06), rgba(16,19,15,0.06) 1px, transparent 1px, transparent 14px);
+      box-shadow: 10px 10px 0 var(--moss);
+    }
+
+    .hero-title::after {
+      content: "AUTHOR\A LABELS";
+      white-space: pre;
+      position: absolute;
+      right: -14px;
+      bottom: -18px;
+      font-family: var(--mono);
+      font-size: clamp(54px, 11vw, 150px);
+      font-weight: 900;
+      letter-spacing: -0.12em;
+      line-height: 0.74;
+      color: rgba(16, 19, 15, 0.055);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 10px;
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      background: var(--acid);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      position: relative;
+      max-width: 880px;
+      margin: 22px 0 14px;
+      font-family: var(--serif);
+      font-size: clamp(44px, 7vw, 98px);
+      line-height: 0.88;
+      letter-spacing: -0.055em;
+      z-index: 1;
+    }
+
+    .hero-title p {
+      position: relative;
+      max-width: 690px;
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.55;
+      z-index: 1;
+    }
+
+    .hero-card {
+      padding: 22px;
+      border: 2px solid var(--ink);
+      border-radius: 26px;
+      background: var(--moss);
+      color: var(--paper);
+      box-shadow: 10px 10px 0 var(--clay);
+    }
+
+    .hero-card h2 {
+      margin: 0 0 14px;
+      font-family: var(--serif);
+      font-size: 30px;
+      letter-spacing: -0.03em;
+    }
+
+    .legend {
+      display: grid;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .legend-row {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 10px;
+      align-items: start;
+      font-size: 14px;
+      line-height: 1.35;
+      color: rgba(245,240,223,0.88);
+    }
+
+    .dot {
+      width: 16px;
+      height: 16px;
+      margin-top: 1px;
+      border: 1.5px solid var(--paper);
+      border-radius: 999px;
+      background: var(--acid);
+    }
+
+    .dot.record { background: var(--clay); }
+    .dot.author { background: var(--lichen); }
+    .dot.table { background: var(--blue); }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      gap: 20px;
+      align-items: start;
+    }
+
+    .panel {
+      border: 2px solid var(--ink);
+      border-radius: 24px;
+      background: rgba(245, 240, 223, 0.86);
+      box-shadow: 7px 7px 0 rgba(16,19,15,0.18);
+      backdrop-filter: blur(6px);
+    }
+
+    .controls {
+      position: sticky;
+      top: 18px;
+      padding: 18px;
+    }
+
+    .controls h2,
+    .stage h2,
+    .simulation h2 {
+      margin: 0 0 12px;
+      font-family: var(--serif);
+      font-size: 28px;
+      letter-spacing: -0.035em;
+    }
+
+    .control-group {
+      padding: 14px 0;
+      border-top: 1.5px solid var(--line);
+    }
+
+    .control-group:first-of-type { border-top: 0; padding-top: 0; }
+
+    .control-label {
+      display: block;
+      margin-bottom: 9px;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .segmented {
+      display: grid;
+      gap: 8px;
+    }
+
+    button,
+    select {
+      font: inherit;
+    }
+
+    .segmented button,
+    .step-button,
+    .scenario-button {
+      cursor: pointer;
+      width: 100%;
+      padding: 10px 12px;
+      border: 1.5px solid var(--ink);
+      border-radius: 14px;
+      background: var(--paper);
+      color: var(--ink);
+      text-align: left;
+      transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
+    }
+
+    .segmented button:hover,
+    .step-button:hover,
+    .scenario-button:hover {
+      transform: translate(-2px, -2px);
+      box-shadow: 4px 4px 0 var(--ink);
+    }
+
+    .segmented button.active,
+    .step-button.active,
+    .scenario-button.active {
+      background: var(--acid);
+      box-shadow: 4px 4px 0 var(--ink);
+      transform: translate(-2px, -2px);
+    }
+
+    .scenario-button {
+      display: grid;
+      gap: 4px;
+    }
+
+    .scenario-button strong {
+      font-size: 14px;
+    }
+
+    .scenario-button span {
+      font-family: var(--mono);
+      font-size: 11px;
+      opacity: 0.76;
+    }
+
+    .toggle {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+    }
+
+    .toggle input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--moss);
+    }
+
+    .main-stack {
+      display: grid;
+      gap: 20px;
+    }
+
+    .stage {
+      overflow: hidden;
+    }
+
+    .stage-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: start;
+      padding: 18px 18px 0;
+    }
+
+    .stage-head p {
+      max-width: 620px;
+      margin: 2px 0 0;
+      line-height: 1.45;
+    }
+
+    .canvas {
+      position: relative;
+      min-height: 520px;
+      margin: 18px;
+      border: 1.5px solid var(--line);
+      border-radius: 20px;
+      background:
+        radial-gradient(circle at 50% 50%, rgba(223,255,79,0.22), transparent 19rem),
+        linear-gradient(180deg, rgba(255,255,255,0.26), rgba(255,255,255,0.04));
+      overflow: hidden;
+    }
+
+    .canvas svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .wire {
+      stroke: rgba(16,19,15,0.24);
+      stroke-width: 2.5;
+      fill: none;
+      stroke-linecap: round;
+      stroke-dasharray: 7 9;
+      animation: drift 1.9s linear infinite;
+    }
+
+    .wire.hot-record { stroke: var(--clay); stroke-width: 4; }
+    .wire.hot-author { stroke: var(--moss); stroke-width: 4; }
+    .wire.hot-both { stroke: var(--blue); stroke-width: 4; }
+
+    @keyframes drift { to { stroke-dashoffset: -32; } }
+
+    .node {
+      position: absolute;
+      border: 2px solid var(--ink);
+      border-radius: 22px;
+      background: var(--paper);
+      box-shadow: 7px 7px 0 rgba(16,19,15,0.22);
+      transition: transform 220ms ease, box-shadow 220ms ease, background 220ms ease;
+    }
+
+    .node.hot {
+      transform: translate(-4px, -4px) rotate(-0.6deg);
+      box-shadow: 11px 11px 0 var(--ink);
+      background: var(--acid);
+    }
+
+    .node h3 {
+      margin: 0;
+      padding: 12px 14px 8px;
+      font-family: var(--serif);
+      font-size: 22px;
+      letter-spacing: -0.03em;
+    }
+
+    .node code {
+      display: block;
+      margin: 0 14px 14px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .node-labeler { left: 36px; top: 42px; width: 238px; }
+    .node-labels { left: calc(50% - 145px); top: 64px; width: 290px; background: #d8e8c0; }
+    .node-record { right: 42px; top: 54px; width: 258px; background: #f1d0bd; }
+    .node-query { left: 60px; bottom: 54px; width: 316px; background: #e3eef1; }
+    .node-sql { right: 54px; bottom: 46px; width: 394px; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      background: var(--paper);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .sql-box {
+      margin: 0 14px 14px;
+      padding: 13px;
+      border: 1.5px solid var(--ink);
+      border-radius: 14px;
+      background: #11150f;
+      color: #dff4b4;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .step-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      padding: 0 18px 18px;
+    }
+
+    .step-button {
+      min-height: 72px;
+      background: rgba(245,240,223,0.92);
+    }
+
+    .step-button strong {
+      display: block;
+      margin-bottom: 5px;
+      font-family: var(--mono);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .step-button span {
+      font-size: 13px;
+      line-height: 1.25;
+    }
+
+    .simulation {
+      padding: 18px;
+    }
+
+    .sim-top {
+      display: flex;
+      gap: 16px;
+      justify-content: space-between;
+      align-items: start;
+      margin-bottom: 12px;
+    }
+
+    .sim-summary {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      padding: 7px 10px;
+      border: 1.5px solid var(--ink);
+      border-radius: 999px;
+      background: var(--paper);
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .pill.good { background: #d8e8c0; }
+    .pill.bad { background: #f0b7a5; }
+
+    .records {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .record-card {
+      position: relative;
+      min-height: 180px;
+      padding: 14px;
+      border: 1.5px solid var(--ink);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.28);
+      overflow: hidden;
+      transition: transform 180ms ease, opacity 180ms ease, background 180ms ease;
+    }
+
+    .record-card.included {
+      background: #eff8ce;
+      transform: translateY(-3px);
+    }
+
+    .record-card.excluded {
+      opacity: 0.48;
+      background: #efd0c4;
+    }
+
+    .record-card h3 {
+      margin: 0 0 8px;
+      font-family: var(--serif);
+      font-size: 22px;
+      letter-spacing: -0.03em;
+    }
+
+    .record-card dl {
+      margin: 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .record-card dt {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .record-card dd {
+      margin: 2px 0 0;
+      font-family: var(--mono);
+      font-size: 11px;
+      word-break: break-word;
+    }
+
+    .status-ribbon {
+      position: absolute;
+      right: -36px;
+      top: 16px;
+      width: 130px;
+      padding: 5px;
+      transform: rotate(34deg);
+      border: 1.5px solid var(--ink);
+      background: var(--acid);
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 900;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .record-card.excluded .status-ribbon { background: var(--clay); color: white; }
+
+    .code-panel {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .code-card {
+      padding: 18px;
+    }
+
+    .code-card h2 {
+      margin: 0 0 12px;
+      font-family: var(--serif);
+      font-size: 26px;
+      letter-spacing: -0.03em;
+    }
+
+    pre {
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      border: 1.5px solid var(--ink);
+      border-radius: 16px;
+      background: #11150f;
+      color: #e3f4ba;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+    }
+
+    .note {
+      margin: 14px 0 0;
+      padding: 12px;
+      border: 1.5px dashed var(--ink);
+      border-radius: 14px;
+      background: rgba(223,255,79,0.22);
+      line-height: 1.45;
+    }
+
+    @media (max-width: 1080px) {
+      .hero,
+      .workspace,
+      .code-panel { grid-template-columns: 1fr; }
+      .controls { position: static; }
+      .records { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .step-strip { grid-template-columns: repeat(2, 1fr); }
+      .canvas { min-height: 720px; }
+      .node-labeler { left: 24px; top: 28px; }
+      .node-labels { left: 24px; top: 210px; }
+      .node-record { right: 24px; top: 210px; }
+      .node-query { left: 24px; bottom: 258px; }
+      .node-sql { right: 24px; bottom: 28px; width: min(394px, calc(100% - 48px)); }
+    }
+
+    @media (max-width: 680px) {
+      .page { width: min(100vw - 18px, 1440px); padding-top: 12px; }
+      .hero-title,
+      .hero-card,
+      .panel { border-radius: 18px; box-shadow: 5px 5px 0 rgba(16,19,15,0.28); }
+      .records { grid-template-columns: 1fr; }
+      .step-strip { grid-template-columns: 1fr; }
+      .stage-head,
+      .sim-top { flex-direction: column; }
+      .node { position: relative; inset: auto !important; width: auto !important; margin: 14px; }
+      .canvas { min-height: 0; padding: 6px 0; }
+      .canvas svg { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-title">
+        <span class="eyebrow">Issue #92 · GraphQL filter architecture</span>
+        <h1 id="page-title">Labels on the author, not the artifact.</h1>
+        <p>
+          `externalLabels` asks whether the record URI was labeled. `authorLabels` asks whether the record author's DID was labeled. Same label table, same predicate shape, different subject binding.
+        </p>
+      </div>
+      <aside class="hero-card" aria-label="Core distinction">
+        <h2>The split</h2>
+        <div class="legend">
+          <div class="legend-row"><span class="dot record"></span><span><strong>Record labels</strong> target `at://did/collection/rkey` and answer “is this exact record labeled?”</span></div>
+          <div class="legend-row"><span class="dot author"></span><span><strong>Author labels</strong> target `did:...` and answer “is this author account labeled?”</span></div>
+          <div class="legend-row"><span class="dot table"></span><span><strong>Storage stays shared</strong>: both subjects live in `external_label.uri`.</span></div>
+        </div>
+        <p class="note">The orglabeler can listen to profile/org records as scoring inputs while emitting labels on the DID.</p>
+      </aside>
+    </section>
+
+    <section class="workspace">
+      <aside class="panel controls" aria-label="Interactive controls">
+        <h2>Explore</h2>
+
+        <div class="control-group">
+          <span class="control-label">Subject binding</span>
+          <div class="segmented" role="group" aria-label="Choose label subject binding">
+            <button type="button" data-mode="record">externalLabels<br><small>bind to record.uri</small></button>
+            <button type="button" data-mode="author" class="active">authorLabels<br><small>bind to record.did</small></button>
+            <button type="button" data-mode="both">both filters<br><small>AND semantics</small></button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <span class="control-label">Certified-app scenario</span>
+          <div class="segmented" role="group" aria-label="Choose scenario">
+            <button type="button" class="scenario-button active" data-scenario="exclude-test"><strong>Public feed</strong><span>exclude likely-test authors</span></button>
+            <button type="button" class="scenario-button" data-scenario="require-quality"><strong>Curated feed</strong><span>require standard/high-quality authors</span></button>
+            <button type="button" class="scenario-button" data-scenario="record-and-author"><strong>Verified record + safe author</strong><span>record label AND author label</span></button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label class="toggle">
+            <input id="activeOnly" type="checkbox" checked />
+            activeOnly: true
+          </label>
+        </div>
+      </aside>
+
+      <div class="main-stack">
+        <section class="panel stage" aria-labelledby="architecture-title">
+          <div class="stage-head">
+            <div>
+              <h2 id="architecture-title">Architecture path</h2>
+              <p id="mode-copy">Author labels bind each record row to labels on `record.did`.</p>
+            </div>
+            <span class="badge" id="binding-badge">authorLabels → record.did</span>
+          </div>
+
+          <div class="canvas" aria-label="Architecture diagram">
+            <svg viewBox="0 0 1000 520" preserveAspectRatio="none" aria-hidden="true">
+              <path id="wire-labeler-labels" class="wire hot-author" d="M 170 110 C 290 70, 350 80, 470 130" />
+              <path id="wire-labels-record" class="wire" d="M 590 138 C 690 70, 760 80, 850 135" />
+              <path id="wire-record-query" class="wire hot-author" d="M 810 245 C 690 340, 580 330, 420 400" />
+              <path id="wire-query-sql" class="wire hot-author" d="M 360 420 C 480 470, 620 470, 760 410" />
+            </svg>
+
+            <article class="node node-labeler hot" data-node="labeler">
+              <h3>Orglabeler</h3>
+              <code>listens to:
+app.certified.actor.profile
+app.certified.actor.organization
+
+emits:
+uri = "did:plc:author"</code>
+            </article>
+
+            <article class="node node-labels hot" data-node="labels">
+              <h3>external_label</h3>
+              <code>src | uri | cid | val | neg | cts
+----+-----+-----+-----+-----+----
+org | did | ∅   | likely-test</code>
+            </article>
+
+            <article class="node node-record hot" data-node="record">
+              <h3>record row</h3>
+              <code>uri = at://did/.../rkey
+did = did:plc:author
+cid = bafy...</code>
+            </article>
+
+            <article class="node node-query hot" data-node="query">
+              <h3>GraphQL</h3>
+              <code id="graphql-mini">where: {
+  authorLabels: {
+    none: { val: { eq: "likely-test" } }
+  }
+}</code>
+            </article>
+
+            <article class="node node-sql hot" data-node="sql">
+              <h3>SQL binding</h3>
+              <div class="sql-box" id="sql-mini">el.uri = record.did
+AND el.cid IS NULL</div>
+            </article>
+          </div>
+
+          <div class="step-strip" role="group" aria-label="Pipeline steps">
+            <button type="button" class="step-button active" data-step="0"><strong>1 · ingest</strong><span>External labels land in one raw table.</span></button>
+            <button type="button" class="step-button" data-step="1"><strong>2 · bind</strong><span>GraphQL field picks the subject column.</span></button>
+            <button type="button" class="step-button" data-step="2"><strong>3 · filter</strong><span>EXISTS / NOT EXISTS runs before pagination.</span></button>
+            <button type="button" class="step-button" data-step="3"><strong>4 · count</strong><span>Total count uses the same predicate.</span></button>
+          </div>
+        </section>
+
+        <section class="panel simulation" aria-labelledby="simulation-title">
+          <div class="sim-top">
+            <div>
+              <h2 id="simulation-title">Filtering simulation</h2>
+              <p id="scenario-copy">Public feed mode excludes authors with active `likely-test` DID labels. Unlabeled authors still pass.</p>
+            </div>
+            <div class="sim-summary" aria-live="polite">
+              <span class="pill good" id="included-count">0 included</span>
+              <span class="pill bad" id="excluded-count">0 excluded</span>
+            </div>
+          </div>
+          <div class="records" id="records"></div>
+        </section>
+
+        <section class="code-panel">
+          <article class="panel code-card">
+            <h2>GraphQL shape</h2>
+            <pre id="graphql-code"></pre>
+          </article>
+          <article class="panel code-card">
+            <h2>Repository predicate</h2>
+            <pre id="sql-code"></pre>
+          </article>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      mode: 'author',
+      scenario: 'exclude-test',
+      activeOnly: true,
+      step: 0,
+    }
+
+    const records = [
+      {
+        name: 'Forest recovery claim',
+        uri: 'at://did:plc:alice/org.hypercerts.claim.activity/one',
+        did: 'did:plc:alice',
+        recordLabels: ['verified-impact'],
+        authorLabels: ['high-quality'],
+      },
+      {
+        name: 'Sandbox tree demo',
+        uri: 'at://did:plc:bob/org.hypercerts.claim.activity/two',
+        did: 'did:plc:bob',
+        recordLabels: [],
+        authorLabels: ['likely-test'],
+      },
+      {
+        name: 'Water stewardship note',
+        uri: 'at://did:plc:cara/org.hypercerts.claim.activity/three',
+        did: 'did:plc:cara',
+        recordLabels: [],
+        authorLabels: [],
+      },
+      {
+        name: 'Wetland verification',
+        uri: 'at://did:plc:dawa/org.hypercerts.claim.activity/four',
+        did: 'did:plc:dawa',
+        recordLabels: ['verified-impact'],
+        authorLabels: ['standard'],
+      },
+    ]
+
+    const modeText = {
+      record: {
+        copy: 'Record labels bind each record row to labels on `record.uri` and optional `record.cid`.',
+        badge: 'externalLabels → record.uri',
+        sqlMini: 'el.uri = record.uri\nAND (el.cid IS NULL OR el.cid = record.cid)',
+      },
+      author: {
+        copy: 'Author labels bind each record row to labels on `record.did` only. No profile/org exception needed.',
+        badge: 'authorLabels → record.did',
+        sqlMini: 'el.uri = record.did\nAND el.cid IS NULL',
+      },
+      both: {
+        copy: 'Record labels and author labels can be combined. Both predicates must pass before pagination.',
+        badge: 'externalLabels AND authorLabels',
+        sqlMini: 'record label EXISTS(...)\nAND author label NOT EXISTS(...)',
+      },
+    }
+
+    const scenarios = {
+      'exclude-test': {
+        copy: 'Public feed mode excludes authors with active `likely-test` DID labels. Unlabeled authors still pass.',
+        graphql: `where: {
+  authorLabels: {
+    none: {
+      src: { eq: $orglabeler }
+      val: { eq: "likely-test" }
+      activeOnly: ACTIVE_ONLY
+    }
+  }
+}`,
+        sql: `NOT EXISTS (
+  SELECT 1
+  FROM external_label el_author_none
+  WHERE el_author_none.uri = record.did
+    AND el_author_none.cid IS NULL
+    AND el_author_none.src = $orglabeler
+    AND el_author_none.val = 'likely-test'
+    AND ACTIVE_LABEL(el_author_none)
+)`,
+        include(record) {
+          return !record.authorLabels.includes('likely-test')
+        },
+      },
+      'require-quality': {
+        copy: 'Curated mode requires an active `standard` or `high-quality` account label. Unlabeled authors do not pass.',
+        graphql: `where: {
+  authorLabels: {
+    has: {
+      src: { eq: $orglabeler }
+      val: { in: ["standard", "high-quality"] }
+      activeOnly: ACTIVE_ONLY
+    }
+  }
+}`,
+        sql: `EXISTS (
+  SELECT 1
+  FROM external_label el_author_has
+  WHERE el_author_has.uri = record.did
+    AND el_author_has.cid IS NULL
+    AND el_author_has.src = $orglabeler
+    AND el_author_has.val IN ('standard', 'high-quality')
+    AND ACTIVE_LABEL(el_author_has)
+)`,
+        include(record) {
+          return record.authorLabels.includes('standard') || record.authorLabels.includes('high-quality')
+        },
+      },
+      'record-and-author': {
+        copy: 'Combined mode requires a label on the record and excludes likely-test authors. These are separate subject bindings.',
+        graphql: `where: {
+  externalLabels: {
+    has: {
+      src: { eq: $activityLabeler }
+      val: { eq: "verified-impact" }
+      activeOnly: ACTIVE_ONLY
+    }
+  }
+  authorLabels: {
+    none: {
+      src: { eq: $orglabeler }
+      val: { eq: "likely-test" }
+      activeOnly: ACTIVE_ONLY
+    }
+  }
+}`,
+        sql: `EXISTS (
+  SELECT 1 FROM external_label el_record_has
+  WHERE el_record_has.uri = record.uri
+    AND (el_record_has.cid IS NULL OR el_record_has.cid = record.cid)
+    AND el_record_has.val = 'verified-impact'
+    AND ACTIVE_LABEL(el_record_has)
+)
+AND NOT EXISTS (
+  SELECT 1 FROM external_label el_author_none
+  WHERE el_author_none.uri = record.did
+    AND el_author_none.cid IS NULL
+    AND el_author_none.val = 'likely-test'
+    AND ACTIVE_LABEL(el_author_none)
+)`,
+        include(record) {
+          return record.recordLabels.includes('verified-impact') && !record.authorLabels.includes('likely-test')
+        },
+      },
+    }
+
+    const stepHighlights = [
+      ['labeler', 'labels'],
+      ['query', 'record', 'sql'],
+      ['sql', 'record'],
+      ['query', 'sql'],
+    ]
+
+    function activeLabelText(text) {
+      return text.replaceAll('ACTIVE_ONLY', state.activeOnly ? 'true' : 'false')
+    }
+
+    function render() {
+      document.querySelectorAll('[data-mode]').forEach(button => {
+        button.classList.toggle('active', button.dataset.mode === state.mode)
+      })
+      document.querySelectorAll('[data-scenario]').forEach(button => {
+        button.classList.toggle('active', button.dataset.scenario === state.scenario)
+      })
+      document.querySelectorAll('[data-step]').forEach(button => {
+        button.classList.toggle('active', Number(button.dataset.step) === state.step)
+      })
+
+      const mode = modeText[state.mode]
+      const scenario = scenarios[state.scenario]
+
+      document.getElementById('mode-copy').textContent = mode.copy
+      document.getElementById('binding-badge').textContent = mode.badge
+      document.getElementById('sql-mini').textContent = mode.sqlMini
+      document.getElementById('scenario-copy').textContent = scenario.copy
+
+      const mini = state.mode === 'record'
+        ? `where: {\n  externalLabels: {\n    has: { val: { eq: "verified-impact" } }\n  }\n}`
+        : state.mode === 'both'
+          ? `where: {\n  externalLabels: { has: ... }\n  authorLabels: { none: ... }\n}`
+          : `where: {\n  authorLabels: {\n    none: { val: { eq: "likely-test" } }\n  }\n}`
+      document.getElementById('graphql-mini').textContent = mini
+
+      document.getElementById('graphql-code').textContent = activeLabelText(scenario.graphql)
+      document.getElementById('sql-code').textContent = activeLabelText(scenario.sql)
+
+      document.querySelectorAll('.wire').forEach(wire => {
+        wire.classList.remove('hot-record', 'hot-author', 'hot-both')
+        wire.classList.add(state.mode === 'record' ? 'hot-record' : state.mode === 'both' ? 'hot-both' : 'hot-author')
+      })
+
+      const hotNodes = stepHighlights[state.step]
+      document.querySelectorAll('[data-node]').forEach(node => {
+        node.classList.toggle('hot', hotNodes.includes(node.dataset.node))
+      })
+
+      const recordRoot = document.getElementById('records')
+      recordRoot.innerHTML = ''
+      let included = 0
+      let excluded = 0
+
+      for (const record of records) {
+        const isIncluded = scenario.include(record)
+        if (isIncluded) included++
+        else excluded++
+
+        const card = document.createElement('article')
+        card.className = `record-card ${isIncluded ? 'included' : 'excluded'}`
+        card.innerHTML = `
+          <div class="status-ribbon">${isIncluded ? 'included' : 'excluded'}</div>
+          <h3>${record.name}</h3>
+          <dl>
+            <div><dt>author DID</dt><dd>${record.did}</dd></div>
+            <div><dt>record labels</dt><dd>${record.recordLabels.length ? record.recordLabels.join(', ') : 'none'}</dd></div>
+            <div><dt>author labels</dt><dd>${record.authorLabels.length ? record.authorLabels.join(', ') : 'none'}</dd></div>
+          </dl>
+        `
+        recordRoot.appendChild(card)
+      }
+
+      document.getElementById('included-count').textContent = `${included} included`
+      document.getElementById('excluded-count').textContent = `${excluded} excluded`
+    }
+
+    document.querySelectorAll('[data-mode]').forEach(button => {
+      button.addEventListener('click', () => {
+        state.mode = button.dataset.mode
+        if (state.mode === 'record') state.scenario = 'record-and-author'
+        render()
+      })
+    })
+
+    document.querySelectorAll('[data-scenario]').forEach(button => {
+      button.addEventListener('click', () => {
+        state.scenario = button.dataset.scenario
+        if (state.scenario === 'record-and-author') state.mode = 'both'
+        else if (state.mode === 'record') state.mode = 'author'
+        render()
+      })
+    })
+
+    document.querySelectorAll('[data-step]').forEach(button => {
+      button.addEventListener('click', () => {
+        state.step = Number(button.dataset.step)
+        render()
+      })
+    })
+
+    document.getElementById('activeOnly').addEventListener('change', event => {
+      state.activeOnly = event.target.checked
+      render()
+    })
+
+    render()
+  </script>
+</body>
+</html>
