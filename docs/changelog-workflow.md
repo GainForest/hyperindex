@@ -144,15 +144,15 @@ Use these fragment kinds:
 
 ## Maintainer release workflow
 
-Use two separate manual workflows:
+Run one manual workflow to prepare the release notes PR. After review, merging that PR publishes the release automatically.
 
-- **Prepare release notes PR**
-- **Publish release tag and GitHub Release**
+The **Publish release tag and GitHub Release** workflow remains manually dispatchable from `main` as a fallback when a prepared release file already exists but the automatic publish did not run or did not complete.
 
 ### Decision rule
 
 - If no versioned release file exists yet and `.changes/unreleased/*.yaml` fragments exist, run **Prepare release notes PR**.
-- If a versioned `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` file already exists, run **Publish release tag and GitHub Release**. New unreleased fragments for the next cycle do not block publishing the prepared version.
+- Merge the generated `release/changelog` PR after reviewing the changelog. The release publishes automatically only when the merged PR targets `main`, comes from the same-repository `release/changelog` branch, and has the `release` label.
+- If a versioned `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` file already exists and the automatic publish needs to be retried, run **Publish release tag and GitHub Release** manually from `main`. New unreleased fragments for the next cycle do not block publishing the prepared version.
 
 ### 1. Prepare release notes PR
 
@@ -179,12 +179,12 @@ Use two separate manual workflows:
    ```
 
 7. If Changie does not produce any release diff in `CHANGELOG.md` or `.changes`, the workflow fails.
-8. Otherwise, the workflow creates or updates a PR from `release/changelog` back into `main`.
-9. Inspect the generated changelog diff in that PR before merging.
+8. Otherwise, the workflow ensures the `release` label exists and creates or updates a labeled PR from `release/changelog` back into `main`.
+9. Inspect the generated changelog diff in that PR before merging. Merging this labeled `release/changelog` PR automatically starts publishing.
 
 ### 2. Publish release tag and GitHub Release
 
-1. After the release PR is merged, run **Publish release tag and GitHub Release** from `main`.
+1. The workflow runs automatically after the labeled same-repository `release/changelog` PR is merged into `main`, or manually from `main` as a fallback.
 2. The workflow requires a prepared release file:
 
    - a generated `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` release file must exist
@@ -204,7 +204,7 @@ Use two separate manual workflows:
 
 The release workflows use `RELEASE_BOT_TOKEN || GITHUB_TOKEN`.
 
-- **Prepare release notes PR** needs permission to push branch updates and open or update pull requests.
+- **Prepare release notes PR** needs permission to push branch updates, open or update pull requests, and apply the `release` label.
 - **Publish release tag and GitHub Release** needs permission to push tags and create GitHub Releases.
 - If repository settings limit the default `GITHUB_TOKEN`, configure `RELEASE_BOT_TOKEN` with the required write access.
 - Treat `RELEASE_BOT_TOKEN` as a privileged credential. Prefer a fine-grained, repository-scoped token with only the access needed for release branch updates, tag pushes, and GitHub Release creation.
@@ -213,7 +213,7 @@ The publish workflow runs build and test checks in a read-only verification job 
 
 Workflow permissions are intentionally minimal:
 
-- prepare: `contents: write`, `pull-requests: write`
+- prepare: `contents: write`, `issues: write`, `pull-requests: write`
 - publish verification: `contents: read`
 - publish finalization: `contents: write`
 

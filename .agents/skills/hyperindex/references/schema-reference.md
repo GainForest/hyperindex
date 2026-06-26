@@ -85,6 +85,8 @@ Typed list queries accept Relay-style pagination arguments (`first`, `after`, `l
 
 Scalar field filters support value comparisons. Generated typed `where` inputs also include a metadata-level `uri: URIFilterInput` field so clients can filter by exact AT-URI or batch hydrate records by URI without querying JSON payload fields. Complex fields expose `isNull` presence checks. Arrays, refs, and unions may also expose generated nested filters up to three lexicon path segments deep; nested scalar leaves use exact filters (`eq`, `in`, `isNull`) and array filters use `any`. Multiple predicates inside the same array `any` must match the same array item. Nested array fields inside an existing `any` scope expose presence checks only, not another `any`. Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), arbitrary JSON paths, nested sorting, or automatic strong-ref dereferencing. For example, `items.any.itemIdentifier.uri.contains` and `items.any.itemWeight.gt` are rejected at query validation time because nested leaves expose exact-match inputs only.
 
+A single `in` operator is capped at 100 values, including metadata filters such as `uri`, DID filters, scalar JSON filters, contributor-DID filters, and external-label source/value filters. Batch larger value sets into multiple GraphQL requests.
+
 ### `StringFilterInput`
 
 Filter conditions for string fields
@@ -169,26 +171,26 @@ Fallback filter input for checking whether a JSON field is missing/null or prese
 
 ### `ExternalLabelPredicateInput`
 
-Filter conditions for matching external labels on records.
+Filter conditions for matching external labels on the subject selected by the containing filter field.
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `src` | `StringFilterInput` | Filter by label source DID. |
 | `val` | `StringFilterInput` | Filter by label value. |
-| `activeOnly` | `Boolean` | When true, only active external labels can match records. |
+| `activeOnly` | `Boolean` | When true, only active external labels can match. |
 
 ### `ExternalLabelWhereInput`
 
-Record-level external label predicates.
+External label predicates bound by the containing filter field.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `has` | `ExternalLabelPredicateInput` | Keep records that have a matching external label. |
-| `none` | `ExternalLabelPredicateInput` | Keep records that do not have a matching external label. |
+| `has` | `ExternalLabelPredicateInput` | Keep records whose bound label subject has a matching external label. |
+| `none` | `ExternalLabelPredicateInput` | Keep records whose bound label subject does not have a matching external label. |
 
 ## External label support
 
-Production exposes external ATProto labels through the root `externalLabels` query, each generated record type's virtual `externalLabels` field, and `where.externalLabels.has` / `where.externalLabels.none` predicates on typed list queries.
+Production exposes external ATProto labels through the root `externalLabels` query, each generated record type's virtual `externalLabels` field, `where.externalLabels.has` / `where.externalLabels.none` predicates for record AT-URI labels, and `where.authorLabels.has` / `where.authorLabels.none` predicates for author DID labels on typed list queries.
 
 ### `ExternalLabel`
 
@@ -231,7 +233,8 @@ Collection: `app.certified.actor.organization`
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `longDescription` | `Generated complex filter input` | Filter by whether longDescription is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `organizationType` | `Generated complex filter input` | Filter by whether organizationType is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `urls` | `Generated complex filter input` | Filter by whether urls is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `foundedDate` | `DateTimeFilterInput` | Filter by foundedDate |
@@ -268,7 +271,8 @@ Collection: `app.certified.actor.profile`
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `pronouns` | `StringFilterInput` | Filter by pronouns |
 | `avatar` | `Generated complex filter input` | Filter by whether avatar is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `banner` | `Generated complex filter input` | Filter by whether banner is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `website` | `StringFilterInput` | Filter by website |
 | `displayName` | `StringFilterInput` | Filter by displayName |
@@ -299,7 +303,8 @@ Collection: `app.certified.badge.award`
 | Filter field | Type | Notes |
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `note` | `StringFilterInput` | Filter by note |
 | `badgeType` | `StringFilterInput` | Collection filter extension for awards whose referenced `app.certified.badge.definition` has this `badgeType`; supports the same string operators as badge definition `badgeType`. |
 | `badge` | generated nested strong-ref filter | Filter by whether badge is present or by nested exact fields such as `uri` and `cid` |
@@ -338,7 +343,8 @@ Collection: `app.certified.badge.definition`
 | `icon` | `Generated complex filter input` | Filter by whether icon is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `title` | `StringFilterInput` | Filter by title |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `badgeType` | `StringFilterInput` | Filter by badgeType |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 
@@ -369,7 +375,8 @@ Collection: `app.certified.badge.response`
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `badgeAward` | `Generated complex filter input` | Filter by whether badgeAward is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `weight` | `StringFilterInput` | Filter by weight |
 
 Sort fields: `indexed_at`, `weight`, `response`, `createdAt`
@@ -397,7 +404,8 @@ Collection: `app.certified.graph.follow`
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `via` | `Generated complex filter input` | Filter by whether via is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `subject` | `StringFilterInput` | Filter by subject |
 
 Sort fields: `indexed_at`, `subject`, `createdAt`
@@ -423,7 +431,8 @@ Collection: `app.certified.link.evm`
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `proof` | `Generated complex filter input` | Filter by whether proof is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `address` | `StringFilterInput` | Filter by address |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
@@ -460,7 +469,8 @@ Collection: `app.certified.location`
 | `lpVersion` | `StringFilterInput` | Filter by lpVersion |
 | `locationType` | `StringFilterInput` | Filter by locationType |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `name` | `StringFilterInput` | Filter by name |
 | `description` | `StringFilterInput` | Filter by description |
 
@@ -495,7 +505,8 @@ Collection: `org.hypercerts.claim.activity`
 | Filter field | Type | Notes |
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `workScope` | `Generated complex filter input` | Filter by whether workScope is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `title` | `StringFilterInput` | Filter by title |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
@@ -537,7 +548,8 @@ Collection: `org.hypercerts.claim.contribution`
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `endDate` | `DateTimeFilterInput` | Filter by endDate |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `startDate` | `DateTimeFilterInput` | Filter by startDate |
 | `contributionDescription` | `StringFilterInput` | Filter by contributionDescription |
@@ -571,7 +583,8 @@ Collection: `org.hypercerts.claim.contributorInformation`
 | `identifier` | `StringFilterInput` | Filter by identifier |
 | `displayName` | `StringFilterInput` | Filter by displayName |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 
 Sort fields: `createdAt`, `identifier`, `displayName`, `indexed_at`
 
@@ -597,7 +610,8 @@ Collection: `org.hypercerts.claim.rights`
 | Filter field | Type | Notes |
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `attachment` | `Generated complex filter input` | Filter by whether attachment is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `rightsName` | `StringFilterInput` | Filter by rightsName |
@@ -635,7 +649,8 @@ Collection: `org.hypercerts.collection`
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `banner` | `Generated complex filter input` | Filter by whether banner is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `location` | generated nested strong-ref filter | Filter by whether location is present or by nested exact fields such as `uri` and `cid` |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `items` | generated nested array filter | Filter by whether items is present or by `any` item fields such as `itemIdentifier.uri` |
@@ -672,7 +687,8 @@ Collection: `org.hypercerts.context.acknowledgement`
 | --- | --- | --- |
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `comment` | `StringFilterInput` | Filter by comment |
 | `context` | `Generated complex filter input` | Filter by whether context is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `subject` | `Generated complex filter input` | Filter by whether subject is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
@@ -709,7 +725,8 @@ Collection: `org.hypercerts.context.attachment`
 | `uri` | `URIFilterInput` | Filter by AT-URI |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `location` | `Generated complex filter input` | Filter by whether location is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `shortDescriptionFacets` | `Generated complex filter input` | Filter by whether shortDescriptionFacets is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `content` | `Generated complex filter input` | Filter by whether content is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
@@ -751,7 +768,8 @@ Collection: `org.hypercerts.context.evaluation`
 | `subject` | `Generated complex filter input` | Filter by whether subject is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `summary` | `StringFilterInput` | Filter by summary |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `measurements` | `Generated complex filter input` | Filter by whether measurements is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `score` | `Generated complex filter input` | Filter by whether score is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `content` | `Generated complex filter input` | Filter by whether content is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
@@ -793,7 +811,8 @@ Collection: `org.hypercerts.context.measurement`
 | `locations` | `Generated complex filter input` | Filter by whether locations is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `unit` | `StringFilterInput` | Filter by unit |
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 | `metric` | `StringFilterInput` | Filter by metric |
 | `comment` | `StringFilterInput` | Filter by comment |
@@ -848,7 +867,8 @@ Collection: `org.hypercerts.funding.receipt`
 | `did` | `DIDFilterInput` | Filter by DID (record author) |
 | `from` | `Generated complex filter input` | Filter by whether from is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `amount` | `StringFilterInput` | Filter by amount |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `createdAt` | `DateTimeFilterInput` | Filter by createdAt |
 
 Sort fields: `transactionId`, `indexed_at`, `occurredAt`, `paymentNetwork`, `notes`, `createdAt`, `amount`, `currency`, `paymentRail`
@@ -887,7 +907,8 @@ Collection: `org.hypercerts.workscope.tag`
 | `description` | `StringFilterInput` | Filter by description |
 | `supersededBy` | `Generated complex filter input` | Filter by whether supersededBy is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `key` | `StringFilterInput` | Filter by key |
-| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels before pagination. |
+| `externalLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record URI before pagination. |
+| `authorLabels` | `ExternalLabelWhereInput` | Filter records by locally ingested external labels attached to the record author's DID before pagination. |
 | `parent` | `Generated complex filter input` | Filter by whether parent is missing/null or present; nested filters may be generated up to depth 3; introspect the endpoint for the exact input shape |
 | `name` | `StringFilterInput` | Filter by name |
 | `status` | `StringFilterInput` | Filter by status |

@@ -485,6 +485,30 @@ func TestBuildRecordType_ReservedFieldCollision(t *testing.T) {
 	}
 }
 
+func TestBuildRecordType_DoesNotExposeAuthorLabelsVirtualField(t *testing.T) {
+	lexiconID := "com.example.reserved.authorLabels"
+	lex := buildReservedCollisionLexicon(lexiconID, []string{"authorLabels"})
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	recordType := builder.GetRecordType(lexiconID)
+	if recordType == nil {
+		t.Fatal("record type not found after Build()")
+	}
+	if _, ok := recordType.Fields()["authorLabels"]; ok {
+		t.Fatal("record type exposed authorLabels; this release only supports where.authorLabels filtering")
+	}
+	if _, ok := recordType.Fields()["title"]; !ok {
+		t.Fatal("non-colliding property 'title' is missing from the type")
+	}
+}
+
 func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -494,6 +518,7 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 		{name: "cid collision in WhereInput", colliding: "cid"},
 		{name: "rkey collision in WhereInput", colliding: "rkey"},
 		{name: "externalLabels collision in WhereInput", colliding: "externalLabels"},
+		{name: "authorLabels collision in WhereInput", colliding: "authorLabels"},
 	}
 
 	for _, tt := range tests {
@@ -519,13 +544,13 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 
 			// The colliding lexicon property must not overwrite generated metadata filters.
 			switch tt.colliding {
-			case "externalLabels":
+			case "externalLabels", "authorLabels":
 				field, exists := inputFields[tt.colliding]
 				if !exists {
-					t.Fatalf("WhereInput missing generated externalLabels metadata filter")
+					t.Fatalf("WhereInput missing generated %s metadata filter", tt.colliding)
 				}
 				if field.Type.String() != "ExternalLabelWhereInput" {
-					t.Errorf("externalLabels filter type = %q, want ExternalLabelWhereInput", field.Type.String())
+					t.Errorf("%s filter type = %q, want ExternalLabelWhereInput", tt.colliding, field.Type.String())
 				}
 			case "uri":
 				field, exists := inputFields[tt.colliding]
@@ -1341,6 +1366,7 @@ func TestBuildWhereInput_ComplexPropertiesUseNestedOrPresenceFilters(t *testing.
 		"uri":            "URIFilterInput",
 		"did":            "DIDFilterInput",
 		"externalLabels": "ExternalLabelWhereInput",
+		"authorLabels":   "ExternalLabelWhereInput",
 		"title":          "StringFilterInput",
 		"createdAt":      "DateTimeFilterInput",
 		"contributors":   "ComExampleWhereinputPresenceContributorsArrayFilterInput",
@@ -3222,6 +3248,182 @@ func TestExternalLabelsGraphQLWhereNoneAndSourceFilter(t *testing.T) {
 	if got[uris["four"]] {
 		t.Fatalf("spam-labelled URI %s should have been excluded", uris["four"])
 	}
+}
+
+func TestAuthorLabelsGraphQLWhereFilterPaginationAndCount(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx, uris := setupAuthorLabelsWhereTestDB(t)
+
+	query := `{
+		comExampleLabelRecord(
+			first: 2
+			where: { authorLabels: { has: { val: { eq: "high-quality" } } } }
+		) {
+			totalCount
+			edges { cursor node { uri did } }
+			pageInfo { hasNextPage endCursor }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	conn := data["comExampleLabelRecord"].(map[string]interface{})
+	if conn["totalCount"] != float64(3) && conn["totalCount"] != 3 {
+		t.Fatalf("totalCount = %v, want 3", conn["totalCount"])
+	}
+	edges := conn["edges"].([]interface{})
+	if len(edges) != 2 {
+		t.Fatalf("first page edges = %d, want 2: %v", len(edges), edges)
+	}
+	firstNode := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	secondNode := edges[1].(map[string]interface{})["node"].(map[string]interface{})
+	if firstNode["uri"] != uris["five"] || secondNode["uri"] != uris["three"] {
+		t.Fatalf("first page URIs = [%v, %v], want [%s, %s]", firstNode["uri"], secondNode["uri"], uris["five"], uris["three"])
+	}
+	pageInfo := conn["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != true {
+		t.Fatalf("hasNextPage = %v, want true", pageInfo["hasNextPage"])
+	}
+	endCursor, ok := pageInfo["endCursor"].(string)
+	if !ok || endCursor == "" {
+		t.Fatalf("endCursor = %v, want non-empty string", pageInfo["endCursor"])
+	}
+
+	query = fmt.Sprintf(`{
+		comExampleLabelRecord(
+			first: 2
+			after: %q
+			where: { authorLabels: { has: { val: { eq: "high-quality" } } } }
+		) {
+			edges { node { uri } }
+			pageInfo { hasNextPage }
+		}
+	}`, endCursor)
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("second page GraphQL returned errors: %v", result.Errors)
+	}
+
+	data = result.Data.(map[string]interface{})
+	conn = data["comExampleLabelRecord"].(map[string]interface{})
+	edges = conn["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("second page edges = %d, want 1: %v", len(edges), edges)
+	}
+	node := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if node["uri"] != uris["one"] {
+		t.Fatalf("second page URI = %v, want %s", node["uri"], uris["one"])
+	}
+	pageInfo = conn["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false {
+		t.Fatalf("second page hasNextPage = %v, want false", pageInfo["hasNextPage"])
+	}
+}
+
+func TestAuthorLabelsGraphQLWhereNoneAndCombinedRecordFilter(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx, uris := setupAuthorLabelsWhereTestDB(t)
+
+	query := `{
+		comExampleLabelRecord(
+			first: 10
+			where: { authorLabels: { none: { val: { eq: "likely-test" } } } }
+		) {
+			totalCount
+			edges { node { uri did } }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	conn := data["comExampleLabelRecord"].(map[string]interface{})
+	if conn["totalCount"] != float64(4) && conn["totalCount"] != 4 {
+		t.Fatalf("authorLabels none totalCount = %v, want 4", conn["totalCount"])
+	}
+	edges := conn["edges"].([]interface{})
+	if len(edges) != 4 {
+		t.Fatalf("authorLabels none edges = %d, want 4", len(edges))
+	}
+	for _, edge := range edges {
+		node := edge.(map[string]interface{})["node"].(map[string]interface{})
+		if node["uri"] == uris["four"] {
+			t.Fatalf("likely-test author URI %s should have been excluded", uris["four"])
+		}
+	}
+
+	query = `{
+		comExampleLabelRecord(
+			first: 10
+			where: {
+				externalLabels: { has: { val: { eq: "verified-impact" } } }
+				authorLabels: { none: { val: { eq: "likely-test" } } }
+			}
+		) {
+			edges { node { uri } }
+		}
+	}`
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("combined GraphQL returned errors: %v", result.Errors)
+	}
+	data = result.Data.(map[string]interface{})
+	conn = data["comExampleLabelRecord"].(map[string]interface{})
+	edges = conn["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("combined edges = %d, want 1: %v", len(edges), edges)
+	}
+	node := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if node["uri"] != uris["one"] {
+		t.Fatalf("combined URI = %v, want %s", node["uri"], uris["one"])
+	}
+}
+
+func setupAuthorLabelsWhereTestDB(t *testing.T) (context.Context, map[string]string) {
+	t.Helper()
+
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	records := db.Records
+	externalLabels := db.ExternalLabels
+	uris := map[string]string{}
+	for i, rkey := range []string{"one", "two", "three", "four", "five"} {
+		did := "did:plc:author-" + rkey
+		uri := "at://" + did + "/com.example.label.record/" + rkey
+		uris[rkey] = uri
+		_, err := records.Insert(ctx, uri, "cid-"+rkey, did, "com.example.label.record", `{"text":"hello `+rkey+`"}`)
+		if err != nil {
+			t.Fatalf("setupAuthorLabelsWhereTestDB: insert %s: %v", rkey, err)
+		}
+		indexedAt := fmt.Sprintf("2025-01-02T03:04:%02dZ", i+1)
+		if _, err := db.Executor.DB().ExecContext(ctx, "UPDATE record SET indexed_at = ? WHERE uri = ?", indexedAt, uri); err != nil {
+			t.Fatalf("setupAuthorLabelsWhereTestDB: set indexed_at %s: %v", rkey, err)
+		}
+	}
+
+	cidSpecificAccountLabel := "account-label-cid"
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := externalLabels.PersistEvent(ctx, url, 1, []repositories.ExternalLabelInput{
+		{LabelIndex: 0, Src: "did:plc:labeler", URI: "did:plc:author-one", Val: "high-quality", Cts: "2025-01-02T03:05:01Z", RawJSON: `{}`},
+		{LabelIndex: 1, Src: "did:plc:labeler", URI: "did:plc:author-three", Val: "high-quality", Cts: "2025-01-02T03:05:03Z", RawJSON: `{}`},
+		{LabelIndex: 2, Src: "did:plc:labeler", URI: "did:plc:author-four", Val: "likely-test", Cts: "2025-01-02T03:05:04Z", RawJSON: `{}`},
+		{LabelIndex: 3, Src: "did:plc:labeler", URI: "did:plc:author-five", Val: "high-quality", Cts: "2025-01-02T03:05:05Z", RawJSON: `{}`},
+		{LabelIndex: 4, Src: "did:plc:labeler", URI: uris["two"], Val: "high-quality", Cts: "2025-01-02T03:05:06Z", RawJSON: `{}`},
+		{LabelIndex: 5, Src: "did:plc:labeler", URI: uris["one"], Val: "verified-impact", Cts: "2025-01-02T03:05:07Z", RawJSON: `{}`},
+		{LabelIndex: 6, Src: "did:plc:labeler", URI: uris["four"], Val: "verified-impact", Cts: "2025-01-02T03:05:08Z", RawJSON: `{}`},
+		{LabelIndex: 7, Src: "did:plc:labeler", URI: "did:plc:author-two", CID: &cidSpecificAccountLabel, Val: "high-quality", Cts: "2025-01-02T03:05:09Z", RawJSON: `{}`},
+	}); err != nil {
+		t.Fatalf("setupAuthorLabelsWhereTestDB: persist labels: %v", err)
+	}
+
+	repos := &resolver.Repositories{Records: records, ExternalLabels: externalLabels}
+	return resolver.WithRepositories(ctx, repos), uris
 }
 
 func setupExternalLabelsWhereTestDB(t *testing.T) (context.Context, map[string]string) {

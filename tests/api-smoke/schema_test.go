@@ -204,6 +204,43 @@ func TestSchemaExposesURIWhereFilter(t *testing.T) {
 	smokeLog("✓ Typed collection schemas expose uri where filters")
 }
 
+func TestSchemaExposesAuthorLabelWhereFilter(t *testing.T) {
+	config := loadSmokeConfig(t)
+	schema := fetchGraphQLSchema(t, config)
+	queryFields := fieldsByName(schema.QueryType.Fields)
+	types := typesByName(schema.Types)
+
+	for nsid, queryFieldName := range config.expectations.TypedQueryFields {
+		nsid := nsid
+		queryFieldName := queryFieldName
+		t.Run(nsid, func(t *testing.T) {
+			collectionField := requireSchemaFieldForNSID(t, queryFields, queryFieldName, nsid)
+			whereArg := requireSchemaArgument(t, collectionField, "where")
+			whereInputName := namedTypeName(whereArg.Type)
+			whereInput := requireSchemaType(t, types, whereInputName)
+			whereFields := inputFieldsByName(whereInput.InputFields)
+
+			externalLabelsField := requireSchemaInputField(t, whereFields, "externalLabels")
+			if got := namedTypeName(externalLabelsField.Type); got != "ExternalLabelWhereInput" {
+				t.Fatalf("%s.externalLabels filter type = %q, want ExternalLabelWhereInput", whereInputName, got)
+			}
+			authorLabelsField := requireSchemaInputField(t, whereFields, "authorLabels")
+			if got := namedTypeName(authorLabelsField.Type); got != "ExternalLabelWhereInput" {
+				t.Fatalf("%s.authorLabels filter type = %q, want ExternalLabelWhereInput", whereInputName, got)
+			}
+
+			recordType := requireSchemaType(t, types, typeNameFromNSID(nsid))
+			recordFields := fieldsByName(recordType.Fields)
+			requireSchemaField(t, recordFields, "externalLabels")
+			if _, exists := recordFields["authorLabels"]; exists {
+				t.Fatalf("record type %s exposes authorLabels field; authorLabels should only be a where filter", recordType.Name)
+			}
+		})
+	}
+
+	smokeLog("✓ Typed collection schemas expose authorLabels where filters")
+}
+
 func TestSchemaExposesBadgeAwardBadgeTypeFilter(t *testing.T) {
 	config := loadSmokeConfig(t)
 	schema := fetchGraphQLSchema(t, config)
@@ -354,6 +391,14 @@ func namedTypeName(typeRef schemaTypeRef) string {
 func queryFieldNameFromNSID(nsid string) string {
 	parts := strings.Split(nsid, ".")
 	for index := 1; index < len(parts); index++ {
+		parts[index] = upperFirstRune(parts[index])
+	}
+	return strings.Join(parts, "")
+}
+
+func typeNameFromNSID(nsid string) string {
+	parts := strings.Split(nsid, ".")
+	for index := range parts {
 		parts[index] = upperFirstRune(parts[index])
 	}
 	return strings.Join(parts, "")

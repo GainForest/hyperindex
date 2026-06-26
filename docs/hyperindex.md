@@ -152,6 +152,8 @@ where: { image: { isNull: false } }
 
 The generated `uri` filter is a record metadata filter for exact AT-URI lookup and batched hydration. It supports `eq` and `in` and does not search the JSON payload.
 
+Any single `in` operator accepts up to 100 values. For larger DID, URI, label source/value, or scalar batches, split the values into multiple GraphQL requests and merge the paginated results client-side. This limit is separate from connection page size.
+
 Scalar fields support value filters such as `eq`, `neq`, `in`, `contains`, `startsWith`, `gt`, `lt`, `gte`, `lte`, and `isNull`, depending on the scalar type.
 
 Complex fields support presence checks with `isNull`. Some complex fields use the shared `PresenceFilterInput`; arrays, refs, and unions may instead expose generated nested filter inputs that also include `isNull`. Do not rely on the input type name for presence checks; introspect the field and use `isNull`. Nested scalar leaves support exact operators only: `eq`, `in`, and `isNull`. Use array `any` when at least one array item should match; multiple predicates inside the same `any` must match the same array item. Nested array fields inside an existing `any` scope expose presence checks only; Hyperindex does not advertise nested `any` within another `any`.
@@ -182,6 +184,56 @@ where: { badgeType: { eq: "endorsement" } }
 ```
 
 `badgeType` uses `StringFilterInput`, so it supports the same string operators exposed for badge definitions. Awards whose referenced badge definition is missing or has no `badgeType` do not match positive value filters.
+
+## External and author label filters
+
+Hyperindex can filter typed record connections by locally ingested external ATProto labels before pagination and `totalCount` are calculated.
+
+Use `where.externalLabels` when the label subject is the record AT-URI:
+
+```graphql
+where: {
+  externalLabels: {
+    has: {
+      src: { eq: "did:plc:labeler" }
+      val: { eq: "high-quality" }
+      activeOnly: true
+    }
+  }
+}
+```
+
+Use `where.authorLabels` when the label subject is the record author's account DID:
+
+```graphql
+where: {
+  authorLabels: {
+    none: {
+      src: { eq: "did:plc:pswneepkd5lesumj7ejmkbal" }
+      val: { eq: "likely-test" }
+      activeOnly: true
+    }
+  }
+}
+```
+
+`authorLabels` only matches DID-subject labels such as `uri: "did:plc:..."` with no CID. It does not infer account labels from profile or organization records. Unlabeled authors pass `none` predicates and fail `has` predicates.
+
+To require certified authors, use `has` with multiple values:
+
+```graphql
+where: {
+  authorLabels: {
+    has: {
+      src: { eq: "did:plc:pswneepkd5lesumj7ejmkbal" }
+      val: { in: ["standard", "high-quality"] }
+      activeOnly: true
+    }
+  }
+}
+```
+
+There is no node-level `authorLabels` field. To display account labels for known DIDs, use the root `externalLabels(subjects: [...])` query with those DID subjects.
 
 ## Quickstart
 
