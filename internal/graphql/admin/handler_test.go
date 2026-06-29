@@ -348,6 +348,7 @@ func TestSchemaRemovesAdminMutationPaths(t *testing.T) {
 	updateSettings := fields["updateSettings"]
 	if updateSettings == nil {
 		t.Fatal("expected updateSettings mutation")
+		return
 	}
 	if fields["removeLabelerSubscribeUrl"] == nil {
 		t.Fatal("expected removeLabelerSubscribeUrl mutation")

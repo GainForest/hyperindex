@@ -251,6 +251,7 @@ func TestAdminClient_RepoInfo(t *testing.T) {
 				}
 				if info == nil {
 					t.Fatal("expected non-nil RepoInfoResponse")
+					return
 				}
 				if info.DID != tt.wantDID {
 					t.Errorf("DID: expected %s, got %s", tt.wantDID, info.DID)

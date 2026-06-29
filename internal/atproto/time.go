@@ -4,6 +4,8 @@ package atproto
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/bluesky-social/indigo/atproto/syntax"
 )
 
 // TimestampFormats lists all timestamp formats recognized by ParseTimestamp,
@@ -45,8 +47,9 @@ func ParseTimestamp(s string) time.Time {
 
 // ExtractCreatedAt extracts the createdAt timestamp from a record's JSON.
 // It tries common field names (createdAt, $createdAt, created_at, timestamp,
-// indexedAt) and multiple timestamp formats. Returns fallback if no timestamp
-// is found or the JSON is invalid.
+// indexedAt), preferring Indigo's strict ATProto datetime parser before falling
+// back to legacy timestamp formats. Returns fallback if no timestamp is found or
+// the JSON is invalid.
 func ExtractCreatedAt(recordJSON string, fallback time.Time) time.Time {
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(recordJSON), &data); err != nil {
@@ -55,6 +58,9 @@ func ExtractCreatedAt(recordJSON string, fallback time.Time) time.Time {
 
 	for _, field := range createdAtFields {
 		if val, ok := data[field].(string); ok {
+			if t, err := syntax.ParseDatetimeTime(val); err == nil {
+				return t
+			}
 			if t := ParseTimestamp(val); !t.IsZero() {
 				return t
 			}
@@ -62,4 +68,32 @@ func ExtractCreatedAt(recordJSON string, fallback time.Time) time.Time {
 	}
 
 	return fallback
+}
+
+// NormalizeRecordCreatedAt extracts a record JSON's top-level createdAt string
+// and returns a millisecond-precision UTC timestamp for creation-time record
+// timelines. Missing, non-string, malformed, or non-RFC3339 values return false
+// so callers can store NULL and exclude the record from creation-time timelines.
+func NormalizeRecordCreatedAt(recordJSON string) (string, bool) {
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(recordJSON), &data); err != nil {
+		return "", false
+	}
+
+	raw, ok := data["createdAt"]
+	if !ok {
+		return "", false
+	}
+
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
+		return "", false
+	}
+
+	createdAt, err := syntax.ParseDatetimeTime(value)
+	if err != nil {
+		return "", false
+	}
+
+	return createdAt.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z"), true
 }

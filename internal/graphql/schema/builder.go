@@ -40,6 +40,9 @@ type Builder struct {
 
 	genericRecordType       *graphql.Object
 	genericRecordConnection *graphql.Object
+
+	recordTimelineNode       *graphql.Object
+	recordTimelineConnection *graphql.Object
 }
 
 // NewBuilder creates a new schema builder.
@@ -68,7 +71,10 @@ func (b *Builder) Build() (*graphql.Schema, error) {
 	// Phase 2b: Build GenericRecord types now that generated record types are available.
 	b.buildGenericRecordTypes()
 
-	// Phase 2c: Build per-collection WhereInput types
+	// Phase 2c: Build record timeline types now that generated profile types are available.
+	b.buildRecordTimelineTypes()
+
+	// Phase 2d: Build per-collection WhereInput types
 	if err := b.buildWhereInputTypes(); err != nil {
 		return nil, err
 	}
@@ -181,6 +187,37 @@ var externalLabelPredicateInput = graphql.NewInputObject(graphql.InputObjectConf
 			Type:         graphql.Boolean,
 			DefaultValue: true,
 			Description:  "When true, only active external labels can match.",
+		},
+	},
+})
+
+const (
+	recordTimelineDefaultPageSize = 50
+	recordTimelineMaxPageSize     = query.MaxPageSize
+)
+
+var recordTimelineCollectionFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "RecordTimelineCollectionFilterInput",
+	Description: "Collection filter for recordTimeline. Callers must provide at least one collection in the in list.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"in": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(graphql.String))),
+			Description: "Collection NSIDs to include.",
+		},
+	},
+})
+
+var recordTimelineWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "RecordTimelineWhereInput",
+	Description: "Filter conditions for recordTimeline queries.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"collection": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewNonNull(recordTimelineCollectionFilterInput),
+			Description: "Required collection filter. Use collection: { in: [...] } to keep timeline scope explicit.",
+		},
+		"did": &graphql.InputObjectFieldConfig{
+			Type:        types.DIDFilterInput,
+			Description: "Optional author DID filter. Use did: { in: [...] } for followed-author timelines.",
 		},
 	},
 })
@@ -478,6 +515,73 @@ func (b *Builder) buildGenericRecordTypes() {
 	})
 }
 
+// buildRecordTimelineTypes builds the bespoke connection used by the generic
+// creation-time timeline. It intentionally does not use GenericRecordConnection
+// because timeline consumers need a single keyset page without totalCount.
+func (b *Builder) buildRecordTimelineTypes() {
+	fields := graphql.Fields{
+		"uri": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "AT-URI of the record.",
+		},
+		"cid": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "CID of the current record value.",
+		},
+		"did": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "DID of the record author.",
+		},
+		"collection": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "AT Protocol collection NSID.",
+		},
+		"rkey": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Record key from the AT-URI.",
+		},
+		"createdAt": &graphql.Field{
+			Type:        graphql.NewNonNull(types.DateTimeScalar),
+			Description: "Materialized top-level record createdAt timestamp used for timeline ordering.",
+		},
+		"indexedAt": &graphql.Field{
+			Type:        graphql.NewNonNull(types.DateTimeScalar),
+			Description: "Timestamp when Hyperindex last indexed the current record row.",
+		},
+		"value": &graphql.Field{
+			Type:        graphql.NewNonNull(types.JSONScalar),
+			Description: "Decoded AT Protocol record payload.",
+		},
+	}
+	if profileType, ok := b.recordTypes[certifiedprofiles.CollectionID]; ok {
+		fields["certifiedProfileData"] = certifiedprofiles.Field(profileType)
+	}
+
+	b.recordTimelineNode = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "RecordTimelineNode",
+		Description: "A current record returned by the generic creation-time timeline.",
+		Fields:      fields,
+	})
+
+	recordTimelineEdge := graphql.NewObject(graphql.ObjectConfig{
+		Name:        "RecordTimelineEdge",
+		Description: "An edge in a record timeline connection.",
+		Fields: graphql.Fields{
+			"cursor": &graphql.Field{Type: graphql.NewNonNull(graphql.String), Description: "Opaque keyset cursor for this timeline row."},
+			"node":   &graphql.Field{Type: graphql.NewNonNull(b.recordTimelineNode), Description: "The timeline record."},
+		},
+	})
+
+	b.recordTimelineConnection = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "RecordTimelineConnection",
+		Description: "A newest-first page of current records across selected collections.",
+		Fields: graphql.Fields{
+			"edges":    &graphql.Field{Type: graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(recordTimelineEdge))), Description: "Timeline edges."},
+			"pageInfo": &graphql.Field{Type: graphql.NewNonNull(query.PageInfoType), Description: "Pagination information."},
+		},
+	})
+}
+
 // buildQueryType builds the root Query type with fields for each collection.
 func (b *Builder) buildQueryType() *graphql.Object {
 	fields := graphql.Fields{}
@@ -509,6 +613,27 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			},
 		},
 		Resolve: b.createGenericRecordsResolver(),
+	}
+
+	fields["recordTimeline"] = &graphql.Field{
+		Type:        graphql.NewNonNull(b.recordTimelineConnection),
+		Description: "Query a newest-first page of current records across selected collections, optionally filtered by author DIDs.",
+		Args: graphql.FieldConfigArgument{
+			"where": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(recordTimelineWhereInput),
+				Description: "Timeline filters. Use where.collection.in for required collection scope and optional where.did.in for author DIDs.",
+			},
+			"first": &graphql.ArgumentConfig{
+				Type:         graphql.Int,
+				DefaultValue: recordTimelineDefaultPageSize,
+				Description:  "Number of records to return (default 50, max 1000).",
+			},
+			"after": &graphql.ArgumentConfig{
+				Type:        graphql.String,
+				Description: "Opaque cursor returned by a previous recordTimeline page.",
+			},
+		},
+		Resolve: b.createRecordTimelineResolver(),
 	}
 
 	// Add external label lookup by subject DID or AT-URI.
@@ -1443,6 +1568,291 @@ func stringListArg(value interface{}) []string {
 		return v
 	default:
 		return nil
+	}
+}
+
+const recordTimelineTimestampFormat = "2006-01-02T15:04:05.000Z"
+
+type recordTimelineCursorPayload struct {
+	Version   int    `json:"v"`
+	CreatedAt string `json:"createdAt"`
+	URI       string `json:"uri"`
+}
+
+func (b *Builder) createRecordTimelineResolver() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		first, err := recordTimelineFirstArg(p.Args["first"])
+		if err != nil {
+			return nil, err
+		}
+
+		collections, authors, authorsEmpty, err := recordTimelineWhereArg(p.Args["where"])
+		if err != nil {
+			return nil, err
+		}
+
+		var afterCursor *repositories.RecordTimelineCursor
+		if after, _ := p.Args["after"].(string); after != "" {
+			afterCursor, err = decodeRecordTimelineCursor(after)
+			if err != nil {
+				return nil, fmt.Errorf("invalid recordTimeline cursor: %w", err)
+			}
+		}
+
+		repos := resolver.GetRepositories(p.Context)
+		if repos == nil || repos.Records == nil {
+			return emptyRecordTimelineConnection(), nil
+		}
+		if authorsEmpty {
+			return emptyRecordTimelineConnection(), nil
+		}
+
+		records, err := repos.Records.GetRecordTimeline(p.Context, authors, collections, first+1, afterCursor)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query recordTimeline: %w", err)
+		}
+
+		hasNextPage := len(records) > first
+		if hasNextPage {
+			records = records[:first]
+		}
+
+		recordsForHydration := make([]*repositories.Record, 0, len(records))
+		for _, rec := range records {
+			recordsForHydration = append(recordsForHydration, &rec.Record)
+		}
+		certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, recordsForHydration)
+		if err != nil {
+			return nil, err
+		}
+
+		edges := make([]interface{}, 0, len(records))
+		var startCursor, endCursor string
+		for _, rec := range records {
+			var rawJSON interface{}
+			if err := json.Unmarshal([]byte(rec.JSON), &rawJSON); err != nil {
+				slog.Warn("Skipping timeline record with invalid JSON", "uri", rec.URI, "error", err)
+				continue
+			}
+
+			createdAt := formatRecordTimelineTimestamp(rec.RecordCreatedAt)
+			node := map[string]interface{}{
+				"uri":        rec.URI,
+				"cid":        rec.CID,
+				"did":        rec.DID,
+				"collection": rec.Collection,
+				"rkey":       nullableString(rec.RKey),
+				"createdAt":  createdAt,
+				"indexedAt":  rec.IndexedAt.UTC().Format(time.RFC3339Nano),
+				"value":      rawJSON,
+			}
+			attachCertifiedProfileData(node, &rec.Record, certifiedProfiles)
+
+			cursor := encodeRecordTimelineCursor(createdAt, rec.URI)
+			if startCursor == "" {
+				startCursor = cursor
+			}
+			endCursor = cursor
+			edges = append(edges, map[string]interface{}{"cursor": cursor, "node": node})
+		}
+
+		return map[string]interface{}{
+			"edges": edges,
+			"pageInfo": map[string]interface{}{
+				"hasNextPage":     hasNextPage,
+				"hasPreviousPage": afterCursor != nil,
+				"startCursor":     nullableString(startCursor),
+				"endCursor":       nullableString(endCursor),
+			},
+		}, nil
+	}
+}
+
+func recordTimelineWhereArg(value interface{}) ([]string, []string, bool, error) {
+	whereMap, ok := value.(map[string]interface{})
+	if !ok || whereMap == nil {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in must include at least one collection NSID")
+	}
+
+	collectionFilter, ok := whereMap["collection"].(map[string]interface{})
+	if !ok || collectionFilter == nil {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in must include at least one collection NSID")
+	}
+	collections, err := recordTimelineStringListArg(collectionFilter["in"], "where.collection.in")
+	if err != nil {
+		return nil, nil, false, err
+	}
+	collections = dedupeStrings(collections)
+	if len(collections) == 0 {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in must include at least one collection NSID")
+	}
+	if len(collections) > repositories.MaxRecordTimelineCollections {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in supports at most %d values", repositories.MaxRecordTimelineCollections)
+	}
+	for i, collection := range collections {
+		if !lexicon.IsValidNSID(collection) {
+			return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in[%d] must be a valid collection NSID", i)
+		}
+	}
+
+	var authors []string
+	authorsEmpty := false
+	if rawDIDFilter, ok := whereMap["did"]; ok && rawDIDFilter != nil {
+		didFilter, ok := rawDIDFilter.(map[string]interface{})
+		if !ok || didFilter == nil {
+			return nil, nil, false, fmt.Errorf("recordTimeline where.did must be a DID filter")
+		}
+
+		authorFilterName := "where.did.in"
+		if eqAuthor, ok := didFilter["eq"].(string); ok {
+			authorFilterName = "where.did.eq"
+			eqAuthor = strings.TrimSpace(eqAuthor)
+			if eqAuthor == "" {
+				return nil, nil, false, fmt.Errorf("recordTimeline where.did.eq must not be empty")
+			}
+			authors = []string{eqAuthor}
+		} else if rawAuthors, ok := didFilter["in"]; ok && rawAuthors != nil {
+			authors, err = recordTimelineStringListArg(rawAuthors, authorFilterName)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			authors = dedupeStrings(authors)
+			authorsEmpty = len(authors) == 0
+		}
+
+		if len(authors) > repositories.MaxRecordTimelineAuthors {
+			return nil, nil, false, fmt.Errorf("recordTimeline where.did.in supports at most %d values", repositories.MaxRecordTimelineAuthors)
+		}
+		for i, author := range authors {
+			if !isDIDString(author) {
+				if authorFilterName == "where.did.eq" {
+					return nil, nil, false, fmt.Errorf("recordTimeline where.did.eq must be a DID string starting with \"did:\"")
+				}
+				return nil, nil, false, fmt.Errorf("recordTimeline where.did.in[%d] must be a DID string starting with \"did:\"", i)
+			}
+		}
+	}
+
+	return collections, authors, authorsEmpty, nil
+}
+
+func recordTimelineFirstArg(value interface{}) (int, error) {
+	first := recordTimelineDefaultPageSize
+	if value != nil {
+		if parsed, ok := value.(int); ok {
+			first = parsed
+		}
+	}
+	if first < 1 || first > recordTimelineMaxPageSize {
+		return 0, fmt.Errorf("recordTimeline first must be between 1 and %d", recordTimelineMaxPageSize)
+	}
+	return first, nil
+}
+
+func recordTimelineStringListArg(value interface{}, name string) ([]string, error) {
+	switch typed := value.(type) {
+	case []interface{}:
+		items := make([]string, 0, len(typed))
+		for i, item := range typed {
+			valueString, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("recordTimeline %s[%d] must be a string", name, i)
+			}
+			valueString = strings.TrimSpace(valueString)
+			if valueString == "" {
+				return nil, fmt.Errorf("recordTimeline %s[%d] must not be empty", name, i)
+			}
+			items = append(items, valueString)
+		}
+		return items, nil
+	case []string:
+		items := make([]string, 0, len(typed))
+		for i, valueString := range typed {
+			valueString = strings.TrimSpace(valueString)
+			if valueString == "" {
+				return nil, fmt.Errorf("recordTimeline %s[%d] must not be empty", name, i)
+			}
+			items = append(items, valueString)
+		}
+		return items, nil
+	default:
+		return nil, fmt.Errorf("recordTimeline %s must be a list of strings", name)
+	}
+}
+
+func dedupeStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	deduped := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		deduped = append(deduped, value)
+	}
+	return deduped
+}
+
+func isDIDString(value string) bool {
+	return strings.HasPrefix(value, "did:") && !strings.ContainsAny(value, " \t\n\r")
+}
+
+func nullableString(value string) interface{} {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func formatRecordTimelineTimestamp(value time.Time) string {
+	return value.UTC().Truncate(time.Millisecond).Format(recordTimelineTimestampFormat)
+}
+
+func encodeRecordTimelineCursor(createdAt, uri string) string {
+	payload := recordTimelineCursorPayload{Version: 1, CreatedAt: createdAt, URI: uri}
+	encoded, _ := json.Marshal(payload)
+	return base64.RawURLEncoding.EncodeToString(encoded)
+}
+
+func decodeRecordTimelineCursor(cursor string) (*repositories.RecordTimelineCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("cursor must be base64url-encoded")
+	}
+
+	var payload recordTimelineCursorPayload
+	if err := json.Unmarshal(decoded, &payload); err != nil {
+		return nil, fmt.Errorf("cursor payload must be a JSON object")
+	}
+	if payload.Version != 1 {
+		return nil, fmt.Errorf("unsupported cursor version %d", payload.Version)
+	}
+	if payload.CreatedAt == "" {
+		return nil, fmt.Errorf("cursor createdAt is required")
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, payload.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("cursor createdAt must be an RFC3339 timestamp")
+	}
+	if payload.URI == "" || !strings.HasPrefix(payload.URI, "at://") {
+		return nil, fmt.Errorf("cursor uri must be an AT-URI")
+	}
+
+	return &repositories.RecordTimelineCursor{
+		CreatedAt: formatRecordTimelineTimestamp(createdAt),
+		URI:       payload.URI,
+	}, nil
+}
+
+func emptyRecordTimelineConnection() map[string]interface{} {
+	return map[string]interface{}{
+		"edges": []interface{}{},
+		"pageInfo": map[string]interface{}{
+			"hasNextPage":     false,
+			"hasPreviousPage": false,
+			"startCursor":     nil,
+			"endCursor":       nil,
+		},
 	}
 }
 

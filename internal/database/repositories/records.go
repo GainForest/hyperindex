@@ -4,6 +4,7 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,7 +16,7 @@ import (
 
 // Batch size constants for SQL operations.
 const (
-	// BatchInsertSize is the number of records per INSERT batch (5 params each = 500 SQL params).
+	// BatchInsertSize is the number of records per INSERT batch (6 params each = 600 SQL params).
 	BatchInsertSize = 100
 
 	// SQLParamBatchSize is the batch size for IN-clause queries, kept under SQLite's 999 param limit.
@@ -35,6 +36,16 @@ const (
 	// aggregate parameter limit when combined with other bound arguments.
 	MaxINListSize = 100
 
+	// MaxRecordTimelineAuthors is the largest author DID set accepted by the
+	// record timeline API. SQLite timeline queries bind the set as JSON to stay
+	// below SQLite's aggregate parameter limit while preserving one global page.
+	MaxRecordTimelineAuthors = 1000
+
+	// MaxRecordTimelineCollections is the largest explicit collection set accepted
+	// by record timeline queries. Callers must choose collections so timeline
+	// queries do not scan every indexed collection by default.
+	MaxRecordTimelineCollections = 25
+
 	// MaxFilterConditions is the maximum number of individual filter conditions allowed per query.
 	// The DID filter does not count toward this cap.
 	MaxFilterConditions = 20
@@ -52,6 +63,23 @@ type Record struct {
 	JSON       string
 	IndexedAt  time.Time
 	RKey       string
+}
+
+// RecordTimelineCursor identifies a position in the creation-time record
+// timeline. CreatedAt must use the repository's normalized UTC timestamp format
+// so SQLite text comparisons and PostgreSQL timestamptz comparisons behave the
+// same way.
+type RecordTimelineCursor struct {
+	CreatedAt string
+	URI       string
+}
+
+// RecordTimelineRecord is a current AT Protocol record returned by the generic
+// creation-time timeline query. RecordCreatedAt is the materialized top-level
+// record JSON createdAt timestamp used for ordering and cursor generation.
+type RecordTimelineRecord struct {
+	Record
+	RecordCreatedAt time.Time
 }
 
 // FieldFilterTarget identifies where a record field filter reads its value
@@ -203,6 +231,14 @@ func NewRecordsRepository(db database.Executor) *RecordsRepository {
 	return &RecordsRepository{db: db}
 }
 
+func recordCreatedAtValue(recordJSON string) database.Value {
+	createdAt, ok := atproto.NormalizeRecordCreatedAt(recordJSON)
+	if !ok {
+		return database.NullValue{}
+	}
+	return database.TimestamptzValue(createdAt)
+}
+
 // validateSQLiteAggregateParameterCount ensures SQLite queries stay within the
 // hard per-query parameter limit. Non-SQLite dialects are not capped here.
 func (r *RecordsRepository) validateSQLiteAggregateParameterCount(paramCount int) error {
@@ -230,8 +266,10 @@ func (r *RecordsRepository) recordColumns() string {
 // Insert inserts or updates a record in the database.
 // Skips if the CID already exists (content unchanged).
 func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collection, jsonData string) (InsertResult, error) {
-	// Check if URI exists with same CID
-	existingCID, err := r.getCIDByURI(ctx, uri)
+	createdAtValue := recordCreatedAtValue(jsonData)
+
+	// Check if URI exists with same CID.
+	existingCID, existingHasRecordCreatedAt, err := r.getCIDAndRecordCreatedAtByURI(ctx, uri)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Skipped, err
 	}
@@ -240,6 +278,11 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 	// If cid == "" (omitted by Tap for some events), always proceed with the
 	// upsert so new records aren't silently dropped by the "" == "" comparison.
 	if cid != "" && existingCID == cid {
+		if !existingHasRecordCreatedAt {
+			if err := r.fillMissingRecordCreatedAt(ctx, uri, createdAtValue); err != nil {
+				return Skipped, err
+			}
+		}
 		return Skipped, nil // Content unchanged
 	}
 
@@ -248,23 +291,26 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 	p3 := r.db.Placeholder(3)
 	p4 := r.db.Placeholder(4)
 	p5 := r.db.Placeholder(5)
+	p6 := r.db.Placeholder(6)
 
 	var sqlStr string
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
-		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json)
-			VALUES (%s, %s, %s, %s, %s::jsonb)
+		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json, record_created_at)
+			VALUES (%s, %s, %s, %s, %s::jsonb, %s::timestamptz)
 			ON CONFLICT(uri) DO UPDATE SET
 				cid = EXCLUDED.cid,
 				json = EXCLUDED.json,
-				indexed_at = NOW()`, p1, p2, p3, p4, p5)
+				indexed_at = NOW(),
+				record_created_at = COALESCE(record.record_created_at, EXCLUDED.record_created_at)`, p1, p2, p3, p4, p5, p6)
 	default:
-		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json)
-			VALUES (%s, %s, %s, %s, %s)
+		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json, record_created_at)
+			VALUES (%s, %s, %s, %s, %s, %s)
 			ON CONFLICT(uri) DO UPDATE SET
 				cid = excluded.cid,
 				json = excluded.json,
-				indexed_at = datetime('now')`, p1, p2, p3, p4, p5)
+				indexed_at = datetime('now'),
+				record_created_at = COALESCE(record.record_created_at, excluded.record_created_at)`, p1, p2, p3, p4, p5, p6)
 	}
 
 	_, err = r.db.Exec(ctx, sqlStr, []database.Value{
@@ -273,6 +319,7 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 		database.Text(did),
 		database.Text(collection),
 		database.Text(jsonData),
+		createdAtValue,
 	})
 	if err != nil {
 		return Skipped, err
@@ -323,45 +370,49 @@ func (r *RecordsRepository) insertBatchTx(ctx context.Context, tx *sql.Tx, recor
 	var args []any
 
 	for i, rec := range records {
-		base := i * 5
+		base := i * 6
 		var valueSet string
 
 		if r.db.Dialect() == database.PostgreSQL {
-			valueSet = fmt.Sprintf("(%s, %s, %s, %s, %s::jsonb)",
+			valueSet = fmt.Sprintf("(%s, %s, %s, %s, %s::jsonb, %s::timestamptz)",
 				r.db.Placeholder(base+1),
 				r.db.Placeholder(base+2),
 				r.db.Placeholder(base+3),
 				r.db.Placeholder(base+4),
-				r.db.Placeholder(base+5))
+				r.db.Placeholder(base+5),
+				r.db.Placeholder(base+6))
 		} else {
-			valueSet = fmt.Sprintf("(%s, %s, %s, %s, %s)",
+			valueSet = fmt.Sprintf("(%s, %s, %s, %s, %s, %s)",
 				r.db.Placeholder(base+1),
 				r.db.Placeholder(base+2),
 				r.db.Placeholder(base+3),
 				r.db.Placeholder(base+4),
-				r.db.Placeholder(base+5))
+				r.db.Placeholder(base+5),
+				r.db.Placeholder(base+6))
 		}
 		valueSets = append(valueSets, valueSet)
 
-		args = append(args, rec.URI, rec.CID, rec.DID, rec.Collection, rec.JSON)
+		args = append(args, rec.URI, rec.CID, rec.DID, rec.Collection, rec.JSON, r.db.ConvertParams([]database.Value{recordCreatedAtValue(rec.JSON)})[0])
 	}
 
 	var sqlStr string
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
-		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json)
+		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json, record_created_at)
 			VALUES %s
 			ON CONFLICT(uri) DO UPDATE SET
 				cid = EXCLUDED.cid,
 				json = EXCLUDED.json,
-				indexed_at = NOW()`, strings.Join(valueSets, ", "))
+				indexed_at = NOW(),
+				record_created_at = COALESCE(record.record_created_at, EXCLUDED.record_created_at)`, strings.Join(valueSets, ", "))
 	default:
-		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json)
+		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json, record_created_at)
 			VALUES %s
 			ON CONFLICT(uri) DO UPDATE SET
 				cid = excluded.cid,
 				json = excluded.json,
-				indexed_at = datetime('now')`, strings.Join(valueSets, ", "))
+				indexed_at = datetime('now'),
+				record_created_at = COALESCE(record.record_created_at, excluded.record_created_at)`, strings.Join(valueSets, ", "))
 	}
 
 	_, err := tx.ExecContext(ctx, sqlStr, args...)
@@ -407,6 +458,109 @@ func (r *RecordsRepository) GetByURIs(ctx context.Context, uris []string) ([]*Re
 	defer rows.Close()
 
 	return scanRecords(rows)
+}
+
+// GetRecordTimeline returns one creation-time page of current records across
+// explicit collections and an optional author set. Nil authors means no author
+// filter; an empty author slice returns no rows. Rows are ordered by
+// record_created_at DESC, uri DESC and use the same tuple for keyset cursors.
+func (r *RecordsRepository) GetRecordTimeline(ctx context.Context, authors, collections []string, limit int, after *RecordTimelineCursor) ([]*RecordTimelineRecord, error) {
+	if limit <= 0 || len(collections) == 0 {
+		return nil, nil
+	}
+	if authors != nil && len(authors) == 0 {
+		return nil, nil
+	}
+
+	var conditions []string
+	var params []database.Value
+	nextPlaceholder := 1
+
+	conditions = append(conditions, "record_created_at IS NOT NULL")
+	if r.db.Dialect() == database.SQLite {
+		conditions = append(conditions, "json_valid(json)")
+	}
+
+	collectionCondition, collectionParams, consumed, err := r.timelineSetCondition("collection", collections, nextPlaceholder)
+	if err != nil {
+		return nil, err
+	}
+	conditions = append(conditions, collectionCondition)
+	params = append(params, collectionParams...)
+	nextPlaceholder += consumed
+
+	if authors != nil {
+		authorCondition, authorParams, consumed, err := r.timelineSetCondition("did", authors, nextPlaceholder)
+		if err != nil {
+			return nil, err
+		}
+		conditions = append(conditions, authorCondition)
+		params = append(params, authorParams...)
+		nextPlaceholder += consumed
+	}
+
+	if after != nil {
+		createdAtPlaceholder := r.recordCreatedAtCursorValueExpr(r.db.Placeholder(nextPlaceholder))
+		createdAtAgainPlaceholder := r.recordCreatedAtCursorValueExpr(r.db.Placeholder(nextPlaceholder + 1))
+		uriPlaceholder := r.db.Placeholder(nextPlaceholder + 2)
+		conditions = append(conditions, fmt.Sprintf("(record_created_at < %s OR (record_created_at = %s AND uri < %s))", createdAtPlaceholder, createdAtAgainPlaceholder, uriPlaceholder))
+		params = append(params, database.TimestamptzValue(after.CreatedAt), database.TimestamptzValue(after.CreatedAt), database.Text(after.URI))
+		nextPlaceholder += 3
+	}
+
+	limitPlaceholder := r.db.Placeholder(nextPlaceholder)
+	params = append(params, database.IntValue(int64(limit)))
+
+	sqlStr := fmt.Sprintf(`SELECT %s
+		FROM record
+		WHERE %s
+		ORDER BY record_created_at DESC, uri DESC
+		LIMIT %s`, r.recordTimelineColumns(), strings.Join(conditions, " AND "), limitPlaceholder)
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query record timeline: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRecordTimelineRecords(rows)
+}
+
+func (r *RecordsRepository) recordTimelineColumns() string {
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		return "uri, cid, did, collection, json::text, indexed_at::text, rkey, record_created_at::text"
+	default:
+		return "uri, cid, did, collection, json, indexed_at, rkey, record_created_at"
+	}
+}
+
+func (r *RecordsRepository) recordCreatedAtCursorValueExpr(placeholder string) string {
+	if r.db.Dialect() == database.PostgreSQL {
+		return fmt.Sprintf("%s::timestamptz", placeholder)
+	}
+	return placeholder
+}
+
+func (r *RecordsRepository) timelineSetCondition(column string, values []string, startPlaceholder int) (string, []database.Value, int, error) {
+	if len(values) == 0 {
+		return "", nil, 0, fmt.Errorf("%s set must not be empty", column)
+	}
+
+	if r.db.Dialect() == database.SQLite {
+		encoded, err := json.Marshal(values)
+		if err != nil {
+			return "", nil, 0, fmt.Errorf("failed to encode %s set: %w", column, err)
+		}
+		return fmt.Sprintf("%s IN (SELECT value FROM json_each(%s))", column, r.db.Placeholder(startPlaceholder)), []database.Value{database.Text(string(encoded))}, 1, nil
+	}
+
+	placeholders := r.db.Placeholders(len(values), startPlaceholder)
+	params := make([]database.Value, len(values))
+	for i, value := range values {
+		params[i] = database.Text(value)
+	}
+	return fmt.Sprintf("%s IN (%s)", column, placeholders), params, len(values), nil
 }
 
 // GetByCollection retrieves records for a specific collection.
@@ -2102,11 +2256,26 @@ func (r *RecordsRepository) Search(
 
 // Helper functions
 
-func (r *RecordsRepository) getCIDByURI(ctx context.Context, uri string) (string, error) {
+func (r *RecordsRepository) getCIDAndRecordCreatedAtByURI(ctx context.Context, uri string) (string, bool, error) {
 	var cid string
-	err := r.db.QueryRow(ctx, fmt.Sprintf("SELECT cid FROM record WHERE uri = %s", r.db.Placeholder(1)),
-		[]database.Value{database.Text(uri)}, &cid)
-	return cid, err
+	var recordCreatedAt sql.NullString
+	recordCreatedAtExpr := "record_created_at"
+	if r.db.Dialect() == database.PostgreSQL {
+		recordCreatedAtExpr = "record_created_at::text"
+	}
+	err := r.db.QueryRow(ctx, fmt.Sprintf("SELECT cid, %s FROM record WHERE uri = %s", recordCreatedAtExpr, r.db.Placeholder(1)),
+		[]database.Value{database.Text(uri)}, &cid, &recordCreatedAt)
+	return cid, recordCreatedAt.Valid && recordCreatedAt.String != "", err
+}
+
+func (r *RecordsRepository) fillMissingRecordCreatedAt(ctx context.Context, uri string, value database.Value) error {
+	if _, ok := value.(database.NullValue); ok {
+		return nil
+	}
+	_, err := r.db.Exec(ctx,
+		fmt.Sprintf("UPDATE record SET record_created_at = %s WHERE uri = %s AND record_created_at IS NULL", r.recordCreatedAtCursorValueExpr(r.db.Placeholder(1)), r.db.Placeholder(2)),
+		[]database.Value{value, database.Text(uri)})
+	return err
 }
 
 func scanRecords(rows *sql.Rows) ([]*Record, error) {
@@ -2119,6 +2288,22 @@ func scanRecords(rows *sql.Rows) ([]*Record, error) {
 		}
 		// Try various timestamp formats
 		rec.IndexedAt = atproto.ParseTimestamp(indexedAtStr)
+		records = append(records, &rec)
+	}
+	return records, rows.Err()
+}
+
+func scanRecordTimelineRecords(rows *sql.Rows) ([]*RecordTimelineRecord, error) {
+	var records []*RecordTimelineRecord
+	for rows.Next() {
+		var rec RecordTimelineRecord
+		var indexedAtStr string
+		var recordCreatedAtStr string
+		if err := rows.Scan(&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey, &recordCreatedAtStr); err != nil {
+			return nil, err
+		}
+		rec.IndexedAt = atproto.ParseTimestamp(indexedAtStr)
+		rec.RecordCreatedAt = atproto.ParseTimestamp(recordCreatedAtStr)
 		records = append(records, &rec)
 	}
 	return records, rows.Err()

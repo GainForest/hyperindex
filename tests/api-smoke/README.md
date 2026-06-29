@@ -84,6 +84,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - `collectionStats`
 - Search
 - Strict pagination
+- `recordTimeline` schema, minimum record sanity check, pagination, author filtering, and Certified profile hydration
 - Activity claim external label querying, value filtering, and pagination
 - Typed `ByUri` roundtrip
 - `app.certified.graph.follow` typed pagination, filters, and sorting

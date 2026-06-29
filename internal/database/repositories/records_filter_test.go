@@ -539,7 +539,8 @@ func newSortTestRepo(t *testing.T) (*RecordsRepository, func(query string, args 
 			collection TEXT NOT NULL,
 			json TEXT NOT NULL DEFAULT '{}',
 			indexed_at TEXT NOT NULL DEFAULT (datetime('now')),
-			rkey TEXT NOT NULL DEFAULT ''
+			rkey TEXT NOT NULL DEFAULT '',
+			record_created_at TEXT
 		)`)
 	if err != nil {
 		t.Fatalf("failed to create record table: %v", err)
