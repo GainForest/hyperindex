@@ -1,0 +1,4 @@
+kind: added
+body: Add a generic recordTimeline GraphQL query for creation-time pages across selected collections, with materialized record timestamps and stable cursor pagination. Existing records are backfilled when migrations run, and callers can optionally filter by author DIDs while avoiding exact total counts.
+custom:
+  Affects: user

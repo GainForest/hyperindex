@@ -2,6 +2,7 @@ package migrations_test
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/url"
 	"os"
@@ -74,6 +75,8 @@ func TestMigrations_Run(t *testing.T) {
 		"idx_indexing_activity_timestamp",
 		"idx_indexing_activity_rkey",
 		"idx_external_label_active_lookup",
+		"idx_record_timeline_author_collection_created",
+		"idx_record_timeline_collection_created",
 	}
 
 	for _, index := range expectedIndexes {
@@ -85,6 +88,78 @@ func TestMigrations_Run(t *testing.T) {
 			t.Errorf("expected index %q to exist, but got error: %v", index, err)
 		}
 	}
+}
+
+func TestMigrations_BackfillsRecordCreatedAtSQLite(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+
+	_, err := exec.DB().ExecContext(ctx, `
+		CREATE TABLE schema_migrations (
+			version TEXT PRIMARY KEY,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE TABLE record (
+			uri TEXT PRIMARY KEY NOT NULL,
+			cid TEXT NOT NULL,
+			did TEXT NOT NULL,
+			collection TEXT NOT NULL,
+			json TEXT NOT NULL,
+			indexed_at TEXT NOT NULL DEFAULT (datetime('now')),
+			rkey TEXT NOT NULL DEFAULT ''
+		);
+		INSERT INTO record (uri, cid, did, collection, json, rkey) VALUES
+			('at://did:plc:test/com.example.timeline.post/parseable', 'cid1', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T10:00:00.123+02:00"}', 'parseable'),
+			('at://did:plc:test/com.example.timeline.post/nanos', 'cid5', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T10:00:00.123999999Z"}', 'nanos'),
+			('at://did:plc:test/com.example.timeline.post/missing', 'cid2', 'did:plc:test', 'com.example.timeline.post', '{"text":"missing"}', 'missing'),
+			('at://did:plc:test/com.example.timeline.post/alternate', 'cid3', 'did:plc:test', 'com.example.timeline.post', '{"timestamp":"2026-01-15T10:00:00Z"}', 'alternate'),
+			('at://did:plc:test/com.example.timeline.post/malformed', 'cid4', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"not-a-time"}', 'malformed'),
+			('at://did:plc:test/com.example.timeline.post/out-of-range', 'cid6', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T24:00:00Z"}', 'out-of-range');
+	`)
+	if err != nil {
+		t.Fatalf("failed to set up pre-010 schema: %v", err)
+	}
+	for i := 1; i <= 9; i++ {
+		version := fmt.Sprintf("%03d", i)
+		if _, err := exec.DB().ExecContext(ctx, "INSERT INTO schema_migrations (version) VALUES (?)", version); err != nil {
+			t.Fatalf("failed to mark migration %s applied: %v", version, err)
+		}
+	}
+
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	got := sqliteRecordCreatedAt(t, exec, "at://did:plc:test/com.example.timeline.post/parseable")
+	if got != "2026-01-15T08:00:00.123Z" {
+		t.Fatalf("parseable record_created_at = %q, want normalized UTC timestamp", got)
+	}
+	got = sqliteRecordCreatedAt(t, exec, "at://did:plc:test/com.example.timeline.post/nanos")
+	if got != "2026-01-15T10:00:00.123Z" {
+		t.Fatalf("nanosecond record_created_at = %q, want truncated millisecond timestamp", got)
+	}
+	for _, uri := range []string{
+		"at://did:plc:test/com.example.timeline.post/missing",
+		"at://did:plc:test/com.example.timeline.post/alternate",
+		"at://did:plc:test/com.example.timeline.post/malformed",
+		"at://did:plc:test/com.example.timeline.post/out-of-range",
+	} {
+		if got := sqliteRecordCreatedAt(t, exec, uri); got != "" {
+			t.Fatalf("%s record_created_at = %q, want null", uri, got)
+		}
+	}
+}
+
+func sqliteRecordCreatedAt(t *testing.T, exec *sqlite.Executor, uri string) string {
+	t.Helper()
+	var value sql.NullString
+	if err := exec.DB().QueryRowContext(context.Background(), "SELECT record_created_at FROM record WHERE uri = ?", uri).Scan(&value); err != nil {
+		t.Fatalf("failed to query record_created_at for %s: %v", uri, err)
+	}
+	if !value.Valid {
+		return ""
+	}
+	return value.String
 }
 
 func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
@@ -130,6 +205,109 @@ func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_indexing_activity_timestamp")
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_indexing_activity_rkey")
 	assertPostgresSequenceExists(ctx, t, exec, schemaName, "indexing_activity_id_seq")
+}
+
+func TestMigrations_BackfillsRecordCreatedAtPostgres(t *testing.T) {
+	databaseURL, ok := safePostgresTestDatabaseURL(t)
+	if !ok {
+		t.Skip("PostgreSQL record_created_at backfill test requires DATABASE_URL pointing at a postgres database named test or ending with _test/-test")
+	}
+
+	ctx := context.Background()
+	adminExec, err := postgres.NewExecutor(databaseURL)
+	if err != nil {
+		t.Fatalf("failed to create postgres admin executor: %v", err)
+	}
+	t.Cleanup(func() { _ = adminExec.Close() })
+
+	schemaName := fmt.Sprintf("hyperindex_record_created_at_test_%d", time.Now().UnixNano())
+	quotedSchemaName := quotePostgresIdentifier(schemaName)
+	if _, err := adminExec.DB().ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", quotedSchemaName)); err != nil {
+		t.Fatalf("failed to create postgres test schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = adminExec.DB().ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", quotedSchemaName))
+	})
+
+	schemaURL, err := postgresURLWithSearchPath(databaseURL, schemaName)
+	if err != nil {
+		t.Fatalf("failed to build postgres schema URL: %v", err)
+	}
+
+	exec, err := postgres.NewExecutor(schemaURL)
+	if err != nil {
+		t.Fatalf("failed to create postgres schema executor: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Close() })
+
+	_, err = exec.DB().ExecContext(ctx, `
+		CREATE TABLE schema_migrations (
+			version TEXT PRIMARY KEY,
+			applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+		);
+		CREATE TABLE record (
+			uri TEXT PRIMARY KEY NOT NULL,
+			cid TEXT NOT NULL,
+			did TEXT NOT NULL,
+			collection TEXT NOT NULL,
+			json JSONB NOT NULL,
+			indexed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+			rkey TEXT NOT NULL DEFAULT ''
+		);
+		INSERT INTO record (uri, cid, did, collection, json, rkey) VALUES
+			('at://did:plc:test/com.example.timeline.post/parseable', 'cid1', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T10:00:00.123+02:00"}'::jsonb, 'parseable'),
+			('at://did:plc:test/com.example.timeline.post/nanos', 'cid5', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T10:00:00.123999999Z"}'::jsonb, 'nanos'),
+			('at://did:plc:test/com.example.timeline.post/malformed', 'cid4', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"not-a-time"}'::jsonb, 'malformed'),
+			('at://did:plc:test/com.example.timeline.post/out-of-range', 'cid6', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T24:00:00Z"}'::jsonb, 'out-of-range');
+	`)
+	if err != nil {
+		t.Fatalf("failed to set up pre-010 postgres schema: %v", err)
+	}
+	for i := 1; i <= 9; i++ {
+		version := fmt.Sprintf("%03d", i)
+		if _, err := exec.DB().ExecContext(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
+			t.Fatalf("failed to mark migration %s applied: %v", version, err)
+		}
+	}
+
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	got := postgresRecordCreatedAt(t, exec, "at://did:plc:test/com.example.timeline.post/parseable")
+	if got != "2026-01-15T08:00:00.123Z" {
+		t.Fatalf("parseable record_created_at = %q, want normalized UTC timestamp", got)
+	}
+	got = postgresRecordCreatedAt(t, exec, "at://did:plc:test/com.example.timeline.post/nanos")
+	if got != "2026-01-15T10:00:00.123Z" {
+		t.Fatalf("nanosecond record_created_at = %q, want truncated millisecond timestamp", got)
+	}
+	for _, uri := range []string{
+		"at://did:plc:test/com.example.timeline.post/malformed",
+		"at://did:plc:test/com.example.timeline.post/out-of-range",
+	} {
+		if got := postgresRecordCreatedAt(t, exec, uri); got != "" {
+			t.Fatalf("%s record_created_at = %q, want null", uri, got)
+		}
+	}
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_timeline_author_collection_created")
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_timeline_collection_created")
+}
+
+func postgresRecordCreatedAt(t *testing.T, exec *postgres.Executor, uri string) string {
+	t.Helper()
+	var value sql.NullString
+	if err := exec.DB().QueryRowContext(context.Background(), `
+		SELECT to_char(record_created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+		FROM record
+		WHERE uri = $1`, uri,
+	).Scan(&value); err != nil {
+		t.Fatalf("failed to query postgres record_created_at for %s: %v", uri, err)
+	}
+	if !value.Valid {
+		return ""
+	}
+	return value.String
 }
 
 func TestMigrations_RunIdempotent(t *testing.T) {

@@ -1032,6 +1032,7 @@ func TestBuildWhereInput_UnresolvedRefsUsePresenceOnlyFilter(t *testing.T) {
 	targetField := whereInput.Fields()["target"]
 	if targetField == nil {
 		t.Fatal("WhereInput missing target field")
+		return
 	}
 	inputObj, ok := targetField.Type.(*graphql.InputObject)
 	if !ok {
@@ -1138,6 +1139,7 @@ func TestBuildWhereInput_ThreeLevelNestedFilters(t *testing.T) {
 	twoField := oneInput.Fields()["two"]
 	if twoField == nil {
 		t.Fatal("one filter missing second-level field two")
+		return
 	}
 	twoInput, ok := twoField.Type.(*graphql.InputObject)
 	if !ok {
@@ -1146,6 +1148,7 @@ func TestBuildWhereInput_ThreeLevelNestedFilters(t *testing.T) {
 	threeField := twoInput.Fields()["three"]
 	if threeField == nil {
 		t.Fatal("two filter missing third-level scalar field three")
+		return
 	}
 	if got := threeField.Type.String(); got != "ExactStringFilterInput" {
 		t.Fatalf("three filter type = %q, want ExactStringFilterInput", got)
@@ -1153,6 +1156,7 @@ func TestBuildWhereInput_ThreeLevelNestedFilters(t *testing.T) {
 	threeObjectField := twoInput.Fields()["threeObject"]
 	if threeObjectField == nil {
 		t.Fatal("two filter missing third-level object field threeObject")
+		return
 	}
 	threeObjectInput, ok := threeObjectField.Type.(*graphql.InputObject)
 	if !ok {
@@ -1296,6 +1300,7 @@ func TestBuildWhereInput_HidesNestedArrayAnyInsideArrayAny(t *testing.T) {
 	facetsAny := facetsInput.Fields()["any"]
 	if facetsAny == nil {
 		t.Fatal("top-level facets array should expose any")
+		return
 	}
 	facetInput, ok := facetsAny.Type.(*graphql.InputObject)
 	if !ok {
@@ -1305,6 +1310,7 @@ func TestBuildWhereInput_HidesNestedArrayAnyInsideArrayAny(t *testing.T) {
 	featuresField := facetInput.Fields()["features"]
 	if featuresField == nil {
 		t.Fatal("facets.any should expose nested features presence filter")
+		return
 	}
 	featuresInput, ok := featuresField.Type.(*graphql.InputObject)
 	if !ok {
@@ -3460,4 +3466,157 @@ func setupExternalLabelsWhereTestDB(t *testing.T) (context.Context, map[string]s
 
 	repos := &resolver.Repositories{Records: records, ExternalLabels: externalLabels}
 	return resolver.WithRepositories(ctx, repos), uris
+}
+
+func buildRecordTimelineTestSchema(t *testing.T) *graphql.Schema {
+	t.Helper()
+	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
+	if err != nil {
+		t.Fatalf("failed to load test lexicons: %v", err)
+	}
+	registry := lexicon.NewRegistry()
+	for _, lex := range lexicons {
+		registry.Register(lex)
+	}
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("failed to build record timeline schema: %v", err)
+	}
+	return schema
+}
+
+func setupRecordTimelineGraphQLTest(t *testing.T) (*graphql.Schema, context.Context) {
+	t.Helper()
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	records := []*repositories.Record{
+		{URI: "at://did:plc:alice/org.hypercerts.collection/alice-old", CID: "cid-alice-old", DID: "did:plc:alice", Collection: "org.hypercerts.collection", JSON: `{"title":"Alice old","createdAt":"2026-01-15T10:00:00Z"}`},
+		{URI: "at://did:plc:bob/org.hypercerts.collection/bob-new", CID: "cid-bob-new", DID: "did:plc:bob", Collection: "org.hypercerts.collection", JSON: `{"title":"Bob new","createdAt":"2026-01-15T12:00:00Z"}`},
+		{URI: "at://did:plc:alice/app.certified.actor.profile/self", CID: "cid-alice-profile", DID: "did:plc:alice", Collection: "app.certified.actor.profile", JSON: `{"displayName":"Alice Profile","createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:bob/app.certified.actor.profile/self", CID: "cid-bob-profile", DID: "did:plc:bob", Collection: "app.certified.actor.profile", JSON: `{"displayName":"Bob Profile","createdAt":"2026-01-01T00:00:00Z"}`},
+	}
+	if err := db.Records.BatchInsert(ctx, records); err != nil {
+		t.Fatalf("failed to insert timeline test records: %v", err)
+	}
+	repos := &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels}
+	return buildRecordTimelineTestSchema(t), resolver.WithRepositories(ctx, repos)
+}
+
+func TestRecordTimelineGraphQL(t *testing.T) {
+	schema, ctx := setupRecordTimelineGraphQLTest(t)
+
+	query := `{
+		recordTimeline(authors: ["did:plc:alice", "did:plc:bob"], collections: ["org.hypercerts.collection"], first: 1) {
+			edges {
+				cursor
+				node {
+					uri
+					cid
+					did
+					collection
+					rkey
+					createdAt
+					indexedAt
+					json
+					certifiedProfileData { displayName }
+				}
+			}
+			pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+		}
+	}`
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("recordTimeline query errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	conn := data["recordTimeline"].(map[string]interface{})
+	edges := conn["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("edges length = %d, want 1", len(edges))
+	}
+	edge := edges[0].(map[string]interface{})
+	node := edge["node"].(map[string]interface{})
+	if got := node["uri"]; got != "at://did:plc:bob/org.hypercerts.collection/bob-new" {
+		t.Fatalf("first timeline uri = %v, want bob newest", got)
+	}
+	if got := node["createdAt"]; got != "2026-01-15T12:00:00.000Z" {
+		t.Fatalf("createdAt = %v, want normalized timestamp", got)
+	}
+	profile := node["certifiedProfileData"].(map[string]interface{})
+	if got := profile["displayName"]; got != "Bob Profile" {
+		t.Fatalf("certifiedProfileData.displayName = %v, want Bob Profile", got)
+	}
+	pageInfo := conn["pageInfo"].(map[string]interface{})
+	if got := pageInfo["hasNextPage"]; got != true {
+		t.Fatalf("hasNextPage = %v, want true", got)
+	}
+	if got := pageInfo["hasPreviousPage"]; got != false {
+		t.Fatalf("hasPreviousPage = %v, want false", got)
+	}
+
+	after := edge["cursor"].(string)
+	page2Query := fmt.Sprintf(`{
+		recordTimeline(authors: ["did:plc:alice", "did:plc:bob"], collections: ["org.hypercerts.collection"], first: 1, after: %q) {
+			edges { node { uri createdAt certifiedProfileData { displayName } } }
+			pageInfo { hasNextPage hasPreviousPage }
+		}
+	}`, after)
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: page2Query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("recordTimeline page 2 query errors: %v", result.Errors)
+	}
+	conn = result.Data.(map[string]interface{})["recordTimeline"].(map[string]interface{})
+	edges = conn["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("page 2 edges length = %d, want 1", len(edges))
+	}
+	node = edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if got := node["uri"]; got != "at://did:plc:alice/org.hypercerts.collection/alice-old" {
+		t.Fatalf("page 2 uri = %v, want alice older", got)
+	}
+	pageInfo = conn["pageInfo"].(map[string]interface{})
+	if got := pageInfo["hasNextPage"]; got != false {
+		t.Fatalf("page 2 hasNextPage = %v, want false", got)
+	}
+	if got := pageInfo["hasPreviousPage"]; got != true {
+		t.Fatalf("page 2 hasPreviousPage = %v, want true", got)
+	}
+}
+
+func TestRecordTimelineGraphQLValidationAndShape(t *testing.T) {
+	schema, ctx := setupRecordTimelineGraphQLTest(t)
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(collections: [], first: 1) { edges { cursor } } }`, Context: ctx})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "collections must include at least one") {
+		t.Fatalf("empty collections errors = %v, want clear validation error", result.Errors)
+	}
+
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(authors: [], collections: ["org.hypercerts.collection"], first: 1) { edges { cursor } pageInfo { hasNextPage startCursor endCursor } } }`, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("empty authors query errors: %v", result.Errors)
+	}
+	conn := result.Data.(map[string]interface{})["recordTimeline"].(map[string]interface{})
+	if edges := conn["edges"].([]interface{}); len(edges) != 0 {
+		t.Fatalf("authors: [] edges length = %d, want 0", len(edges))
+	}
+
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(authors: [], collections: ["org.hypercerts.collection"], first: 1, after: "not-a-cursor") { edges { cursor } } }`, Context: ctx})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "invalid recordTimeline cursor") {
+		t.Fatalf("empty authors malformed cursor errors = %v, want cursor validation error", result.Errors)
+	}
+
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(collections: ["org.hypercerts.collection"], first: 101) { edges { cursor } } }`, Context: ctx})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "first must be between 1 and 100") {
+		t.Fatalf("invalid first errors = %v, want range error", result.Errors)
+	}
+
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(collections: ["org.hypercerts.collection"]) { totalCount } }`, Context: ctx})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "totalCount") {
+		t.Fatalf("totalCount query errors = %v, want unknown field error", result.Errors)
+	}
+
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(collections: [], first: 1) { edges { cursor } } }`, Context: context.Background()})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "collections must include at least one") {
+		t.Fatalf("no-repository validation errors = %v, want validation before empty connection", result.Errors)
+	}
 }

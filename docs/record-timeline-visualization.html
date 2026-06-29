@@ -1,0 +1,1212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hyperindex recordTimeline API visualization</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1110;
+      --bg-2: #111816;
+      --panel: rgba(22, 30, 27, 0.82);
+      --panel-strong: rgba(27, 38, 34, 0.94);
+      --ink: #f3efe2;
+      --muted: #aab7a9;
+      --dim: #718172;
+      --line: rgba(219, 232, 207, 0.14);
+      --line-strong: rgba(219, 232, 207, 0.28);
+      --sage: #8dbf9b;
+      --mint: #36d38a;
+      --gold: #e8c468;
+      --clay: #d48665;
+      --rose: #ed7d8e;
+      --sky: #84a9ff;
+      --violet: #b98cff;
+      --shadow: 0 22px 70px rgba(0, 0, 0, 0.38);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --mono: "SFMono-Regular", "Cascadia Code", "Liberation Mono", Menlo, monospace;
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      --sans: Avenir, "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      min-height: 100%;
+      background:
+        radial-gradient(circle at 8% 0%, rgba(54, 211, 138, 0.22), transparent 32rem),
+        radial-gradient(circle at 78% 10%, rgba(232, 196, 104, 0.14), transparent 26rem),
+        linear-gradient(135deg, #0b0f0e 0%, #111816 45%, #080b0a 100%);
+    }
+
+    body {
+      margin: 0;
+      min-height: 100%;
+      color: var(--ink);
+      font-family: var(--sans);
+      letter-spacing: -0.01em;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(243, 239, 226, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(243, 239, 226, 0.025) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent 80%);
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.16;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+      mix-blend-mode: overlay;
+    }
+
+    a { color: inherit; }
+
+    .page {
+      width: min(1440px, 100%);
+      margin: 0 auto;
+      padding: 36px clamp(16px, 3vw, 44px) 54px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(330px, 0.8fr);
+      gap: 24px;
+      align-items: stretch;
+      margin-bottom: 24px;
+    }
+
+    .hero-card,
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(22px);
+    }
+
+    .hero-card {
+      min-height: 330px;
+      overflow: hidden;
+      border-radius: 36px;
+      padding: clamp(28px, 5vw, 60px);
+      position: relative;
+    }
+
+    .hero-card::before {
+      content: "";
+      position: absolute;
+      width: 520px;
+      height: 520px;
+      right: -180px;
+      top: -210px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle, rgba(54, 211, 138, 0.34), transparent 60%),
+        conic-gradient(from 140deg, rgba(232, 196, 104, .32), rgba(54, 211, 138, .1), transparent, rgba(132, 169, 255, .16));
+      filter: blur(2px);
+    }
+
+    .hero-card::after {
+      content: "";
+      position: absolute;
+      inset: auto 28px 28px auto;
+      width: 180px;
+      height: 180px;
+      border-radius: 999px;
+      border: 1px solid rgba(232, 196, 104, 0.32);
+      background:
+        linear-gradient(90deg, transparent 49%, rgba(232,196,104,.26) 50%, transparent 51%),
+        linear-gradient(transparent 49%, rgba(232,196,104,.26) 50%, transparent 51%);
+      opacity: 0.55;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--sage);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      position: relative;
+      z-index: 1;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 24px rgba(54, 211, 138, .75);
+    }
+
+    h1 {
+      margin: 18px 0 0;
+      max-width: 820px;
+      font-family: var(--serif);
+      font-size: clamp(46px, 8vw, 96px);
+      line-height: 0.88;
+      letter-spacing: -0.065em;
+      font-weight: 500;
+      position: relative;
+      z-index: 1;
+    }
+
+    h1 em {
+      color: var(--gold);
+      font-style: italic;
+      font-weight: 400;
+    }
+
+    .hero-copy {
+      margin: 24px 0 0;
+      max-width: 720px;
+      color: var(--muted);
+      font-size: clamp(16px, 1.7vw, 19px);
+      line-height: 1.65;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-note {
+      border-radius: 36px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 20px;
+      background:
+        linear-gradient(180deg, rgba(232, 196, 104, 0.10), rgba(22, 30, 27, 0.74)),
+        var(--panel);
+    }
+
+    .note-title {
+      font-family: var(--serif);
+      font-size: 30px;
+      line-height: 1;
+      margin: 0 0 10px;
+      letter-spacing: -0.04em;
+    }
+
+    .note-body {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .sql-mini {
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background: rgba(0, 0, 0, 0.22);
+      padding: 16px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #cfe6d2;
+      overflow: hidden;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+      gap: 24px;
+      align-items: start;
+    }
+
+    .panel {
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+    }
+
+    .controls {
+      position: sticky;
+      top: 18px;
+    }
+
+    .panel-header {
+      padding: 20px 20px 0;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 28px;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .panel-subtitle {
+      margin: 9px 0 0;
+      color: var(--dim);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .control-body {
+      padding: 18px 20px 20px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .control-group {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid rgba(255, 255, 255, 0.055);
+    }
+
+    .label-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .value {
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--mint);
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.035);
+      color: var(--muted);
+      padding: 8px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+      transition: transform .18s ease, border-color .18s ease, background .18s ease, color .18s ease;
+    }
+
+    .chip:hover { transform: translateY(-1px); border-color: var(--line-strong); }
+    .chip input { accent-color: var(--mint); }
+    .chip:has(input:checked) {
+      color: var(--ink);
+      border-color: rgba(54, 211, 138, .38);
+      background: rgba(54, 211, 138, .11);
+    }
+
+    .radio-stack {
+      display: grid;
+      gap: 8px;
+    }
+
+    .radio-card {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      padding: 11px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.025);
+      cursor: pointer;
+    }
+
+    .radio-card:has(input:checked) {
+      border-color: rgba(232, 196, 104, .45);
+      background: rgba(232, 196, 104, .08);
+    }
+
+    .radio-card input { margin-top: 2px; accent-color: var(--gold); }
+    .radio-card b { display: block; font-size: 13px; color: var(--ink); }
+    .radio-card span { display: block; margin-top: 3px; color: var(--dim); font-size: 12px; line-height: 1.35; }
+
+    .main-grid {
+      display: grid;
+      gap: 24px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      background: rgba(22, 30, 27, 0.68);
+      border-radius: 22px;
+      padding: 18px;
+      min-height: 112px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .metric::after {
+      content: "";
+      position: absolute;
+      inset: auto -18px -34px auto;
+      width: 96px;
+      height: 96px;
+      border-radius: 50%;
+      background: var(--accent, var(--mint));
+      opacity: 0.13;
+      filter: blur(4px);
+    }
+
+    .metric-label {
+      color: var(--dim);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+    }
+
+    .metric-value {
+      margin-top: 10px;
+      font-family: var(--serif);
+      font-size: 34px;
+      line-height: 1;
+      letter-spacing: -0.055em;
+    }
+
+    .metric-caption {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .flow-panel {
+      padding: 20px;
+    }
+
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+      align-items: stretch;
+      margin-top: 18px;
+    }
+
+    .flow-step {
+      min-height: 142px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: rgba(255,255,255,.035);
+      padding: 15px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .flow-step::before {
+      content: attr(data-step);
+      position: absolute;
+      right: 12px;
+      top: 10px;
+      font-family: var(--mono);
+      color: rgba(243, 239, 226, .18);
+      font-size: 30px;
+      font-weight: 800;
+    }
+
+    .flow-step.active {
+      border-color: rgba(54, 211, 138, 0.38);
+      background: linear-gradient(180deg, rgba(54, 211, 138, .10), rgba(255,255,255,.03));
+      box-shadow: inset 0 0 0 1px rgba(54, 211, 138, .08);
+    }
+
+    .flow-icon {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      background: rgba(54, 211, 138, .12);
+      border: 1px solid rgba(54, 211, 138, .22);
+      color: var(--mint);
+      font-family: var(--mono);
+      font-weight: 800;
+    }
+
+    .flow-step h3 {
+      margin: 13px 0 6px;
+      font-size: 14px;
+      letter-spacing: -0.02em;
+    }
+
+    .flow-step p {
+      margin: 0;
+      color: var(--dim);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, .72fr);
+      gap: 24px;
+    }
+
+    .timeline-panel,
+    .code-panel,
+    .json-panel {
+      padding: 20px;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 16px;
+    }
+
+    .section-head h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 32px;
+      line-height: 1;
+      letter-spacing: -0.045em;
+    }
+
+    .section-head p {
+      margin: 7px 0 0;
+      color: var(--dim);
+      font-size: 13px;
+      line-height: 1.45;
+      max-width: 640px;
+    }
+
+    .pill {
+      white-space: nowrap;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.18);
+      color: var(--muted);
+      padding: 7px 10px;
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .timeline {
+      position: relative;
+      display: grid;
+      gap: 10px;
+      max-height: 650px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 17px;
+      top: 8px;
+      bottom: 8px;
+      width: 1px;
+      background: linear-gradient(to bottom, var(--mint), rgba(243,239,226,.08));
+    }
+
+    .row {
+      position: relative;
+      display: grid;
+      grid-template-columns: 34px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,.06);
+      background: rgba(255,255,255,.035);
+      animation: rise .32s ease both;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .dot {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: color-mix(in oklab, var(--c), transparent 78%);
+      border: 1px solid color-mix(in oklab, var(--c), transparent 54%);
+      color: var(--c);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 800;
+      z-index: 1;
+    }
+
+    .row-main { min-width: 0; }
+    .row-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .row-title span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .collection-tag {
+      flex: none;
+      color: var(--c);
+      font-family: var(--mono);
+      font-size: 10px;
+      border: 1px solid color-mix(in oklab, var(--c), transparent 66%);
+      background: color-mix(in oklab, var(--c), transparent 90%);
+      padding: 3px 6px;
+      border-radius: 999px;
+    }
+
+    .row-meta {
+      margin-top: 4px;
+      color: var(--dim);
+      font-family: var(--mono);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .row-time {
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      text-align: right;
+    }
+
+    pre {
+      margin: 0;
+      overflow: auto;
+      white-space: pre;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.65;
+      color: #d7e9d8;
+    }
+
+    .code-box {
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,.28);
+      border-radius: 20px;
+      padding: 16px;
+      overflow: auto;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .tab {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,.035);
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 8px 11px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .tab.active {
+      color: var(--ink);
+      border-color: rgba(232, 196, 104, .44);
+      background: rgba(232, 196, 104, .09);
+    }
+
+    .explain-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .explain-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      background: rgba(255,255,255,.03);
+    }
+
+    .explain-card b {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--ink);
+      font-size: 13px;
+    }
+
+    .explain-card span {
+      color: var(--dim);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .warning {
+      margin-top: 14px;
+      border: 1px solid rgba(232, 196, 104, .28);
+      background: rgba(232, 196, 104, .08);
+      color: #eadca8;
+      border-radius: 18px;
+      padding: 13px 14px;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .bars {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 110px 1fr 72px;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .bar-track {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.055);
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.05);
+    }
+
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--mint), var(--gold));
+      transition: width .3s ease;
+    }
+
+    .footer-note {
+      margin-top: 24px;
+      color: var(--dim);
+      font-size: 12px;
+      line-height: 1.5;
+      text-align: center;
+    }
+
+    @media (max-width: 1120px) {
+      .hero, .shell, .two-col { grid-template-columns: 1fr; }
+      .controls { position: relative; top: auto; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .flow-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 680px) {
+      .page { padding-inline: 12px; }
+      .hero-card, .hero-note, .panel { border-radius: 24px; }
+      .metrics, .flow-grid, .explain-grid { grid-template-columns: 1fr; }
+      .row { grid-template-columns: 34px 1fr; }
+      .row-time { grid-column: 2; text-align: left; }
+      h1 { font-size: 48px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-card">
+        <div class="eyebrow">Hyperindex query primitive</div>
+        <h1 id="page-title">recordTimeline <em>without</em> product coupling</h1>
+        <p class="hero-copy">
+          Interactive model for a generic GraphQL resolver that returns current records from selected collections,
+          filtered by author DIDs, ordered by materialized <code>createdAt</code>, paginated with one stable cursor,
+          and optionally batch-hydrated with Certified profile data.
+        </p>
+      </div>
+      <aside class="hero-note" aria-label="Design summary">
+        <div>
+          <h2 class="note-title">Core idea</h2>
+          <p class="note-body">
+            The app resolves “who I follow” separately, then asks Hyperindex for one merged page across the collections it cares about.
+            Hyperindex stays generic; optional profile hydration improves Hypercerts-stack DX without changing feed policy.
+          </p>
+        </div>
+        <div class="sql-mini">
+          1× timeline query over record<br />
+          + optional 1× profile batch<br />
+          + future optional 1× handle batch<br />
+          = bounded, not N+1
+        </div>
+      </aside>
+    </section>
+
+    <section class="shell">
+      <aside class="panel controls" aria-label="Simulation controls">
+        <div class="panel-header">
+          <h2 class="panel-title">Simulation controls</h2>
+          <p class="panel-subtitle">Change the feed shape and watch the query plan, cursor, timeline rows, and cost estimate update.</p>
+        </div>
+        <div class="control-body">
+          <div class="control-group">
+            <div class="label-row"><label for="authors">Followed authors</label><span class="value" id="authorsValue"></span></div>
+            <input id="authors" type="range" min="5" max="1000" step="5" value="180" />
+          </div>
+
+          <div class="control-group">
+            <div class="label-row"><label for="pageSize">Page size</label><span class="value" id="pageValue"></span></div>
+            <input id="pageSize" type="range" min="10" max="100" step="5" value="50" />
+          </div>
+
+          <div class="control-group">
+            <div class="label-row"><span>Collections</span><span class="value" id="collectionValue"></span></div>
+            <div class="chips" id="collectionChips"></div>
+          </div>
+
+          <div class="control-group">
+            <div class="label-row"><span>Sort path</span><span class="value" id="sortValue"></span></div>
+            <div class="radio-stack">
+              <label class="radio-card">
+                <input type="radio" name="sortPath" value="materialized" checked />
+                <span><b>Materialized createdAt</b><span>Recommended: parse at ingest, store in a column, keyset paginate.</span></span>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="sortPath" value="json" />
+                <span><b>JSON extraction sort</b><span>Naive path: extract <code>json.createdAt</code> at query time, then sort.</span></span>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="sortPath" value="indexed" />
+                <span><b>indexed_at sort</b><span>Fast, but updates can move old records back to the top.</span></span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="main-grid">
+        <div class="metrics" aria-label="Estimated cost metrics">
+          <article class="metric" style="--accent: var(--mint)">
+            <div class="metric-label">Rows returned</div>
+            <div class="metric-value" id="rowsMetric">50</div>
+            <div class="metric-caption">One merged page plus one lookahead row for <code>hasNextPage</code>.</div>
+          </article>
+          <article class="metric" style="--accent: var(--gold)">
+            <div class="metric-label">Candidate scope</div>
+            <div class="metric-value" id="candidateMetric">—</div>
+            <div class="metric-caption">Toy estimate after author + collection filters.</div>
+          </article>
+          <article class="metric" style="--accent: var(--sky)">
+            <div class="metric-label">Plan risk</div>
+            <div class="metric-value" id="riskMetric">Low</div>
+            <div class="metric-caption" id="riskCaption">Uses composite index and keyset pagination.</div>
+          </article>
+          <article class="metric" style="--accent: var(--rose)">
+            <div class="metric-label">Cursor</div>
+            <div class="metric-value" id="cursorMetric">#50</div>
+            <div class="metric-caption">Compound cursor: <code>{ createdAt, uri }</code>.</div>
+          </article>
+        </div>
+
+        <article class="panel flow-panel">
+          <div class="section-head">
+            <div>
+              <h2>Resolver flow</h2>
+              <p>Keep follow resolution and product policy outside Hyperindex. The resolver only provides a safe generic primitive.</p>
+            </div>
+            <span class="pill" id="flowPill">raw records + optional profile</span>
+          </div>
+          <div class="flow-grid">
+            <div class="flow-step active" data-step="01">
+              <div class="flow-icon">GQL</div>
+              <h3>GraphQL args</h3>
+              <p>Client passes author DIDs, collections, page size, and optional cursor.</p>
+            </div>
+            <div class="flow-step active" data-step="02">
+              <div class="flow-icon">SQL</div>
+              <h3>Single DB query</h3>
+              <p>Filter the current <code>record</code> table. No N per-collection resolver fanout.</p>
+            </div>
+            <div class="flow-step active" data-step="03">
+              <div class="flow-icon">IDX</div>
+              <h3>Composite index</h3>
+              <p>Use dialect-specific SQLite/Postgres indexes over author, collection, timestamp, and URI.</p>
+            </div>
+            <div class="flow-step active" data-step="04">
+              <div class="flow-icon">BAT</div>
+              <h3>Batch profile hydration</h3>
+              <p>If selected, fetch <code>app.certified.actor.profile/self</code> once for distinct page authors.</p>
+            </div>
+            <div class="flow-step active" data-step="05">
+              <div class="flow-icon">CUR</div>
+              <h3>Stable output</h3>
+              <p>Return raw records, optional profile data, and a compound <code>{createdAt, uri}</code> cursor.</p>
+            </div>
+          </div>
+        </article>
+
+        <div class="two-col">
+          <article class="panel timeline-panel">
+            <div class="section-head">
+              <div>
+                <h2>Merged timeline page</h2>
+                <p>These are synthetic current records sorted by <code>createdAt DESC, uri DESC</code>. Deletes vanish; updates do not become new feed events; profile data is attached after pagination.</p>
+              </div>
+              <span class="pill" id="timelinePill">50 items</span>
+            </div>
+            <div class="timeline" id="timeline" aria-live="polite"></div>
+          </article>
+
+          <div class="main-grid">
+            <article class="panel code-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Query shape</h2>
+                  <p>The resolver stays generic. The app decides which collections represent a home feed.</p>
+                </div>
+              </div>
+              <div class="tabs" role="tablist" aria-label="Code examples">
+                <button class="tab active" data-tab="graphql" type="button">GraphQL</button>
+                <button class="tab" data-tab="sql" type="button">SQL</button>
+                <button class="tab" data-tab="index" type="button">Index</button>
+              </div>
+              <div class="code-box"><pre id="codeOutput"></pre></div>
+            </article>
+
+            <article class="panel json-panel">
+              <div class="section-head">
+                <div>
+                  <h2>Returned node</h2>
+                  <p>Raw JSON keeps the resolver reusable. Optional <code>certifiedProfileData</code> is page-batched, not resolved per row.</p>
+                </div>
+              </div>
+              <div class="code-box"><pre id="jsonOutput"></pre></div>
+            </article>
+          </div>
+        </div>
+
+        <article class="panel code-panel">
+          <div class="section-head">
+            <div>
+              <h2>Safety model</h2>
+              <p>Why this can be safe, and where it becomes expensive.</p>
+            </div>
+            <span class="pill" id="safetyPill">illustrative estimate</span>
+          </div>
+          <div class="explain-grid">
+            <div class="explain-card">
+              <b>Safe path</b>
+              <span>Materialize record creation time at ingest. Query with bounded author and collection lists. Hydrate profiles only after pagination.</span>
+            </div>
+            <div class="explain-card">
+              <b>Expensive path</b>
+              <span>Extract <code>createdAt</code> from JSON for every candidate row and sort it at request time.</span>
+            </div>
+            <div class="explain-card">
+              <b>Non-goal</b>
+              <span>This is not a follow resolver, typed union resolver, or append-only event log. Updates/deletes need a separate <code>recordEvents</code> API.</span>
+            </div>
+          </div>
+          <div class="bars" aria-label="Relative cost bars">
+            <div class="bar-row"><span>Index work</span><div class="bar-track"><div class="bar-fill" id="indexBar"></div></div><span id="indexBarText">—</span></div>
+            <div class="bar-row"><span>Sort work</span><div class="bar-track"><div class="bar-fill" id="sortBar"></div></div><span id="sortBarText">—</span></div>
+            <div class="bar-row"><span>Payload</span><div class="bar-track"><div class="bar-fill" id="payloadBar"></div></div><span id="payloadBarText">—</span></div>
+          </div>
+          <div class="warning" id="warningBox">
+            Recommended production version: require collections, cap authors/page size, store <code>record_created_at</code>, skip exact <code>totalCount</code>, and batch-hydrate profiles only when selected.
+          </div>
+        </article>
+      </section>
+    </section>
+
+    <p class="footer-note">
+      This is a local visualization artifact paired with <code>docs/record-timeline-spec.md</code>. Numbers are toy estimates for reasoning about query shape, not measured production benchmarks.
+    </p>
+  </main>
+
+  <script>
+    const collections = [
+      { id: "org.hypercerts.claim.activity", label: "Activities", short: "ACT", color: "#36d38a", weight: 1.00 },
+      { id: "org.hypercerts.collection", label: "Projects", short: "PRJ", color: "#e8c468", weight: 0.72 },
+      { id: "app.certified.badge.award", label: "Awards", short: "AWD", color: "#ed7d8e", weight: 0.88 },
+      { id: "app.certified.actor.profile", label: "Profiles", short: "PRO", color: "#84a9ff", weight: 0.54 },
+      { id: "app.certified.actor.organization", label: "Orgs", short: "ORG", color: "#b98cff", weight: 0.48 },
+      { id: "org.hypercerts.funding.receipt", label: "Funding", short: "FND", color: "#d48665", weight: 0.34 },
+    ];
+
+    const state = {
+      authors: 180,
+      pageSize: 50,
+      selected: new Set(collections.slice(0, 5).map((c) => c.id)),
+      sortPath: "materialized",
+      tab: "graphql",
+    };
+
+    const els = {
+      authors: document.getElementById("authors"),
+      authorsValue: document.getElementById("authorsValue"),
+      pageSize: document.getElementById("pageSize"),
+      pageValue: document.getElementById("pageValue"),
+      collectionValue: document.getElementById("collectionValue"),
+      collectionChips: document.getElementById("collectionChips"),
+      sortValue: document.getElementById("sortValue"),
+      rowsMetric: document.getElementById("rowsMetric"),
+      candidateMetric: document.getElementById("candidateMetric"),
+      riskMetric: document.getElementById("riskMetric"),
+      riskCaption: document.getElementById("riskCaption"),
+      cursorMetric: document.getElementById("cursorMetric"),
+      timeline: document.getElementById("timeline"),
+      timelinePill: document.getElementById("timelinePill"),
+      codeOutput: document.getElementById("codeOutput"),
+      jsonOutput: document.getElementById("jsonOutput"),
+      indexBar: document.getElementById("indexBar"),
+      sortBar: document.getElementById("sortBar"),
+      payloadBar: document.getElementById("payloadBar"),
+      indexBarText: document.getElementById("indexBarText"),
+      sortBarText: document.getElementById("sortBarText"),
+      payloadBarText: document.getElementById("payloadBarText"),
+      warningBox: document.getElementById("warningBox"),
+    };
+
+    function formatCompact(value) {
+      return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+    }
+
+    function pad(n) { return String(n).padStart(2, "0"); }
+
+    function selectedCollections() {
+      return collections.filter((c) => state.selected.has(c.id));
+    }
+
+    function pseudoRandom(seed) {
+      let x = Math.sin(seed) * 10000;
+      return x - Math.floor(x);
+    }
+
+    function makeDid(i) {
+      const suffix = Math.floor(100000 + pseudoRandom(i * 17) * 899999).toString(36);
+      return `did:plc:${suffix}${i.toString(36)}`;
+    }
+
+    function makeTimelineRows() {
+      const chosen = selectedCollections();
+      const rows = [];
+      const now = Date.UTC(2026, 5, 29, 8, 0, 0);
+      const count = Math.max(state.pageSize, 10);
+      for (let i = 0; i < count; i++) {
+        const c = chosen[i % chosen.length] || collections[0];
+        const authorIndex = Math.floor(pseudoRandom(i * 31 + state.authors) * state.authors) + 1;
+        const did = makeDid(authorIndex);
+        const minutesBack = Math.floor(i * (9 + pseudoRandom(i + chosen.length) * 38));
+        const t = new Date(now - minutesBack * 60 * 1000 - i * 7000);
+        const rkey = `rk${Math.floor(pseudoRandom(i * 101) * 900000 + 100000).toString(36)}`;
+        rows.push({
+          collection: c,
+          did,
+          rkey,
+          uri: `at://${did}/${c.id}/${rkey}`,
+          cid: `bafy${Math.floor(pseudoRandom(i * 131) * 1e12).toString(36)}`,
+          createdAt: t.toISOString(),
+          indexedAt: new Date(t.getTime() + Math.floor(pseudoRandom(i * 19) * 120000)).toISOString(),
+          title: `${c.label.slice(0, -1) || c.label} record ${i + 1}`,
+        });
+      }
+      return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.uri.localeCompare(a.uri));
+    }
+
+    function estimateCost() {
+      const chosen = selectedCollections();
+      const collectionWeight = chosen.reduce((sum, c) => sum + c.weight, 0);
+      const candidateRows = Math.max(1, Math.round(state.authors * collectionWeight * 7.4));
+      const page = state.pageSize + 1;
+      const indexWork = state.sortPath === "json" ? Math.min(100, 28 + Math.log10(candidateRows + 1) * 28) : Math.min(100, 10 + Math.log10(state.authors + chosen.length + 1) * 14);
+      const sortWork = state.sortPath === "json" ? Math.min(100, 32 + Math.log2(candidateRows + 1) * 5) : state.sortPath === "indexed" ? 18 : 12;
+      const payload = Math.min(100, 10 + state.pageSize * 0.7 + chosen.length * 2);
+      let risk = "Low";
+      let caption = "Uses composite index and keyset pagination.";
+      if (state.sortPath === "json") {
+        risk = candidateRows > 8000 ? "High" : "Medium";
+        caption = "Runtime JSON extraction and sorting grow with candidate rows.";
+      } else if (state.sortPath === "indexed") {
+        risk = "Low*";
+        caption = "Fast, but semantically update-ordered rather than create-ordered.";
+      }
+      return { candidateRows, page, indexWork, sortWork, payload, risk, caption };
+    }
+
+    function renderChips() {
+      els.collectionChips.innerHTML = "";
+      for (const c of collections) {
+        const label = document.createElement("label");
+        label.className = "chip";
+        label.innerHTML = `<input type="checkbox" value="${c.id}" ${state.selected.has(c.id) ? "checked" : ""} /> ${c.label}`;
+        label.querySelector("input").addEventListener("change", (event) => {
+          if (event.target.checked) state.selected.add(c.id);
+          else state.selected.delete(c.id);
+          if (state.selected.size === 0) state.selected.add(c.id);
+          render();
+        });
+        els.collectionChips.appendChild(label);
+      }
+    }
+
+    function graphQLCode() {
+      const cols = selectedCollections().map((c) => `    "${c.id}"`).join("\n");
+      return `query HomeTimeline($authors: [DID!]!, $after: String) {\n  recordTimeline(\n    authors: $authors\n    collections: [\n${cols}\n    ]\n    first: ${state.pageSize}\n    after: $after\n  ) {\n    edges {\n      cursor\n      node {\n        uri\n        cid\n        did\n        collection\n        rkey\n        createdAt\n        indexedAt\n        json\n        certifiedProfileData {\n          did\n          displayName\n          avatar {\n            __typename\n            ... on OrgHypercertsDefsSmallImage { image { ref } }\n          }\n          # Later: handle can be a nullable virtual field here.\n        }\n      }\n    }\n    pageInfo { hasNextPage endCursor }\n  }\n}`;
+    }
+
+    function sqlCode() {
+      const sortColumn = state.sortPath === "indexed" ? "indexed_at" : state.sortPath === "json" ? "json->>'createdAt'" : "record_created_at";
+      const cursorColumn = state.sortPath === "indexed" ? "indexed_at" : sortColumn;
+      return `-- 1. Timeline page: current records only\nSELECT uri, cid, did, collection, rkey, json,\n       record_created_at AS created_at, indexed_at\nFROM record\nWHERE did = ANY($1)\n  AND collection = ANY($2)\n  ${state.sortPath === "materialized" ? "AND record_created_at IS NOT NULL\n  " : ""}AND (\n    $3::timestamptz IS NULL\n    OR ${cursorColumn} < $3\n    OR (${cursorColumn} = $3 AND uri < $4)\n  )\nORDER BY ${sortColumn} DESC, uri DESC\nLIMIT ${state.pageSize + 1};\n\n-- 2. Only if certifiedProfileData is selected\nSELECT uri, cid, did, collection, rkey, json, indexed_at\nFROM record\nWHERE uri = ANY($profile_uris);`;
+    }
+
+    function indexCode() {
+      return `-- Recommended production index\nCREATE INDEX idx_record_timeline_author_collection_created\nON record (did, collection, record_created_at DESC, uri DESC)\nWHERE record_created_at IS NOT NULL;\n\n-- Optional: global collection timeline without author filtering\nCREATE INDEX idx_record_timeline_collection_created\nON record (collection, record_created_at DESC, uri DESC)\nWHERE record_created_at IS NOT NULL;`;
+    }
+
+    function sampleJSON(row) {
+      return JSON.stringify({
+        uri: row.uri,
+        cid: row.cid,
+        did: row.did,
+        collection: row.collection.id,
+        rkey: row.rkey,
+        createdAt: row.createdAt,
+        indexedAt: row.indexedAt,
+        json: {
+          $type: row.collection.id,
+          createdAt: row.createdAt,
+          title: row.title,
+          example: "Application renders this directly or hydrates typed nodes by uri:{ in:[...] }",
+        },
+        certifiedProfileData: {
+          did: row.did,
+          displayName: `Author ${row.did.slice(-5)}`,
+          avatar: null,
+          note: "Attached from one batch profile lookup after timeline pagination",
+        },
+      }, null, 2);
+    }
+
+    function renderTimeline(rows) {
+      els.timeline.innerHTML = "";
+      rows.forEach((row, i) => {
+        const item = document.createElement("article");
+        item.className = "row";
+        item.style.setProperty("--c", row.collection.color);
+        item.style.animationDelay = `${Math.min(i * 16, 320)}ms`;
+        const date = new Date(row.createdAt);
+        const label = `${pad(date.getUTCMonth() + 1)}/${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+        item.innerHTML = `
+          <div class="dot">${row.collection.short}</div>
+          <div class="row-main">
+            <div class="row-title"><span>${row.title}</span><span class="collection-tag">${row.collection.id}</span></div>
+            <div class="row-meta">${row.did} · ${row.rkey}</div>
+          </div>
+          <div class="row-time">${label} UTC</div>
+        `;
+        item.addEventListener("click", () => {
+          els.jsonOutput.textContent = sampleJSON(row);
+        });
+        els.timeline.appendChild(item);
+      });
+    }
+
+    function renderCode() {
+      const code = state.tab === "graphql" ? graphQLCode() : state.tab === "sql" ? sqlCode() : indexCode();
+      els.codeOutput.textContent = code;
+    }
+
+    function setBar(el, textEl, value) {
+      el.style.width = `${Math.max(3, Math.min(100, value))}%`;
+      textEl.textContent = `${Math.round(value)}%`;
+    }
+
+    function render() {
+      state.authors = Number(els.authors.value);
+      state.pageSize = Number(els.pageSize.value);
+      const radio = document.querySelector('input[name="sortPath"]:checked');
+      state.sortPath = radio ? radio.value : "materialized";
+
+      const chosen = selectedCollections();
+      const rows = makeTimelineRows();
+      const cost = estimateCost();
+
+      els.authorsValue.textContent = formatCompact(state.authors);
+      els.pageValue.textContent = String(state.pageSize);
+      els.collectionValue.textContent = `${chosen.length} selected`;
+      els.sortValue.textContent = state.sortPath;
+      els.rowsMetric.textContent = String(state.pageSize);
+      els.candidateMetric.textContent = formatCompact(cost.candidateRows);
+      els.riskMetric.textContent = cost.risk;
+      els.riskCaption.textContent = cost.caption;
+      els.cursorMetric.textContent = `#${state.pageSize}`;
+      els.timelinePill.textContent = `${state.pageSize} items`;
+
+      setBar(els.indexBar, els.indexBarText, cost.indexWork);
+      setBar(els.sortBar, els.sortBarText, cost.sortWork);
+      setBar(els.payloadBar, els.payloadBarText, cost.payload);
+
+      if (state.sortPath === "json") {
+        els.warningBox.innerHTML = "JSON sort mode is the cautionary path: it is useful for understanding the feature, but production should avoid extracting and sorting <code>json.createdAt</code> on every request.";
+      } else if (state.sortPath === "indexed") {
+        els.warningBox.innerHTML = "<code>indexed_at</code> is fast, but it behaves like a latest-indexed timeline. Updates can move old records to the top, so it is not the create timeline certified-app asked for.";
+      } else {
+        els.warningBox.innerHTML = "Recommended production version: require collections, cap authors/page size, store <code>record_created_at</code>, skip exact <code>totalCount</code>, and batch-hydrate <code>certifiedProfileData</code> only when selected.";
+      }
+
+      renderTimeline(rows);
+      renderCode();
+      els.jsonOutput.textContent = sampleJSON(rows[0]);
+      renderChips();
+    }
+
+    els.authors.addEventListener("input", render);
+    els.pageSize.addEventListener("input", render);
+    document.querySelectorAll('input[name="sortPath"]').forEach((input) => input.addEventListener("change", render));
+    document.querySelectorAll(".tab").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((tab) => tab.classList.remove("active"));
+        button.classList.add("active");
+        state.tab = button.dataset.tab;
+        renderCode();
+      });
+    });
+
+    renderChips();
+    render();
+  </script>
+</body>
+</html>

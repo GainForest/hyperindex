@@ -63,3 +63,31 @@ func ExtractCreatedAt(recordJSON string, fallback time.Time) time.Time {
 
 	return fallback
 }
+
+// NormalizeRecordCreatedAt extracts a record JSON's top-level createdAt string
+// and returns a millisecond-precision UTC timestamp for creation-time record
+// timelines. Missing, non-string, malformed, or non-RFC3339 values return false
+// so callers can store NULL and exclude the record from creation-time timelines.
+func NormalizeRecordCreatedAt(recordJSON string) (string, bool) {
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(recordJSON), &data); err != nil {
+		return "", false
+	}
+
+	raw, ok := data["createdAt"]
+	if !ok {
+		return "", false
+	}
+
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
+		return "", false
+	}
+
+	createdAt, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return "", false
+	}
+
+	return createdAt.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z"), true
+}

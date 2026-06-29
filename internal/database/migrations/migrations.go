@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/GainForest/hyperindex/internal/atproto"
 	"github.com/GainForest/hyperindex/internal/database"
 )
 
@@ -68,6 +69,10 @@ func Run(ctx context.Context, exec database.Executor) error {
 		}
 
 		slog.Info("Migration applied successfully", "version", m.Version)
+	}
+
+	if err := backfillRecordCreatedAt(ctx, exec); err != nil {
+		return fmt.Errorf("failed to backfill record_created_at: %w", err)
 	}
 
 	return nil
@@ -170,6 +175,148 @@ func recordMigration(ctx context.Context, exec database.Executor, version string
 		fmt.Sprintf("INSERT INTO schema_migrations (version) VALUES (%s)", exec.Placeholder(1)),
 		[]database.Value{database.Text(version)})
 	return err
+}
+
+const recordCreatedAtBackfillBatchSize = 500
+
+// backfillRecordCreatedAt materializes creation timestamps for existing records
+// after the schema column exists. It intentionally uses the same Go normalizer
+// as ingestion so historical rows and newly ingested rows get identical cursor
+// values in SQLite and PostgreSQL.
+func backfillRecordCreatedAt(ctx context.Context, exec database.Executor) error {
+	if ok, err := recordCreatedAtColumnExists(ctx, exec); err != nil {
+		return err
+	} else if !ok {
+		return nil
+	}
+
+	lastURI := ""
+	for {
+		rows, err := queryRecordCreatedAtBackfillBatch(ctx, exec, lastURI)
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+
+		for _, row := range rows {
+			lastURI = row.uri
+			createdAt, ok := atproto.NormalizeRecordCreatedAt(row.json)
+			if !ok {
+				continue
+			}
+			if err := updateRecordCreatedAt(ctx, exec, row.uri, createdAt); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+type recordCreatedAtBackfillRow struct {
+	uri  string
+	json string
+}
+
+func queryRecordCreatedAtBackfillBatch(ctx context.Context, exec database.Executor, lastURI string) ([]recordCreatedAtBackfillRow, error) {
+	jsonColumn := "json"
+	createdAtStringPredicate := "json_valid(json) AND json_type(json, '$.createdAt') = 'text'"
+	if exec.Dialect() == database.PostgreSQL {
+		jsonColumn = "json::text"
+		createdAtStringPredicate = "jsonb_typeof(json->'createdAt') = 'string'"
+	}
+
+	var sqlStr string
+	var params []database.Value
+	if lastURI == "" {
+		sqlStr = fmt.Sprintf(`SELECT uri, %s
+			FROM record
+			WHERE record_created_at IS NULL AND %s
+			ORDER BY uri
+			LIMIT %d`, jsonColumn, createdAtStringPredicate, recordCreatedAtBackfillBatchSize)
+	} else {
+		sqlStr = fmt.Sprintf(`SELECT uri, %s
+			FROM record
+			WHERE record_created_at IS NULL AND %s AND uri > %s
+			ORDER BY uri
+			LIMIT %d`, jsonColumn, createdAtStringPredicate, exec.Placeholder(1), recordCreatedAtBackfillBatchSize)
+		params = []database.Value{database.Text(lastURI)}
+	}
+
+	rows, err := exec.DB().QueryContext(ctx, sqlStr, exec.ConvertParams(params)...)
+	if err != nil {
+		return nil, fmt.Errorf("query record_created_at backfill batch: %w", err)
+	}
+	defer rows.Close()
+
+	batch := make([]recordCreatedAtBackfillRow, 0, recordCreatedAtBackfillBatchSize)
+	for rows.Next() {
+		var row recordCreatedAtBackfillRow
+		if err := rows.Scan(&row.uri, &row.json); err != nil {
+			return nil, fmt.Errorf("scan record_created_at backfill row: %w", err)
+		}
+		batch = append(batch, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate record_created_at backfill rows: %w", err)
+	}
+	return batch, nil
+}
+
+func updateRecordCreatedAt(ctx context.Context, exec database.Executor, uri, createdAt string) error {
+	createdAtPlaceholder := exec.Placeholder(1)
+	if exec.Dialect() == database.PostgreSQL {
+		createdAtPlaceholder += "::timestamptz"
+	}
+	_, err := exec.Exec(ctx,
+		fmt.Sprintf("UPDATE record SET record_created_at = %s WHERE uri = %s AND record_created_at IS NULL", createdAtPlaceholder, exec.Placeholder(2)),
+		[]database.Value{database.TimestamptzString(createdAt), database.Text(uri)})
+	if err != nil {
+		return fmt.Errorf("update record_created_at for %s: %w", uri, err)
+	}
+	return nil
+}
+
+func recordCreatedAtColumnExists(ctx context.Context, exec database.Executor) (bool, error) {
+	switch exec.Dialect() {
+	case database.PostgreSQL:
+		var count int
+		err := exec.DB().QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM information_schema.columns
+			WHERE table_name = 'record'
+			  AND column_name = 'record_created_at'
+			  AND table_schema = ANY (current_schemas(false))`,
+		).Scan(&count)
+		if err != nil {
+			return false, fmt.Errorf("check PostgreSQL record_created_at column: %w", err)
+		}
+		return count > 0, nil
+	default:
+		rows, err := exec.DB().QueryContext(ctx, "PRAGMA table_info(record)")
+		if err != nil {
+			return false, fmt.Errorf("check SQLite record_created_at column: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var cid int
+			var name, columnType string
+			var notNull int
+			var defaultValue interface{}
+			var pk int
+			if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+				return false, fmt.Errorf("scan SQLite record column info: %w", err)
+			}
+			if name == "record_created_at" {
+				return true, nil
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return false, fmt.Errorf("iterate SQLite record column info: %w", err)
+		}
+		return false, nil
+	}
 }
 
 func loadMigrations(dialect database.Dialect) ([]Migration, error) {
