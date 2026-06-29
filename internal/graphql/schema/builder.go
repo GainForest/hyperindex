@@ -193,7 +193,7 @@ var externalLabelPredicateInput = graphql.NewInputObject(graphql.InputObjectConf
 
 const (
 	recordTimelineDefaultPageSize = 50
-	recordTimelineMaxPageSize     = 100
+	recordTimelineMaxPageSize     = query.MaxPageSize
 )
 
 var recordTimelineCollectionFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
@@ -541,16 +541,16 @@ func (b *Builder) buildRecordTimelineTypes() {
 			Description: "Record key from the AT-URI.",
 		},
 		"createdAt": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.String),
+			Type:        graphql.NewNonNull(types.DateTimeScalar),
 			Description: "Materialized top-level record createdAt timestamp used for timeline ordering.",
 		},
 		"indexedAt": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.String),
+			Type:        graphql.NewNonNull(types.DateTimeScalar),
 			Description: "Timestamp when Hyperindex last indexed the current record row.",
 		},
-		"json": &graphql.Field{
+		"value": &graphql.Field{
 			Type:        graphql.NewNonNull(types.JSONScalar),
-			Description: "Raw record JSON payload.",
+			Description: "Decoded AT Protocol record payload.",
 		},
 	}
 	if profileType, ok := b.recordTypes[certifiedprofiles.CollectionID]; ok {
@@ -1644,7 +1644,7 @@ func (b *Builder) createRecordTimelineResolver() graphql.FieldResolveFn {
 				"rkey":       nullableString(rec.RKey),
 				"createdAt":  createdAt,
 				"indexedAt":  rec.IndexedAt.UTC().Format(time.RFC3339Nano),
-				"json":       rawJSON,
+				"value":      rawJSON,
 			}
 			attachCertifiedProfileData(node, &rec.Record, certifiedProfiles)
 

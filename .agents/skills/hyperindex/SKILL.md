@@ -131,7 +131,7 @@ If a workflow needs unsupported nested matching, use one of these patterns:
 
 ## Generic record timeline
 
-Use `recordTimeline` for cross-collection feeds ordered by the record JSON's top-level `createdAt` timestamp, not by indexer arrival time. Callers must pass `where.collection.in`; omit `where.did` for all authors, pass `where.did.in` to filter author DIDs, and pass `where.did.in: []` only when an empty result is intended. `first` defaults to 50 and is capped at 100. The connection intentionally has no `totalCount`.
+Use `recordTimeline` for cross-collection feeds ordered by the record JSON's top-level `createdAt` timestamp, not by indexer arrival time. Callers must pass `where.collection.in`; omit `where.did` for all authors, pass `where.did.in` to filter author DIDs, and pass `where.did.in: []` only when an empty result is intended. `first` defaults to 50 and is capped at 1000. The connection intentionally has no `totalCount`.
 
 ```graphql
 query RecentCertifiedRecords($where: RecordTimelineWhereInput!, $after: String) {
@@ -150,7 +150,7 @@ query RecentCertifiedRecords($where: RecordTimelineWhereInput!, $after: String) 
         rkey
         createdAt
         indexedAt
-        json
+        value
         certifiedProfileData { did displayName createdAt }
       }
     }

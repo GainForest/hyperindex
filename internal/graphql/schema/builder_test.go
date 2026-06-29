@@ -3530,7 +3530,7 @@ func TestRecordTimelineGraphQL(t *testing.T) {
 					rkey
 					createdAt
 					indexedAt
-					json
+					value
 					certifiedProfileData { displayName }
 				}
 			}
@@ -3554,6 +3554,10 @@ func TestRecordTimelineGraphQL(t *testing.T) {
 	}
 	if got := node["createdAt"]; got != "2026-01-15T12:00:00.000Z" {
 		t.Fatalf("createdAt = %v, want normalized timestamp", got)
+	}
+	value := node["value"].(map[string]interface{})
+	if got := value["title"]; got != "Bob new" {
+		t.Fatalf("value.title = %v, want Bob new", got)
 	}
 	profile := node["certifiedProfileData"].(map[string]interface{})
 	if got := profile["displayName"]; got != "Bob Profile" {
@@ -3599,6 +3603,27 @@ func TestRecordTimelineGraphQL(t *testing.T) {
 func TestRecordTimelineGraphQLValidationAndShape(t *testing.T) {
 	schema, ctx := setupRecordTimelineGraphQLTest(t)
 
+	timelineType, ok := schema.Type("RecordTimelineNode").(*graphql.Object)
+	if !ok {
+		t.Fatalf("RecordTimelineNode type is %T, want *graphql.Object", schema.Type("RecordTimelineNode"))
+	}
+	timelineFields := timelineType.Fields()
+	if _, exists := timelineFields["record"]; exists {
+		t.Fatal("RecordTimelineNode exposes record, want generic payload field named value")
+	}
+	valueField, ok := timelineFields["value"]
+	if !ok {
+		t.Fatal("RecordTimelineNode missing value field")
+	}
+	if got := valueField.Type.String(); got != "JSON!" {
+		t.Fatalf("RecordTimelineNode.value type = %q, want JSON!", got)
+	}
+	for _, name := range []string{"createdAt", "indexedAt"} {
+		if got := timelineFields[name].Type.String(); got != "DateTime!" {
+			t.Fatalf("RecordTimelineNode.%s type = %q, want DateTime!", name, got)
+		}
+	}
+
 	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: [] } }, first: 1) { edges { cursor } } }`, Context: ctx})
 	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "where.collection.in must include at least one") {
 		t.Fatalf("empty collections errors = %v, want clear validation error", result.Errors)
@@ -3618,8 +3643,8 @@ func TestRecordTimelineGraphQLValidationAndShape(t *testing.T) {
 		t.Fatalf("empty where.did.in malformed cursor errors = %v, want cursor validation error", result.Errors)
 	}
 
-	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: ["org.hypercerts.collection"] } }, first: 101) { edges { cursor } } }`, Context: ctx})
-	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "first must be between 1 and 100") {
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: ["org.hypercerts.collection"] } }, first: 1001) { edges { cursor } } }`, Context: ctx})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "first must be between 1 and 1000") {
 		t.Fatalf("invalid first errors = %v, want range error", result.Errors)
 	}
 

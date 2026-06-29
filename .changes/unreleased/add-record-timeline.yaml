@@ -1,4 +1,4 @@
 kind: added
-body: Add a generic recordTimeline GraphQL query for creation-time pages across selected collections, using where.collection.in and optional where.did filters with stable cursor pagination. Existing records are backfilled when migrations run, and timeline connections avoid exact total counts.
+body: Add a generic recordTimeline GraphQL query for creation-time pages across selected collections, returning decoded payloads on RecordTimelineNode.value with DateTime timestamps, where.collection.in, optional where.did filters, and stable cursor pagination up to 1000 records per page. Existing records are backfilled when migrations run, and timeline connections avoid exact total counts.
 custom:
   Affects: user

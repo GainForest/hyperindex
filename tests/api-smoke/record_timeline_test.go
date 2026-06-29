@@ -23,7 +23,7 @@ query SmokeRecordTimeline($where: RecordTimelineWhereInput!, $first: Int!, $afte
         rkey
         createdAt
         indexedAt
-        json
+        value
       }
     }
     pageInfo {
@@ -74,7 +74,7 @@ type recordTimelineNode struct {
 	RKey                 string                     `json:"rkey"`
 	CreatedAt            string                     `json:"createdAt"`
 	IndexedAt            string                     `json:"indexedAt"`
-	JSON                 map[string]any             `json:"json"`
+	Value                map[string]any             `json:"value"`
 	CertifiedProfileData *recordTimelineProfileData `json:"certifiedProfileData"`
 }
 
@@ -217,8 +217,8 @@ func assertRecordTimelinePage(t testing.TB, label string, page recordTimelineCon
 		if edge.Node.IndexedAt == "" {
 			t.Fatalf("recordTimeline %s edge %d indexedAt is empty for uri %q", label, index, edge.Node.URI)
 		}
-		if len(edge.Node.JSON) == 0 {
-			t.Fatalf("recordTimeline %s edge %d json is empty for uri %q", label, index, edge.Node.URI)
+		if len(edge.Node.Value) == 0 {
+			t.Fatalf("recordTimeline %s edge %d value is empty for uri %q", label, index, edge.Node.URI)
 		}
 		if seenURIs[edge.Node.URI] {
 			t.Fatalf("recordTimeline %s returned duplicate URI %q", label, edge.Node.URI)
@@ -249,7 +249,7 @@ func assertRecordTimelineSchema(t testing.TB, config smokeConfig) {
 
 	nodeType := requireSchemaType(t, types, "RecordTimelineNode")
 	nodeFields := fieldsByName(nodeType.Fields)
-	for _, name := range []string{"uri", "cid", "did", "collection", "rkey", "createdAt", "indexedAt", "json", "certifiedProfileData"} {
+	for _, name := range []string{"uri", "cid", "did", "collection", "rkey", "createdAt", "indexedAt", "value", "certifiedProfileData"} {
 		requireSchemaField(t, nodeFields, name)
 	}
 }

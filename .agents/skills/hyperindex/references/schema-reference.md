@@ -91,7 +91,7 @@ Arguments:
 | Argument | Type | Notes |
 | --- | --- | --- |
 | `where` | `RecordTimelineWhereInput!` | Required filter object. `where.collection.in` is required; `where.did` is optional. |
-| `first` | `Int` | Page size. Defaults to 50 and is capped at 100. |
+| `first` | `Int` | Page size. Defaults to 50 and is capped at 1000. |
 | `after` | `String` | Opaque cursor from a previous `recordTimeline` edge or `pageInfo.endCursor`. |
 
 ### `RecordTimelineWhereInput`
@@ -132,9 +132,9 @@ Rows are ordered by top-level record JSON `createdAt` descending, then `uri` des
 | `did` | `String!` | DID of the record author. |
 | `collection` | `String!` | ATProto collection NSID. |
 | `rkey` | `String` | Record key from the AT-URI. |
-| `createdAt` | `String!` | Normalized top-level record `createdAt` timestamp used for timeline ordering. |
-| `indexedAt` | `String!` | Timestamp when Hyperindex last indexed the current row. |
-| `json` | `JSON!` | Raw record JSON payload. |
+| `createdAt` | `DateTime!` | Normalized top-level record `createdAt` timestamp used for timeline ordering. |
+| `indexedAt` | `DateTime!` | Timestamp when Hyperindex last indexed the current row. |
+| `value` | `JSON!` | Decoded AT Protocol record payload. |
 | `certifiedProfileData` | `AppCertifiedActorProfile` | Virtual profile data for the record author when the schema includes `app.certified.actor.profile`. |
 
 ## Filter inputs

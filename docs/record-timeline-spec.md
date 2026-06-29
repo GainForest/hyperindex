@@ -95,9 +95,9 @@ type RecordTimelineNode {
   did: DID!
   collection: String!
   rkey: String
-  createdAt: String!
-  indexedAt: String!
-  json: JSON!
+  createdAt: DateTime!
+  indexedAt: DateTime!
+  value: JSON!
 
   certifiedProfileData: AppCertifiedActorProfile
 }
@@ -110,14 +110,14 @@ type RecordTimelineNode {
 | Argument | Required | Semantics |
 | --- | --- | --- |
 | `where` | Yes | Filter object. `where.collection.in` is required; `where.did.in` is optional. |
-| `first` | No | Forward page size. Default `50`; maximum `100`. |
+| `first` | No | Forward page size. Default `50`; maximum `1000`. |
 | `after` | No | Opaque keyset cursor returned by a previous page. |
 
 `where.collection.in` contains ATProto collection NSIDs to include. Empty lists are invalid. `where.did.in` contains author DIDs to include; omitted or `null` means no author filter, and an empty list returns an empty connection.
 
 Suggested validation caps:
 
-- `first <= 100`
+- `first <= 1000`
 - `len(where.did.in) <= 1000`
 - `len(where.collection.in) <= 25`
 - every collection value must be a syntactically valid NSID-like collection string
@@ -169,7 +169,7 @@ query HomeTimeline($authors: [String!]!, $after: String) {
         rkey
         createdAt
         indexedAt
-        json
+        value
         certifiedProfileData {
           did
           displayName
@@ -185,7 +185,7 @@ query HomeTimeline($authors: [String!]!, $after: String) {
 }
 ```
 
-The client can render directly from `json` or group returned URIs by `collection` and hydrate typed records through existing `uri: { in: [...] }` filters.
+The client can render directly from `value` or group returned URIs by `collection` and hydrate typed records through existing `uri: { in: [...] }` filters.
 
 ## Semantics
 
@@ -435,7 +435,7 @@ GraphQL schema/resolver tests:
 
 - exposes `recordTimeline` and the connection/node fields,
 - omits `totalCount`,
-- returns raw `json`, metadata fields, and cursors,
+- returns the decoded `value` payload, metadata fields, and cursors,
 - hydrates `certifiedProfileData` only when selected,
 - does not hydrate profiles when the field is not selected,
 - avoids N+1 profile lookup behavior with multiple records from the same author,
