@@ -551,7 +551,11 @@ Migrations run automatically on startup.
 
 ## History
 
-Hyperindex was incubated and created by [GainForest](https://gainforest.earth) and [Claude Opus 4.5](https://www.anthropic.com/claude) (Anthropic). It has since been moved to [hypercerts-org](https://github.com/hypercerts-org) for community maintenance.
+Hyperindex was incubated and created by [GainForest](https://gainforest.earth) and [Claude Opus 4.5](https://www.anthropic.com/claude) (Anthropic). It was briefly moved to [hypercerts-org](https://github.com/hypercerts-org) for community maintenance, then returned to the [GainForest](https://github.com/GainForest) organisation to ensure active maintenance.
+
+## Authors
+
+Maintained by the [GainForest Team](https://gainforest.earth). See [`AUTHORS`](./AUTHORS) for the full list.
 
 ## License
 
@@ -559,6 +563,6 @@ Apache License 2.0
 
 ## Acknowledgments
 
-- [GainForest](https://gainforest.earth) & [Claude Opus 4.5](https://www.anthropic.com/claude) - Original creators
+- [GainForest Team](https://gainforest.earth) & [Claude Opus 4.5](https://www.anthropic.com/claude) - Original creators
 - [Quickslice](https://github.com/quickslice/quickslice) - Original Gleam implementation
 - [AT Protocol](https://atproto.com/) - The underlying protocol
