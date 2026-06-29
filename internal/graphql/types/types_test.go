@@ -662,6 +662,7 @@ func TestObjectBuilder_RequiredUnionFieldAttachesResolver(t *testing.T) {
 	field := recordType.Fields()["image"]
 	if field == nil {
 		t.Fatal("image field is missing")
+		return
 	}
 	if field.Resolve == nil {
 		t.Fatal("required union field resolver is nil")

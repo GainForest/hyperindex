@@ -63,6 +63,60 @@ func TestParseTimestamp(t *testing.T) {
 	}
 }
 
+func TestNormalizeRecordCreatedAt(t *testing.T) {
+	tests := []struct {
+		name       string
+		recordJSON string
+		want       string
+		wantOK     bool
+	}{
+		{
+			name:       "createdAt field normalizes to UTC milliseconds",
+			recordJSON: `{"createdAt":"2026-01-15T10:30:00.123456789+05:30"}`,
+			want:       "2026-01-15T05:00:00.123Z",
+			wantOK:     true,
+		},
+		{
+			name:       "createdAt without fractional seconds",
+			recordJSON: `{"createdAt":"2026-01-15T10:30:00Z"}`,
+			want:       "2026-01-15T10:30:00.000Z",
+			wantOK:     true,
+		},
+		{
+			name:       "createdAt missing timezone is rejected",
+			recordJSON: `{"createdAt":"2026-01-15T10:30:00"}`,
+		},
+		{
+			name:       "createdAt with unknown UTC offset is rejected",
+			recordJSON: `{"createdAt":"2026-01-15T10:30:00-00:00"}`,
+		},
+		{
+			name:       "non-string createdAt is rejected",
+			recordJSON: `{"createdAt":12345}`,
+		},
+		{
+			name:       "missing createdAt is rejected",
+			recordJSON: `{"indexedAt":"2026-01-15T10:30:00Z"}`,
+		},
+		{
+			name:       "invalid JSON is rejected",
+			recordJSON: `{invalid`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := NormalizeRecordCreatedAt(tt.recordJSON)
+			if ok != tt.wantOK {
+				t.Fatalf("NormalizeRecordCreatedAt() ok = %v, want %v", ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Fatalf("NormalizeRecordCreatedAt() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExtractCreatedAt(t *testing.T) {
 	fallback := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
