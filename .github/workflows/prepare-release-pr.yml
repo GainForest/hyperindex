@@ -79,16 +79,15 @@ jobs:
             exit 1
           fi
 
-      - name: Ensure release label exists
+      - name: Verify release label exists
         env:
           GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          if gh label view release >/dev/null 2>&1; then
-            echo "Release label already exists."
-          else
-            gh label create release --description "Release PRs that publish automatically after merge" --color "0E8A16"
-            echo "Created release label."
+          if ! gh label view release >/dev/null 2>&1; then
+            echo "::error::Required release label does not exist. Create a 'release' label before running this workflow."
+            exit 1
           fi
+          echo "Release label exists."
 
       - name: Create or update release PR
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
