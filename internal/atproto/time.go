@@ -4,6 +4,8 @@ package atproto
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/bluesky-social/indigo/atproto/syntax"
 )
 
 // TimestampFormats lists all timestamp formats recognized by ParseTimestamp,
@@ -45,8 +47,9 @@ func ParseTimestamp(s string) time.Time {
 
 // ExtractCreatedAt extracts the createdAt timestamp from a record's JSON.
 // It tries common field names (createdAt, $createdAt, created_at, timestamp,
-// indexedAt) and multiple timestamp formats. Returns fallback if no timestamp
-// is found or the JSON is invalid.
+// indexedAt), preferring Indigo's strict ATProto datetime parser before falling
+// back to legacy timestamp formats. Returns fallback if no timestamp is found or
+// the JSON is invalid.
 func ExtractCreatedAt(recordJSON string, fallback time.Time) time.Time {
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(recordJSON), &data); err != nil {
@@ -55,6 +58,9 @@ func ExtractCreatedAt(recordJSON string, fallback time.Time) time.Time {
 
 	for _, field := range createdAtFields {
 		if val, ok := data[field].(string); ok {
+			if t, err := syntax.ParseDatetimeTime(val); err == nil {
+				return t
+			}
 			if t := ParseTimestamp(val); !t.IsZero() {
 				return t
 			}
@@ -84,7 +90,7 @@ func NormalizeRecordCreatedAt(recordJSON string) (string, bool) {
 		return "", false
 	}
 
-	createdAt, err := time.Parse(time.RFC3339Nano, value)
+	createdAt, err := syntax.ParseDatetimeTime(value)
 	if err != nil {
 		return "", false
 	}
