@@ -3498,6 +3498,19 @@ func setupRecordTimelineGraphQLTest(t *testing.T) (*graphql.Schema, context.Cont
 	if err := db.Records.BatchInsert(ctx, records); err != nil {
 		t.Fatalf("failed to insert timeline test records: %v", err)
 	}
+	if _, err := db.Executor.DB().ExecContext(ctx, `
+		INSERT INTO record (uri, cid, did, collection, json, record_created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`,
+		"at://did:plc:bob/org.hypercerts.collection/bob-malformed-newest",
+		"cid-bob-malformed-newest",
+		"did:plc:bob",
+		"org.hypercerts.collection",
+		`{"createdAt":`,
+		"2026-01-15T13:00:00.000Z",
+	); err != nil {
+		t.Fatalf("failed to insert malformed timeline row: %v", err)
+	}
 	repos := &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels}
 	return buildRecordTimelineTestSchema(t), resolver.WithRepositories(ctx, repos)
 }

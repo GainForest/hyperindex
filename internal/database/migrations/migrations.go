@@ -220,7 +220,7 @@ type recordCreatedAtBackfillRow struct {
 
 func queryRecordCreatedAtBackfillBatch(ctx context.Context, exec database.Executor, lastURI string) ([]recordCreatedAtBackfillRow, error) {
 	jsonColumn := "json"
-	createdAtStringPredicate := "json_valid(json) AND json_type(json, '$.createdAt') = 'text'"
+	createdAtStringPredicate := "CASE WHEN json_valid(json) THEN json_type(json, '$.createdAt') = 'text' ELSE 0 END"
 	if exec.Dialect() == database.PostgreSQL {
 		jsonColumn = "json::text"
 		createdAtStringPredicate = "jsonb_typeof(json->'createdAt') = 'string'"

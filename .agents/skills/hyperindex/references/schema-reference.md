@@ -1,6 +1,6 @@
 # Hyperindex GraphQL Schema Reference
 
-Last updated on 2026-06-17 for pending schema changes. Baseline generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10.
+Last updated on 2026-06-29 for pending `recordTimeline` schema changes. Baseline generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10.
 
 ## Endpoints
 
@@ -50,6 +50,7 @@ Last updated on 2026-06-17 for pending schema changes. Baseline generated from l
 | `orgHypercertsWorkscopeTag` | after: `String`, before: `String`, first: `Int`, last: `Int`, sortBy: `OrgHypercertsWorkscopeTagSortField`, sortDirection: `SortDirection`, where: `OrgHypercertsWorkscopeTagWhereInput` | Query org.hypercerts.workscope.tag records |
 | `orgHypercertsWorkscopeTagByUri` | uri: `String!` | Get a single org.hypercerts.workscope.tag by AT-URI |
 | `records` | after: `String`, before: `String`, collection: `String!`, first: `Int`, last: `Int` | Query records from any collection (useful for collections without lexicon schemas) |
+| `recordTimeline` | after: `String`, authors: `[String!]`, collections: `[String!]!`, first: `Int` | Query a newest-first page of current records across selected collections, optionally filtered by author DIDs. |
 | `externalLabels` | activeOnly: `Boolean`, sources: `[String!]`, subjects: `[String!]!`, values: `[String!]` | Query locally ingested external ATProto labels by DID or AT-URI subject. |
 | `search` | after: `String`, collection: `String`, first: `Int`, query: `String!` | Search records by text content |
 | `collectionStats` | collections: `[String!]` | Get record counts for collections (efficient aggregate query) |
@@ -80,6 +81,49 @@ Last updated on 2026-06-17 for pending schema changes. Baseline generated from l
 | `org.hypercerts.workscope.tag` | `orgHypercertsWorkscopeTag` | `orgHypercertsWorkscopeTagByUri` | `OrgHypercertsWorkscopeTag` |
 
 Typed list queries accept Relay-style pagination arguments (`first`, `after`, `last`, `before`), plus `where`, `sortBy`, and `sortDirection` when the collection exposes those inputs.
+
+## Generic record timeline
+
+`recordTimeline` returns a `RecordTimelineConnection`: a newest-first keyset page of current records across an explicit collection set. It is useful for activity feeds that need records from several ATProto collections in one stable order.
+
+Arguments:
+
+| Argument | Type | Notes |
+| --- | --- | --- |
+| `collections` | `[String!]!` | Required collection NSIDs to include. Empty lists are rejected. Up to 25 collections are accepted. |
+| `authors` | `[String!]` | Optional author DID filter. Omit or pass `null` for all authors; pass an empty list for an empty timeline. Up to 1,000 DIDs are accepted. |
+| `first` | `Int` | Page size. Defaults to 50 and is capped at 100. |
+| `after` | `String` | Opaque cursor from a previous `recordTimeline` edge or `pageInfo.endCursor`. |
+
+Rows are ordered by top-level record JSON `createdAt` descending, then `uri` descending. Records without a parseable top-level `createdAt` are excluded. Use typed collection queries instead when consumers need collection-specific filters, sorting, typed fields, backward pagination, or exact totals; `RecordTimelineConnection` does not expose `totalCount`.
+
+### `RecordTimelineConnection`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `edges` | `[RecordTimelineEdge!]!` | Timeline edges in newest-first order. |
+| `pageInfo` | `PageInfo!` | `hasNextPage`, `hasPreviousPage`, `startCursor`, and `endCursor`. |
+
+### `RecordTimelineEdge`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `cursor` | `String!` | Opaque keyset cursor for this row. |
+| `node` | `RecordTimelineNode!` | The timeline record. |
+
+### `RecordTimelineNode`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `uri` | `String!` | AT-URI of the record. |
+| `cid` | `String!` | CID of the current record value. |
+| `did` | `String!` | DID of the record author. |
+| `collection` | `String!` | ATProto collection NSID. |
+| `rkey` | `String` | Record key from the AT-URI. |
+| `createdAt` | `String!` | Normalized top-level record `createdAt` timestamp used for timeline ordering. |
+| `indexedAt` | `String!` | Timestamp when Hyperindex last indexed the current row. |
+| `json` | `JSON!` | Raw record JSON payload. |
+| `certifiedProfileData` | `AppCertifiedActorProfile` | Virtual profile data for the record author when the schema includes `app.certified.actor.profile`. |
 
 ## Filter inputs
 

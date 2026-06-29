@@ -477,6 +477,9 @@ func (r *RecordsRepository) GetRecordTimeline(ctx context.Context, authors, coll
 	nextPlaceholder := 1
 
 	conditions = append(conditions, "record_created_at IS NOT NULL")
+	if r.db.Dialect() == database.SQLite {
+		conditions = append(conditions, "json_valid(json)")
+	}
 
 	collectionCondition, collectionParams, consumed, err := r.timelineSetCondition("collection", collections, nextPlaceholder)
 	if err != nil {

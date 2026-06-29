@@ -46,10 +46,11 @@ Use production by default for consumer examples. `api.indexer.hypercerts.dev` is
 
 1. If the user asks for an exact field, filter, enum, or union and you are not sure, introspect the endpoint first.
 2. Prefer schema-specific queries such as `orgHypercertsClaimActivity` over generic `records` when the collection has a typed query.
-3. Always include pagination (`first`, `after`, `pageInfo { hasNextPage endCursor }`) in list examples.
-4. Keep selection sets small. Add fields only when needed for the workflow.
-5. Use inline fragments for union fields such as descriptions, images, attachment content, proof fields, and strong references.
-6. Use generated nested `where` filters for exact matches inside arrays, refs, and unions when the endpoint exposes them. Fall back to `search(query: ..., collection: ...)` for substring discovery, unsupported nested shapes, or deployed endpoints that have not rolled out nested filters yet.
+3. Use `recordTimeline` when the caller needs one newest-first feed across multiple collections. It requires explicit `collections`, supports optional author DID filtering, and does not expose `totalCount`.
+4. Always include pagination (`first`, `after`, `pageInfo { hasNextPage endCursor }`) in list examples.
+5. Keep selection sets small. Add fields only when needed for the workflow.
+6. Use inline fragments for union fields such as descriptions, images, attachment content, proof fields, and strong references.
+7. Use generated nested `where` filters for exact matches inside arrays, refs, and unions when the endpoint exposes them. Fall back to `search(query: ..., collection: ...)` for substring discovery, unsupported nested shapes, or deployed endpoints that have not rolled out nested filters yet.
 
 Detailed schema reference: [references/schema-reference.md](references/schema-reference.md)
 
@@ -127,6 +128,53 @@ If a workflow needs unsupported nested matching, use one of these patterns:
 - Use typed nested/presence filters to narrow the set, then filter client-side.
 - Use `search(query: ..., collection: ...)` to find records whose JSON contains a referenced AT-URI or string.
 - Use `records(collection: ...)` as a fallback for collections without typed schema coverage.
+
+## Generic record timeline
+
+Use `recordTimeline` for cross-collection feeds ordered by the record JSON's top-level `createdAt` timestamp, not by indexer arrival time. Callers must pass an explicit `collections` list; omit `authors` for all authors, pass author DIDs to filter, and pass `authors: []` only when an empty result is intended. `first` defaults to 50 and is capped at 100. The connection intentionally has no `totalCount`.
+
+```graphql
+query RecentCertifiedRecords($collections: [String!]!, $authors: [String!], $after: String) {
+  recordTimeline(
+    collections: $collections
+    authors: $authors
+    first: 20
+    after: $after
+  ) {
+    edges {
+      cursor
+      node {
+        uri
+        cid
+        did
+        collection
+        rkey
+        createdAt
+        indexedAt
+        json
+        certifiedProfileData { did displayName createdAt }
+      }
+    }
+    pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+  }
+}
+```
+
+Variables:
+
+```json
+{
+  "collections": [
+    "app.certified.actor.profile",
+    "org.hypercerts.claim.activity",
+    "org.hypercerts.collection"
+  ],
+  "authors": null,
+  "after": null
+}
+```
+
+Use typed collection queries when the caller needs collection-specific filters, sorting, exact totals, or typed fields. Use `recordTimeline` when the primary requirement is one stable newest-first page across selected collections.
 
 ## External labeler filtering
 

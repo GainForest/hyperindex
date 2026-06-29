@@ -114,7 +114,8 @@ func TestMigrations_BackfillsRecordCreatedAtSQLite(t *testing.T) {
 			('at://did:plc:test/com.example.timeline.post/missing', 'cid2', 'did:plc:test', 'com.example.timeline.post', '{"text":"missing"}', 'missing'),
 			('at://did:plc:test/com.example.timeline.post/alternate', 'cid3', 'did:plc:test', 'com.example.timeline.post', '{"timestamp":"2026-01-15T10:00:00Z"}', 'alternate'),
 			('at://did:plc:test/com.example.timeline.post/malformed', 'cid4', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"not-a-time"}', 'malformed'),
-			('at://did:plc:test/com.example.timeline.post/out-of-range', 'cid6', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T24:00:00Z"}', 'out-of-range');
+			('at://did:plc:test/com.example.timeline.post/out-of-range', 'cid6', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T24:00:00Z"}', 'out-of-range'),
+			('at://did:plc:test/com.example.timeline.post/invalid-json', 'cid7', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":', 'invalid-json');
 	`)
 	if err != nil {
 		t.Fatalf("failed to set up pre-010 schema: %v", err)
@@ -143,6 +144,7 @@ func TestMigrations_BackfillsRecordCreatedAtSQLite(t *testing.T) {
 		"at://did:plc:test/com.example.timeline.post/alternate",
 		"at://did:plc:test/com.example.timeline.post/malformed",
 		"at://did:plc:test/com.example.timeline.post/out-of-range",
+		"at://did:plc:test/com.example.timeline.post/invalid-json",
 	} {
 		if got := sqliteRecordCreatedAt(t, exec, uri); got != "" {
 			t.Fatalf("%s record_created_at = %q, want null", uri, got)

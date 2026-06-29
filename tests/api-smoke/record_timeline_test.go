@@ -93,6 +93,7 @@ func TestRecordTimelineSmoke(t *testing.T) {
 	collections := []string{profileCollection, activityCollection}
 	minimumPage := queryRecordTimelinePage(t, ctx, config, collections, nil, minimumRecordTimelineRecords, "")
 	assertRecordTimelinePage(t, "minimum record sanity page", minimumPage, collections, "")
+	assertRecordTimelineDescendingOrder(t, "minimum record sanity page", minimumPage)
 	if len(minimumPage.Edges) < minimumRecordTimelineRecords {
 		t.Fatalf("recordTimeline returned %d records for collections %v, want at least %d", len(minimumPage.Edges), collections, minimumRecordTimelineRecords)
 	}
@@ -116,6 +117,7 @@ func TestRecordTimelineSmoke(t *testing.T) {
 			t.Fatalf("recordTimeline returned duplicate URI %q across adjacent pages", uri)
 		}
 	}
+	assertRecordTimelineDescendingOrder(t, "first and second page", firstPage, secondPage)
 
 	selectedAuthor := firstPage.Edges[0].Node.DID
 	selectedCollection := firstPage.Edges[0].Node.Collection
@@ -131,6 +133,7 @@ func TestRecordTimelineSmoke(t *testing.T) {
 			t.Fatalf("recordTimeline author-filtered edge %d collection = %q, want %q", index, edge.Node.Collection, selectedCollection)
 		}
 	}
+	assertRecordTimelineDescendingOrder(t, "author-filtered page", authorPage)
 
 	assertRecordTimelineProfileHydration(t, ctx, config)
 	smokeLog("✓ recordTimeline returns at least 20 records, stable pages, author filtering, and profile hydration")
@@ -156,6 +159,36 @@ func queryRecordTimelinePage(t testing.TB, ctx context.Context, config smokeConf
 		t.Fatalf("recordTimeline: decode response data: %v", err)
 	}
 	return decoded.RecordTimeline
+}
+
+func assertRecordTimelineDescendingOrder(t testing.TB, label string, pages ...recordTimelineConnection) {
+	t.Helper()
+	var previous *recordTimelineEdge
+	for pageIndex, page := range pages {
+		for edgeIndex, edge := range page.Edges {
+			if previous != nil && !recordTimelineSortsBefore(*previous, edge) {
+				t.Fatalf(
+					"recordTimeline %s order regression before page %d edge %d: previous (%s, %s), current (%s, %s)",
+					label,
+					pageIndex,
+					edgeIndex,
+					previous.Node.CreatedAt,
+					previous.Node.URI,
+					edge.Node.CreatedAt,
+					edge.Node.URI,
+				)
+			}
+			edgeCopy := edge
+			previous = &edgeCopy
+		}
+	}
+}
+
+func recordTimelineSortsBefore(previous, current recordTimelineEdge) bool {
+	if previous.Node.CreatedAt != current.Node.CreatedAt {
+		return previous.Node.CreatedAt > current.Node.CreatedAt
+	}
+	return previous.Node.URI > current.Node.URI
 }
 
 func assertRecordTimelinePage(t testing.TB, label string, page recordTimelineConnection, collections []string, after string) map[string]bool {
