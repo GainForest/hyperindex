@@ -3519,7 +3519,7 @@ func TestRecordTimelineGraphQL(t *testing.T) {
 	schema, ctx := setupRecordTimelineGraphQLTest(t)
 
 	query := `{
-		recordTimeline(authors: ["did:plc:alice", "did:plc:bob"], collections: ["org.hypercerts.collection"], first: 1) {
+		recordTimeline(where: { did: { in: ["did:plc:alice", "did:plc:bob"] }, collection: { in: ["org.hypercerts.collection"] } }, first: 1) {
 			edges {
 				cursor
 				node {
@@ -3569,7 +3569,7 @@ func TestRecordTimelineGraphQL(t *testing.T) {
 
 	after := edge["cursor"].(string)
 	page2Query := fmt.Sprintf(`{
-		recordTimeline(authors: ["did:plc:alice", "did:plc:bob"], collections: ["org.hypercerts.collection"], first: 1, after: %q) {
+		recordTimeline(where: { did: { in: ["did:plc:alice", "did:plc:bob"] }, collection: { in: ["org.hypercerts.collection"] } }, first: 1, after: %q) {
 			edges { node { uri createdAt certifiedProfileData { displayName } } }
 			pageInfo { hasNextPage hasPreviousPage }
 		}
@@ -3599,37 +3599,37 @@ func TestRecordTimelineGraphQL(t *testing.T) {
 func TestRecordTimelineGraphQLValidationAndShape(t *testing.T) {
 	schema, ctx := setupRecordTimelineGraphQLTest(t)
 
-	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(collections: [], first: 1) { edges { cursor } } }`, Context: ctx})
-	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "collections must include at least one") {
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: [] } }, first: 1) { edges { cursor } } }`, Context: ctx})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "where.collection.in must include at least one") {
 		t.Fatalf("empty collections errors = %v, want clear validation error", result.Errors)
 	}
 
-	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(authors: [], collections: ["org.hypercerts.collection"], first: 1) { edges { cursor } pageInfo { hasNextPage startCursor endCursor } } }`, Context: ctx})
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { did: { in: [] }, collection: { in: ["org.hypercerts.collection"] } }, first: 1) { edges { cursor } pageInfo { hasNextPage startCursor endCursor } } }`, Context: ctx})
 	if len(result.Errors) > 0 {
 		t.Fatalf("empty authors query errors: %v", result.Errors)
 	}
 	conn := result.Data.(map[string]interface{})["recordTimeline"].(map[string]interface{})
 	if edges := conn["edges"].([]interface{}); len(edges) != 0 {
-		t.Fatalf("authors: [] edges length = %d, want 0", len(edges))
+		t.Fatalf("where.did.in: [] edges length = %d, want 0", len(edges))
 	}
 
-	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(authors: [], collections: ["org.hypercerts.collection"], first: 1, after: "not-a-cursor") { edges { cursor } } }`, Context: ctx})
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { did: { in: [] }, collection: { in: ["org.hypercerts.collection"] } }, first: 1, after: "not-a-cursor") { edges { cursor } } }`, Context: ctx})
 	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "invalid recordTimeline cursor") {
-		t.Fatalf("empty authors malformed cursor errors = %v, want cursor validation error", result.Errors)
+		t.Fatalf("empty where.did.in malformed cursor errors = %v, want cursor validation error", result.Errors)
 	}
 
-	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(collections: ["org.hypercerts.collection"], first: 101) { edges { cursor } } }`, Context: ctx})
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: ["org.hypercerts.collection"] } }, first: 101) { edges { cursor } } }`, Context: ctx})
 	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "first must be between 1 and 100") {
 		t.Fatalf("invalid first errors = %v, want range error", result.Errors)
 	}
 
-	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(collections: ["org.hypercerts.collection"]) { totalCount } }`, Context: ctx})
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: ["org.hypercerts.collection"] } }) { totalCount } }`, Context: ctx})
 	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "totalCount") {
 		t.Fatalf("totalCount query errors = %v, want unknown field error", result.Errors)
 	}
 
-	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(collections: [], first: 1) { edges { cursor } } }`, Context: context.Background()})
-	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "collections must include at least one") {
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: [] } }, first: 1) { edges { cursor } } }`, Context: context.Background()})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "where.collection.in must include at least one") {
 		t.Fatalf("no-repository validation errors = %v, want validation before empty connection", result.Errors)
 	}
 }

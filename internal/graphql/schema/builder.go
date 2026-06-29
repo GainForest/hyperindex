@@ -196,6 +196,32 @@ const (
 	recordTimelineMaxPageSize     = 100
 )
 
+var recordTimelineCollectionFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "RecordTimelineCollectionFilterInput",
+	Description: "Collection filter for recordTimeline. Callers must provide at least one collection in the in list.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"in": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(graphql.String))),
+			Description: "Collection NSIDs to include.",
+		},
+	},
+})
+
+var recordTimelineWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "RecordTimelineWhereInput",
+	Description: "Filter conditions for recordTimeline queries.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"collection": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewNonNull(recordTimelineCollectionFilterInput),
+			Description: "Required collection filter. Use collection: { in: [...] } to keep timeline scope explicit.",
+		},
+		"did": &graphql.InputObjectFieldConfig{
+			Type:        types.DIDFilterInput,
+			Description: "Optional author DID filter. Use did: { in: [...] } for followed-author timelines.",
+		},
+	},
+})
+
 var externalLabelWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	Name:        "ExternalLabelWhereInput",
 	Description: "External label predicates bound by the containing filter field.",
@@ -593,13 +619,9 @@ func (b *Builder) buildQueryType() *graphql.Object {
 		Type:        graphql.NewNonNull(b.recordTimelineConnection),
 		Description: "Query a newest-first page of current records across selected collections, optionally filtered by author DIDs.",
 		Args: graphql.FieldConfigArgument{
-			"authors": &graphql.ArgumentConfig{
-				Type:        graphql.NewList(graphql.NewNonNull(graphql.String)),
-				Description: "Optional author DIDs to include. Omit or pass null for no author filter; pass an empty list for an empty timeline.",
-			},
-			"collections": &graphql.ArgumentConfig{
-				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(graphql.String))),
-				Description: "Explicit AT Protocol collection NSIDs to include.",
+			"where": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(recordTimelineWhereInput),
+				Description: "Timeline filters. Use where.collection.in for required collection scope and optional where.did.in for author DIDs.",
 			},
 			"first": &graphql.ArgumentConfig{
 				Type:         graphql.Int,
@@ -1564,40 +1586,9 @@ func (b *Builder) createRecordTimelineResolver() graphql.FieldResolveFn {
 			return nil, err
 		}
 
-		collections, err := recordTimelineStringListArg(p.Args["collections"], "collections")
+		collections, authors, authorsEmpty, err := recordTimelineWhereArg(p.Args["where"])
 		if err != nil {
 			return nil, err
-		}
-		collections = dedupeStrings(collections)
-		if len(collections) == 0 {
-			return nil, fmt.Errorf("recordTimeline collections must include at least one collection NSID")
-		}
-		if len(collections) > repositories.MaxRecordTimelineCollections {
-			return nil, fmt.Errorf("recordTimeline collections supports at most %d values", repositories.MaxRecordTimelineCollections)
-		}
-		for i, collection := range collections {
-			if !lexicon.IsValidNSID(collection) {
-				return nil, fmt.Errorf("recordTimeline collections[%d] must be a valid collection NSID", i)
-			}
-		}
-
-		var authors []string
-		authorsEmpty := false
-		if rawAuthors, ok := p.Args["authors"]; ok && rawAuthors != nil {
-			authors, err = recordTimelineStringListArg(rawAuthors, "authors")
-			if err != nil {
-				return nil, err
-			}
-			authors = dedupeStrings(authors)
-			authorsEmpty = len(authors) == 0
-			if len(authors) > repositories.MaxRecordTimelineAuthors {
-				return nil, fmt.Errorf("recordTimeline authors supports at most %d values", repositories.MaxRecordTimelineAuthors)
-			}
-			for i, author := range authors {
-				if !isDIDString(author) {
-					return nil, fmt.Errorf("recordTimeline authors[%d] must be a DID string starting with \"did:\"", i)
-				}
-			}
 		}
 
 		var afterCursor *repositories.RecordTimelineCursor
@@ -1675,6 +1666,74 @@ func (b *Builder) createRecordTimelineResolver() graphql.FieldResolveFn {
 			},
 		}, nil
 	}
+}
+
+func recordTimelineWhereArg(value interface{}) ([]string, []string, bool, error) {
+	whereMap, ok := value.(map[string]interface{})
+	if !ok || whereMap == nil {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in must include at least one collection NSID")
+	}
+
+	collectionFilter, ok := whereMap["collection"].(map[string]interface{})
+	if !ok || collectionFilter == nil {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in must include at least one collection NSID")
+	}
+	collections, err := recordTimelineStringListArg(collectionFilter["in"], "where.collection.in")
+	if err != nil {
+		return nil, nil, false, err
+	}
+	collections = dedupeStrings(collections)
+	if len(collections) == 0 {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in must include at least one collection NSID")
+	}
+	if len(collections) > repositories.MaxRecordTimelineCollections {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in supports at most %d values", repositories.MaxRecordTimelineCollections)
+	}
+	for i, collection := range collections {
+		if !lexicon.IsValidNSID(collection) {
+			return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in[%d] must be a valid collection NSID", i)
+		}
+	}
+
+	var authors []string
+	authorsEmpty := false
+	if rawDIDFilter, ok := whereMap["did"]; ok && rawDIDFilter != nil {
+		didFilter, ok := rawDIDFilter.(map[string]interface{})
+		if !ok || didFilter == nil {
+			return nil, nil, false, fmt.Errorf("recordTimeline where.did must be a DID filter")
+		}
+
+		authorFilterName := "where.did.in"
+		if eqAuthor, ok := didFilter["eq"].(string); ok {
+			authorFilterName = "where.did.eq"
+			eqAuthor = strings.TrimSpace(eqAuthor)
+			if eqAuthor == "" {
+				return nil, nil, false, fmt.Errorf("recordTimeline where.did.eq must not be empty")
+			}
+			authors = []string{eqAuthor}
+		} else if rawAuthors, ok := didFilter["in"]; ok && rawAuthors != nil {
+			authors, err = recordTimelineStringListArg(rawAuthors, authorFilterName)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			authors = dedupeStrings(authors)
+			authorsEmpty = len(authors) == 0
+		}
+
+		if len(authors) > repositories.MaxRecordTimelineAuthors {
+			return nil, nil, false, fmt.Errorf("recordTimeline where.did.in supports at most %d values", repositories.MaxRecordTimelineAuthors)
+		}
+		for i, author := range authors {
+			if !isDIDString(author) {
+				if authorFilterName == "where.did.eq" {
+					return nil, nil, false, fmt.Errorf("recordTimeline where.did.eq must be a DID string starting with \"did:\"")
+				}
+				return nil, nil, false, fmt.Errorf("recordTimeline where.did.in[%d] must be a DID string starting with \"did:\"", i)
+			}
+		}
+	}
+
+	return collections, authors, authorsEmpty, nil
 }
 
 func recordTimelineFirstArg(value interface{}) (int, error) {

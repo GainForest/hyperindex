@@ -10,7 +10,7 @@ This spec is documentation/planning only. It does not describe a currently deplo
 
 Add a generic `recordTimeline` root query that returns one newest-first page of current records across selected collections, optionally filtered to selected author DIDs, with a single stable cursor.
 
-Certified-app can build a home feed by resolving the viewer's followed DIDs separately through `app.certified.graph.follow`, then passing those DIDs and its chosen Hypercerts/Certified collections into `recordTimeline`. Hyperindex remains a generic indexer; the application owns feed policy.
+Certified-app can build a home feed by resolving the viewer's followed DIDs separately through `app.certified.graph.follow`, then passing those DIDs and its chosen Hypercerts/Certified collections through `recordTimeline(where: { did: { in: ... }, collection: { in: ... } })`. Hyperindex remains a generic indexer; the application owns feed policy.
 
 The resolver returns raw generic record nodes plus optional selection-based `certifiedProfileData` hydration for each record author. It is not an append-only operation log and does not emit update/delete events.
 
@@ -62,11 +62,19 @@ A future append-only `recordEvents` API can cover create/update/delete operation
 ```graphql
 type Query {
   recordTimeline(
-    authors: [DID!]
-    collections: [String!]!
+    where: RecordTimelineWhereInput!
     first: Int = 50
     after: String
   ): RecordTimelineConnection!
+}
+
+input RecordTimelineWhereInput {
+  collection: RecordTimelineCollectionFilterInput!
+  did: DIDFilterInput
+}
+
+input RecordTimelineCollectionFilterInput {
+  in: [String!]!
 }
 ```
 
@@ -101,16 +109,17 @@ type RecordTimelineNode {
 
 | Argument | Required | Semantics |
 | --- | --- | --- |
-| `authors` | No | Author DIDs to include. Omitted or `null` means no author filter. An empty list returns an empty connection. |
-| `collections` | Yes | ATProto collection NSIDs to include. Empty lists are invalid. |
+| `where` | Yes | Filter object. `where.collection.in` is required; `where.did.in` is optional. |
 | `first` | No | Forward page size. Default `50`; maximum `100`. |
 | `after` | No | Opaque keyset cursor returned by a previous page. |
+
+`where.collection.in` contains ATProto collection NSIDs to include. Empty lists are invalid. `where.did.in` contains author DIDs to include; omitted or `null` means no author filter, and an empty list returns an empty connection.
 
 Suggested validation caps:
 
 - `first <= 100`
-- `len(authors) <= 1000`
-- `len(collections) <= 25`
+- `len(where.did.in) <= 1000`
+- `len(where.collection.in) <= 25`
 - every collection value must be a syntactically valid NSID-like collection string
 
 ### Example: followed-author home timeline
@@ -133,16 +142,20 @@ query Following($viewer: DID!, $after: String) {
 Then it calls the generic timeline query:
 
 ```graphql
-query HomeTimeline($authors: [DID!]!, $after: String) {
+query HomeTimeline($authors: [String!]!, $after: String) {
   recordTimeline(
-    authors: $authors
-    collections: [
-      "org.hypercerts.claim.activity"
-      "org.hypercerts.collection"
-      "app.certified.badge.award"
-      "app.certified.actor.profile"
-      "app.certified.actor.organization"
-    ]
+    where: {
+      did: { in: $authors }
+      collection: {
+        in: [
+          "org.hypercerts.claim.activity"
+          "org.hypercerts.collection"
+          "app.certified.badge.award"
+          "app.certified.actor.profile"
+          "app.certified.actor.organization"
+        ]
+      }
+    }
     first: 50
     after: $after
   ) {
@@ -304,7 +317,7 @@ ON record (did, collection, record_created_at DESC, uri DESC)
 WHERE record_created_at IS NOT NULL;
 ```
 
-Add a collection-first index for global selected-collection timelines when `authors` is omitted:
+Add a collection-first index for global selected-collection timelines when `where.did` is omitted:
 
 ```sql
 CREATE INDEX idx_record_timeline_collection_created
@@ -337,7 +350,7 @@ Use `first + 1` as `$5` to compute `hasNextPage` without `totalCount`.
 
 ### PostgreSQL global selected-collection query
 
-When `authors` is omitted, remove the `did = ANY($1)` predicate and use the collection-first index.
+When `where.did` is omitted, remove the `did = ANY($1)` predicate and use the collection-first index.
 
 ### SQLite query
 
@@ -360,7 +373,7 @@ LIMIT ?;
 
 ## Resolver flow
 
-1. Validate `authors`, `collections`, `first`, and `after`.
+1. Validate `where.collection.in`, optional `where.did.in`, `first`, and `after`.
 2. Decode `after` into `{ createdAt, uri }` when present.
 3. Query timeline records with `LIMIT first + 1`.
 4. Slice to `first`; use the extra row to set `hasNextPage` and `endCursor`.
@@ -397,8 +410,8 @@ Profile hydration happens after pagination, so its cost is bounded by the number
 ## Error behavior
 
 - Invalid `first` returns a GraphQL validation/resolver error that states the allowed range.
-- Empty `collections` returns a clear error because a timeline over all indexed collections is too broad.
-- Too many `authors` or `collections` returns a clear error with the configured maximum.
+- Empty `where.collection.in` returns a clear error because a timeline over all indexed collections is too broad.
+- Too many `where.did.in` or `where.collection.in` values returns a clear error with the configured maximum.
 - Malformed `after` returns a clear cursor error.
 - Missing or invalid `createdAt` on individual records excludes those records from the timeline; it should not fail the whole query.
 - Profile hydration failures should fail the query only if the selected field cannot be resolved reliably; do not silently return partial profile data unless existing GraphQL conventions already allow that behavior.
@@ -409,9 +422,9 @@ Repository tests, run against both SQLite and PostgreSQL:
 
 - returns records across multiple collections in `record_created_at DESC, uri DESC` order,
 - filters by author DID list,
-- supports omitted `authors` for global selected-collection timelines,
-- returns empty connection for `authors: []`,
-- rejects empty `collections`,
+- supports omitted `where.did` for global selected-collection timelines,
+- returns empty connection for `where.did.in: []`,
+- rejects empty `where.collection.in`,
 - applies cursor pagination strictly after `{ createdAt, uri }`,
 - excludes records with null `record_created_at`,
 - preserves `record_created_at` on update,

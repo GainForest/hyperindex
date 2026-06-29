@@ -851,7 +851,7 @@
             <div class="flow-step active" data-step="01">
               <div class="flow-icon">GQL</div>
               <h3>GraphQL args</h3>
-              <p>Client passes author DIDs, collections, page size, and optional cursor.</p>
+              <p>Client passes <code>where.collection.in</code>, optional <code>where.did.in</code>, page size, and cursor.</p>
             </div>
             <div class="flow-step active" data-step="02">
               <div class="flow-icon">SQL</div>
@@ -944,7 +944,7 @@
             <div class="bar-row"><span>Payload</span><div class="bar-track"><div class="bar-fill" id="payloadBar"></div></div><span id="payloadBarText">—</span></div>
           </div>
           <div class="warning" id="warningBox">
-            Recommended production version: require collections, cap authors/page size, store <code>record_created_at</code>, skip exact <code>totalCount</code>, and batch-hydrate profiles only when selected.
+            Recommended production version: require <code>where.collection.in</code>, cap authors/page size, store <code>record_created_at</code>, skip exact <code>totalCount</code>, and batch-hydrate profiles only when selected.
           </div>
         </article>
       </section>
@@ -1083,7 +1083,7 @@
 
     function graphQLCode() {
       const cols = selectedCollections().map((c) => `    "${c.id}"`).join("\n");
-      return `query HomeTimeline($authors: [DID!]!, $after: String) {\n  recordTimeline(\n    authors: $authors\n    collections: [\n${cols}\n    ]\n    first: ${state.pageSize}\n    after: $after\n  ) {\n    edges {\n      cursor\n      node {\n        uri\n        cid\n        did\n        collection\n        rkey\n        createdAt\n        indexedAt\n        json\n        certifiedProfileData {\n          did\n          displayName\n          avatar {\n            __typename\n            ... on OrgHypercertsDefsSmallImage { image { ref } }\n          }\n          # Later: handle can be a nullable virtual field here.\n        }\n      }\n    }\n    pageInfo { hasNextPage endCursor }\n  }\n}`;
+      return `query HomeTimeline($authors: [String!]!, $after: String) {\n  recordTimeline(\n    where: {\n      did: { in: $authors }\n      collection: {\n        in: [\n${cols}\n        ]\n      }\n    }\n    first: ${state.pageSize}\n    after: $after\n  ) {\n    edges {\n      cursor\n      node {\n        uri\n        cid\n        did\n        collection\n        rkey\n        createdAt\n        indexedAt\n        json\n        certifiedProfileData {\n          did\n          displayName\n          avatar {\n            __typename\n            ... on OrgHypercertsDefsSmallImage { image { ref } }\n          }\n          # Later: handle can be a nullable virtual field here.\n        }\n      }\n    }\n    pageInfo { hasNextPage endCursor }\n  }\n}`;
     }
 
     function sqlCode() {
@@ -1184,7 +1184,7 @@
       } else if (state.sortPath === "indexed") {
         els.warningBox.innerHTML = "<code>indexed_at</code> is fast, but it behaves like a latest-indexed timeline. Updates can move old records to the top, so it is not the create timeline certified-app asked for.";
       } else {
-        els.warningBox.innerHTML = "Recommended production version: require collections, cap authors/page size, store <code>record_created_at</code>, skip exact <code>totalCount</code>, and batch-hydrate <code>certifiedProfileData</code> only when selected.";
+        els.warningBox.innerHTML = "Recommended production version: require <code>where.collection.in</code>, cap authors/page size, store <code>record_created_at</code>, skip exact <code>totalCount</code>, and batch-hydrate <code>certifiedProfileData</code> only when selected.";
       }
 
       renderTimeline(rows);

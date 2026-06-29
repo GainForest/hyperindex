@@ -11,8 +11,8 @@ import (
 const minimumRecordTimelineRecords = 20
 
 const smokeRecordTimelineQuery = `
-query SmokeRecordTimeline($collections: [String!]!, $authors: [String!], $first: Int!, $after: String) {
-  recordTimeline(collections: $collections, authors: $authors, first: $first, after: $after) {
+query SmokeRecordTimeline($where: RecordTimelineWhereInput!, $first: Int!, $after: String) {
+  recordTimeline(where: $where, first: $first, after: $after) {
     edges {
       cursor
       node {
@@ -36,8 +36,8 @@ query SmokeRecordTimeline($collections: [String!]!, $authors: [String!], $first:
 }`
 
 const smokeRecordTimelineProfileHydrationQuery = `
-query SmokeRecordTimelineProfileHydration($collections: [String!]!, $first: Int!) {
-  recordTimeline(collections: $collections, first: $first) {
+query SmokeRecordTimelineProfileHydration($where: RecordTimelineWhereInput!, $first: Int!) {
+  recordTimeline(where: $where, first: $first) {
     edges {
       node {
         did
@@ -142,12 +142,15 @@ func TestRecordTimelineSmoke(t *testing.T) {
 func queryRecordTimelinePage(t testing.TB, ctx context.Context, config smokeConfig, collections []string, authors []string, first int, after string) recordTimelineConnection {
 	t.Helper()
 
-	variables := map[string]any{
-		"collections": collections,
-		"first":       first,
+	where := map[string]any{
+		"collection": map[string]any{"in": collections},
 	}
 	if authors != nil {
-		variables["authors"] = authors
+		where["did"] = map[string]any{"in": authors}
+	}
+	variables := map[string]any{
+		"where": where,
+		"first": first,
 	}
 	if after != "" {
 		variables["after"] = after
@@ -232,8 +235,7 @@ func assertRecordTimelineSchema(t testing.TB, config smokeConfig) {
 	types := typesByName(schema.Types)
 
 	field := requireSchemaField(t, queryFields, "recordTimeline")
-	requireSchemaArgument(t, field, "collections")
-	requireSchemaArgument(t, field, "authors")
+	requireSchemaArgument(t, field, "where")
 	requireSchemaArgument(t, field, "first")
 	requireSchemaArgument(t, field, "after")
 
@@ -255,8 +257,10 @@ func assertRecordTimelineSchema(t testing.TB, config smokeConfig) {
 func assertRecordTimelineProfileHydration(t testing.TB, ctx context.Context, config smokeConfig) {
 	t.Helper()
 	response := postGraphQL(t, ctx, config, "SmokeRecordTimelineProfileHydration", smokeRecordTimelineProfileHydrationQuery, map[string]any{
-		"collections": []string{profileCollection},
-		"first":       1,
+		"where": map[string]any{
+			"collection": map[string]any{"in": []string{profileCollection}},
+		},
+		"first": 1,
 	})
 	var decoded recordTimelineResponse
 	if err := json.Unmarshal(response.Data, &decoded); err != nil {

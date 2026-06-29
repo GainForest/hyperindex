@@ -50,7 +50,7 @@ Last updated on 2026-06-29 for pending `recordTimeline` schema changes. Baseline
 | `orgHypercertsWorkscopeTag` | after: `String`, before: `String`, first: `Int`, last: `Int`, sortBy: `OrgHypercertsWorkscopeTagSortField`, sortDirection: `SortDirection`, where: `OrgHypercertsWorkscopeTagWhereInput` | Query org.hypercerts.workscope.tag records |
 | `orgHypercertsWorkscopeTagByUri` | uri: `String!` | Get a single org.hypercerts.workscope.tag by AT-URI |
 | `records` | after: `String`, before: `String`, collection: `String!`, first: `Int`, last: `Int` | Query records from any collection (useful for collections without lexicon schemas) |
-| `recordTimeline` | after: `String`, authors: `[String!]`, collections: `[String!]!`, first: `Int` | Query a newest-first page of current records across selected collections, optionally filtered by author DIDs. |
+| `recordTimeline` | after: `String`, first: `Int`, where: `RecordTimelineWhereInput!` | Query a newest-first page of current records across selected collections, optionally filtered by author DIDs. |
 | `externalLabels` | activeOnly: `Boolean`, sources: `[String!]`, subjects: `[String!]!`, values: `[String!]` | Query locally ingested external ATProto labels by DID or AT-URI subject. |
 | `search` | after: `String`, collection: `String`, first: `Int`, query: `String!` | Search records by text content |
 | `collectionStats` | collections: `[String!]` | Get record counts for collections (efficient aggregate query) |
@@ -90,10 +90,22 @@ Arguments:
 
 | Argument | Type | Notes |
 | --- | --- | --- |
-| `collections` | `[String!]!` | Required collection NSIDs to include. Empty lists are rejected. Up to 25 collections are accepted. |
-| `authors` | `[String!]` | Optional author DID filter. Omit or pass `null` for all authors; pass an empty list for an empty timeline. Up to 1,000 DIDs are accepted. |
+| `where` | `RecordTimelineWhereInput!` | Required filter object. `where.collection.in` is required; `where.did` is optional. |
 | `first` | `Int` | Page size. Defaults to 50 and is capped at 100. |
 | `after` | `String` | Opaque cursor from a previous `recordTimeline` edge or `pageInfo.endCursor`. |
+
+### `RecordTimelineWhereInput`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `collection` | `RecordTimelineCollectionFilterInput!` | Required collection filter. Use `collection: { in: [...] }`. Empty lists are rejected. Up to 25 collections are accepted. |
+| `did` | `DIDFilterInput` | Optional author DID filter. Omit for all authors; use `did: { in: [...] }` for followed-author timelines; pass `did: { in: [] }` only when an empty timeline is intended. Up to 1,000 DIDs are accepted. |
+
+### `RecordTimelineCollectionFilterInput`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `in` | `[String!]!` | Collection NSIDs to include. |
 
 Rows are ordered by top-level record JSON `createdAt` descending, then `uri` descending. Records without a parseable top-level `createdAt` are excluded. Use typed collection queries instead when consumers need collection-specific filters, sorting, typed fields, backward pagination, or exact totals; `RecordTimelineConnection` does not expose `totalCount`.
 
