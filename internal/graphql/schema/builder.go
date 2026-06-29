@@ -681,6 +681,23 @@ func (b *Builder) buildQueryType() *graphql.Object {
 		Resolve: b.createCollectionStatsResolver(),
 	}
 
+	// Add endorsementClosure query for the Certified endorsement trust graph.
+	fields["endorsementClosure"] = &graphql.Field{
+		Type:        graphql.NewNonNull(endorsementClosureResultType),
+		Description: "Compute the viewer-centric Certified endorsement graph closure from active endorsement badge awards. Degree must be 1, 2, or 3.",
+		Args: graphql.FieldConfigArgument{
+			"viewer": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(graphql.String),
+				Description: "Viewer DID to start from. The viewer is excluded from returned accounts.",
+			},
+			"degree": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(graphql.Int),
+				Description: "Maximum endorsement hop count to include. Valid values are 1, 2, and 3; results are cumulative.",
+			},
+		},
+		Resolve: b.createEndorsementClosureResolver(),
+	}
+
 	// Add collectionTimeSeries query for time series data
 	fields["collectionTimeSeries"] = &graphql.Field{
 		Type:        collectionTimeSeriesType,

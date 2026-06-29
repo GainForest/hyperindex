@@ -1,0 +1,4 @@
+kind: added
+body: Add a bounded `endorsementClosure(viewer, degree)` GraphQL query for Certified endorsement networks. The resolver computes active account-to-account endorsement badge edges at request time, respects badge-definition issuer allowlists, supports degrees 1 through 3, returns predecessor provenance, and marks responses truncated when the server-side cap is reached.
+custom:
+  Affects: user

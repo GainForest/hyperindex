@@ -54,6 +54,7 @@ Last updated on 2026-06-29 for pending `recordTimeline` schema changes. Baseline
 | `externalLabels` | activeOnly: `Boolean`, sources: `[String!]`, subjects: `[String!]!`, values: `[String!]` | Query locally ingested external ATProto labels by DID or AT-URI subject. |
 | `search` | after: `String`, collection: `String`, first: `Int`, query: `String!` | Search records by text content |
 | `collectionStats` | collections: `[String!]` | Get record counts for collections (efficient aggregate query) |
+| `endorsementClosure` | viewer: `String!`, degree: `Int!` | Compute the bounded viewer-centric Certified endorsement graph closure from active endorsement badge awards. |
 | `collectionTimeSeries` | collection: `String!` | Get time series data for a collection (records grouped by date) |
 
 ## Typed record collections
@@ -136,6 +137,26 @@ Rows are ordered by top-level record JSON `createdAt` descending, then `uri` des
 | `indexedAt` | `DateTime!` | Timestamp when Hyperindex last indexed the current row. |
 | `value` | `JSON!` | Decoded AT Protocol record payload. |
 | `certifiedProfileData` | `AppCertifiedActorProfile` | Virtual profile data for the record author when the schema includes `app.certified.actor.profile`. |
+
+## Certified endorsement closure
+
+`endorsementClosure(viewer, degree)` returns `EndorsementClosureResult`:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `accounts` | `[EndorsementAccount!]!` | Accounts reachable from the viewer through active Certified endorsement awards, sorted by degree then DID. |
+| `truncated` | `Boolean!` | True when the server-side account cap was reached and the in-flight BFS ring was trimmed. |
+
+`EndorsementAccount` fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `did` | `String!` | DID of the reached account. |
+| `degree` | `Int!` | Smallest endorsement hop distance from the viewer. |
+| `via` | `[String!]!` | Up to 64 previous-ring DIDs that led to this account; empty for direct degree-1 accounts. |
+
+`degree` must be `1`, `2`, or `3`, and results are cumulative. The resolver computes active edges at request time from Certified badge award, definition, and response records; no persisted endorsement edge table is required. Only badge awards whose subject is the `app.certified.defs#did` account DID union member count as account endorsement edges; record strongRef subjects are ignored. Badge-definition `allowedIssuers` allowlists are respected when present.
+
 
 ## Filter inputs
 

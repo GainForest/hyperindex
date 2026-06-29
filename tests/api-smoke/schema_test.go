@@ -295,6 +295,12 @@ func TestSchemaExposesPublicSmokeQueryFields(t *testing.T) {
 
 	requireSchemaField(t, queryFields, "collectionStats")
 
+	if config.expectations.EndorsementClosure.configured() {
+		endorsementClosureField := requireSchemaField(t, queryFields, "endorsementClosure")
+		requireSchemaArgument(t, endorsementClosureField, "viewer")
+		requireSchemaArgument(t, endorsementClosureField, "degree")
+	}
+
 	smokeLog("✓ Public schema has expected GraphQL query fields")
 }
 

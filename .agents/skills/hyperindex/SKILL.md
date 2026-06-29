@@ -123,6 +123,23 @@ where: { badgeType: { eq: "endorsement" } }
 
 `badgeType` uses `StringFilterInput`, so it supports the same string operators exposed for badge definitions. Awards whose referenced badge definition is missing or has no `badgeType` do not match positive value filters.
 
+For viewer-centric Certified endorsement networks, use `endorsementClosure(viewer, degree)`:
+
+```graphql
+query EndorsementClosure($viewer: String!) {
+  endorsementClosure(viewer: $viewer, degree: 3) {
+    truncated
+    accounts {
+      did
+      degree
+      via
+    }
+  }
+}
+```
+
+`degree` must be `1`, `2`, or `3`, and results are cumulative. `via` lists up to 64 previous-ring DIDs that led to the account; it is empty for direct degree-1 accounts. `truncated: true` means the server-side account cap was reached. The resolver computes active endorsement edges from current Certified badge award, definition, and response records at request time; it only counts badge awards whose subject is the `app.certified.defs#did` account DID union member, ignores record strongRef subjects, respects badge-definition `allowedIssuers` allowlists, and does not use a persisted edge table.
+
 If a workflow needs unsupported nested matching, use one of these patterns:
 
 - Use typed nested/presence filters to narrow the set, then filter client-side.

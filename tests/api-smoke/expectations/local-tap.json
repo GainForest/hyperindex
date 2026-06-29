@@ -127,6 +127,10 @@
       }
     ]
   },
+  "endorsementClosure": {
+    "minimumActiveEdges": 5,
+    "requireIndirect": true
+  },
   "search": {
     "query": "hypercert",
     "first": 1

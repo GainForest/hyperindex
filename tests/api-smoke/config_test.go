@@ -39,6 +39,7 @@ type expectations struct {
 	PaginationCollections       []paginationExpectation                `json:"paginationCollections"`
 	ExternalLabelActivityClaims externalLabelActivityClaimsExpectation `json:"externalLabelActivityClaims"`
 	AuthorLabelActivityClaims   authorLabelActivityClaimsExpectation   `json:"authorLabelActivityClaims"`
+	EndorsementClosure          endorsementClosureExpectation          `json:"endorsementClosure"`
 	Search                      searchExpectation                      `json:"search"`
 }
 
@@ -55,6 +56,11 @@ type paginationExpectation struct {
 type searchExpectation struct {
 	Query string `json:"query"`
 	First int    `json:"first"`
+}
+
+type endorsementClosureExpectation struct {
+	MinimumActiveEdges int  `json:"minimumActiveEdges"`
+	RequireIndirect    bool `json:"requireIndirect"`
 }
 
 type externalLabelActivityClaimsExpectation struct {
@@ -248,6 +254,9 @@ func (e expectations) validate() error {
 	if err := e.AuthorLabelActivityClaims.validate(requiredNSIDs, nonRecordNSIDs, e.TypedQueryFields); err != nil {
 		return err
 	}
+	if err := e.EndorsementClosure.validate(requiredNSIDs, nonRecordNSIDs, e.TypedQueryFields); err != nil {
+		return err
+	}
 
 	if e.Search.Query == "" {
 		return fmt.Errorf("search.query is required")
@@ -256,6 +265,31 @@ func (e expectations) validate() error {
 		return fmt.Errorf("search.first must be positive")
 	}
 
+	return nil
+}
+
+func (e endorsementClosureExpectation) configured() bool {
+	return e.MinimumActiveEdges != 0 || e.RequireIndirect
+}
+
+func (e endorsementClosureExpectation) validate(requiredNSIDs map[string]bool, nonRecordNSIDs map[string]bool, typedQueryFields map[string]string) error {
+	if !e.configured() {
+		return nil
+	}
+	if e.MinimumActiveEdges < 1 {
+		return fmt.Errorf("endorsementClosure.minimumActiveEdges must be positive when endorsementClosure is configured")
+	}
+	for _, nsid := range []string{"app.certified.badge.award", "app.certified.badge.definition", "app.certified.badge.response"} {
+		if !requiredNSIDs[nsid] {
+			return fmt.Errorf("endorsementClosure collection %q is missing from requiredNSIDs", nsid)
+		}
+		if nonRecordNSIDs[nsid] {
+			return fmt.Errorf("endorsementClosure collection %q cannot be listed in nonRecordNSIDs", nsid)
+		}
+		if typedQueryFields[nsid] == "" {
+			return fmt.Errorf("endorsementClosure collection %q is missing from typedQueryFields", nsid)
+		}
+	}
 	return nil
 }
 
@@ -425,6 +459,9 @@ func TestLocalTapExpectations(t *testing.T) {
 	}
 	if got := loaded.TypedQueryFields["app.certified.graph.follow"]; got != "appCertifiedGraphFollow" {
 		t.Fatalf("local Tap expectations typed field for app.certified.graph.follow = %q, want appCertifiedGraphFollow", got)
+	}
+	if !loaded.EndorsementClosure.configured() {
+		t.Fatal("local Tap expectations must configure endorsementClosure behavior smoke")
 	}
 }
 

@@ -185,6 +185,33 @@ where: { badgeType: { eq: "endorsement" } }
 
 `badgeType` uses `StringFilterInput`, so it supports the same string operators exposed for badge definitions. Awards whose referenced badge definition is missing or has no `badgeType` do not match positive value filters.
 
+### Certified endorsement closure
+
+Use `endorsementClosure(viewer, degree)` when a client needs the viewer-centric Certified endorsement network: accounts directly or indirectly reached through active endorsement badge awards.
+
+```graphql
+query EndorsementClosure($viewer: String!) {
+  endorsementClosure(viewer: $viewer, degree: 3) {
+    truncated
+    accounts {
+      did
+      degree
+      via
+    }
+  }
+}
+```
+
+Variables:
+
+```json
+{ "viewer": "did:plc:example" }
+```
+
+`degree` must be `1`, `2`, or `3`. Results are cumulative: degree `2` includes degree-1 and degree-2 accounts, and degree `3` includes all three rings. `via` lists up to 64 previous-ring DIDs that led to an account and is empty for degree-1 accounts. `truncated` is `true` when the server-side account cap is reached; clients should treat the response as a useful subset, not a complete network.
+
+The resolver computes edges from current `app.certified.badge.award`, `app.certified.badge.definition`, and `app.certified.badge.response` records at request time. An active edge requires an endorsement-typed badge definition, an `app.certified.defs#did` account subject with a valid DID, an issuer allowed by `allowedIssuers` when that badge definition has an allowlist, no self-loop, and no rejection response authored by the subject for that award. Badge awards to record strongRefs do not create account endorsement edges.
+
 ## External and author label filters
 
 Hyperindex can filter typed record connections by locally ingested external ATProto labels before pagination and `totalCount` are calculated.
