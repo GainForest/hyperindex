@@ -626,7 +626,7 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			"first": &graphql.ArgumentConfig{
 				Type:         graphql.Int,
 				DefaultValue: recordTimelineDefaultPageSize,
-				Description:  "Number of records to return (default 50, max 100).",
+				Description:  "Number of records to return (default 50, max 1000).",
 			},
 			"after": &graphql.ArgumentConfig{
 				Type:        graphql.String,
