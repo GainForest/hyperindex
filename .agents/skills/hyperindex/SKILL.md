@@ -40,7 +40,7 @@ The current production indexer is ATProto-first. Do **not** explain it using old
 - Production: `https://api.indexer.hypercerts.dev/graphql`
 - Staging: `https://dev.api.indexer.hypercerts.dev/graphql`
 
-Use production by default for consumer examples. `api.indexer.hypercerts.dev` is the production endpoint and currently exposes presence filters and typed queries for the collections above. Staging may expose schema changes earlier; because ATProto data is network-wide, do not describe staging as a separate dataset unless you have verified an environment-specific indexing difference.
+Use production by default for consumer examples. `api.indexer.hypercerts.dev` is the production endpoint and currently exposes presence filters and typed queries for the collections above. Staging and production do not always run the same schema, and this skill usually reflects the default branch before every endpoint has caught up. Because ATProto data is network-wide, do not describe staging as a separate dataset unless you have verified an environment-specific indexing difference.
 
 ## Before answering
 
@@ -50,7 +50,7 @@ Use production by default for consumer examples. `api.indexer.hypercerts.dev` is
 4. Always include pagination (`first`, `after`, `pageInfo { hasNextPage endCursor }`) in list examples.
 5. Keep selection sets small. Add fields only when needed for the workflow.
 6. Use inline fragments for union fields such as descriptions, images, attachment content, proof fields, and strong references.
-7. Use generated nested `where` filters for exact matches inside arrays, refs, and unions when the endpoint exposes them. Fall back to `search(query: ..., collection: ...)` for substring discovery, unsupported nested shapes, or deployed endpoints that have not rolled out nested filters yet.
+7. Do not assume the target endpoint exposes every feature described in this skill. `main` may be ahead of staging, and staging may be ahead of production. When a query depends on newer schema features such as `recordTimeline`, nested filters, author labels, or collection-specific fields, introspect the target endpoint first. If the feature is missing, tell the user which endpoint lacks it and offer the closest fallback, such as `search(query: ..., collection: ...)` plus client-side filtering.
 
 Detailed schema reference: [references/schema-reference.md](references/schema-reference.md)
 
@@ -679,6 +679,5 @@ query HypercertCollectionStats {
 - Say “attachment” for `org.hypercerts.context.attachment` records.
 - Say “certified profile” for `app.certified.actor.profile` records.
 - Say “EVM link” or “wallet link” for `app.certified.link.evm` records.
-- Do not assume every deployed endpoint has nested filters. When nested filtering matters, introspect the target endpoint and then use generated exact nested filters for arrays/refs/unions if present; otherwise fall back to search or client-side filtering.
 - When giving user-facing parameterized examples, include both the query and variables.
 - When the schema has changed, prefer live introspection over this file and mention the endpoint used.
