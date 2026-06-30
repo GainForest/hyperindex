@@ -10,7 +10,6 @@ import (
 	"github.com/GainForest/hyperindex/internal/graphclosure"
 	"github.com/GainForest/hyperindex/internal/graphql/query"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
-	gqltypes "github.com/GainForest/hyperindex/internal/graphql/types"
 	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
@@ -33,6 +32,17 @@ var endorsementAccountType = graphql.NewObject(graphql.ObjectConfig{
 	},
 })
 
+var endorsementClosureDIDFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "EndorsementClosureDIDFilterInput",
+	Description: "Exact root DID filter for endorsementClosure. Only eq is supported because each closure is computed from one DID.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"eq": &graphql.InputObjectFieldConfig{
+			Type:        graphql.String,
+			Description: "Root DID for the endorsement closure.",
+		},
+	},
+})
+
 var endorsementClosureDegreeFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	Name:        "EndorsementClosureDegreeFilterInput",
 	Description: "Optional exact filter for endorsement closure hop distance. Values must be 1, 2, or 3.",
@@ -49,8 +59,8 @@ var endorsementClosureWhereInput = graphql.NewInputObject(graphql.InputObjectCon
 	Description: "Filters for the Certified endorsement closure. did.eq is required and selects the root DID. Optional degree.eq selects one returned hop distance from 1 through 3.",
 	Fields: graphql.InputObjectConfigFieldMap{
 		"did": &graphql.InputObjectFieldConfig{
-			Type:        graphql.NewNonNull(gqltypes.DIDFilterInput),
-			Description: "Root DID filter. endorsementClosure requires exactly did.eq because each closure is computed from one DID.",
+			Type:        graphql.NewNonNull(endorsementClosureDIDFilterInput),
+			Description: "Root DID filter. endorsementClosure exposes only did.eq because each closure is computed from one DID.",
 		},
 		"degree": &graphql.InputObjectFieldConfig{
 			Type:        endorsementClosureDegreeFilterInput,

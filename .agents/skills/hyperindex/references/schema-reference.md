@@ -153,7 +153,7 @@ Rows are ordered by top-level record JSON `createdAt` descending, then `uri` des
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `did` | `DIDFilterInput!` | Required root DID filter. Use exactly `did: { eq: "did:..." }`; `in` is not supported because each closure is computed from one DID. |
+| `did` | `EndorsementClosureDIDFilterInput!` | Required root DID filter. This input exposes only `eq` because each closure is computed from one DID. |
 | `degree` | `EndorsementClosureDegreeFilterInput` | Optional returned-degree filter with `eq`; values must be `1`, `2`, or `3`. Omit it to return all supported degrees. |
 
 `EndorsementAccount` fields:
@@ -253,6 +253,14 @@ Filter conditions for DID fields (column-level). Only eq and in are supported.
 | --- | --- | --- |
 | `eq` | `String` | Equals |
 | `in` | `[String!]` | In list |
+
+### `EndorsementClosureDIDFilterInput`
+
+Exact root DID filter for `endorsementClosure`. Only `eq` is supported because each closure request is rooted at one DID.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `eq` | `String` | Root DID for the endorsement closure. |
 
 ### `URIFilterInput`
 

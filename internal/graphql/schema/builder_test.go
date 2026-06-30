@@ -2005,6 +2005,25 @@ func TestCollectionResolver_BadgeAwardBadgeTypeFilterFindsReferencedDefinitionTy
 	}
 }
 
+func TestEndorsementClosureWhereInputUsesExactDIDFilter(t *testing.T) {
+	fields := endorsementClosureWhereInput.Fields()
+	didField, ok := fields["did"]
+	if !ok {
+		t.Fatal("EndorsementClosureWhereInput missing did field")
+	}
+	if got := didField.Type.String(); got != "EndorsementClosureDIDFilterInput!" {
+		t.Fatalf("EndorsementClosureWhereInput.did type = %q, want EndorsementClosureDIDFilterInput!", got)
+	}
+
+	didFilterFields := endorsementClosureDIDFilterInput.Fields()
+	if _, ok := didFilterFields["eq"]; !ok {
+		t.Fatal("EndorsementClosureDIDFilterInput missing eq field")
+	}
+	if _, ok := didFilterFields["in"]; ok {
+		t.Fatal("EndorsementClosureDIDFilterInput exposes unsupported in field")
+	}
+}
+
 func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
 	schema := buildAllTestdataSchema(t)
 	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement"
@@ -2210,10 +2229,10 @@ func TestEndorsementClosureResolverRejectsInvalidArgs(t *testing.T) {
 		Context:       ctx,
 	})
 	if len(result.Errors) == 0 {
-		t.Fatal("expected GraphQL error for where.did.in")
+		t.Fatal("expected GraphQL validation error for unsupported where.did.in")
 	}
-	if !strings.Contains(result.Errors[0].Message, "where.did.eq") {
-		t.Fatalf("error = %q, want where.did.eq guidance", result.Errors[0].Message)
+	if !strings.Contains(result.Errors[0].Message, "Unknown field") {
+		t.Fatalf("error = %q, want GraphQL unknown-field validation", result.Errors[0].Message)
 	}
 
 	result = graphql.Do(graphql.Params{
