@@ -14,7 +14,7 @@ const (
 	MaxDegree = 3
 
 	// DefaultClosureCap is the maximum number of accounts returned by one
-	// closure computation before the response is marked truncated. The viewer
+	// closure computation before the response is marked truncated. The root DID
 	// seed does not count against this cap.
 	DefaultClosureCap = 3000
 
@@ -32,7 +32,7 @@ type Adjacency interface {
 	EndorsementAdjacencyForLimit(ctx context.Context, issuers []string, limit int) (map[string][]string, bool, error)
 }
 
-// Account is one account reached by the viewer-centric endorsement closure.
+// Account is one account reached by the DID-rooted endorsement closure.
 type Account struct {
 	DID    string
 	Degree int
@@ -46,15 +46,15 @@ type Result struct {
 	Truncated bool
 }
 
-// Compute walks active endorsement edges breadth-first from viewer up to
+// Compute walks active endorsement edges breadth-first from rootDID up to
 // maxDegree. The returned accounts are cumulative, assigned to their minimum
 // reachable degree, and sorted by degree then DID for stable GraphQL responses.
-func Compute(ctx context.Context, adjacency Adjacency, viewer string, maxDegree, accountCap int) (Result, error) {
+func Compute(ctx context.Context, adjacency Adjacency, rootDID string, maxDegree, accountCap int) (Result, error) {
 	if adjacency == nil {
 		return Result{}, fmt.Errorf("endorsement adjacency source is required")
 	}
-	if viewer == "" {
-		return Result{}, fmt.Errorf("viewer DID is required")
+	if rootDID == "" {
+		return Result{}, fmt.Errorf("root DID is required")
 	}
 	if maxDegree < 1 || maxDegree > MaxDegree {
 		return Result{}, fmt.Errorf("degree must be between 1 and %d, got %d", MaxDegree, maxDegree)
@@ -63,9 +63,9 @@ func Compute(ctx context.Context, adjacency Adjacency, viewer string, maxDegree,
 		return Result{}, fmt.Errorf("endorsement closure cap must be positive, got %d", accountCap)
 	}
 
-	seen := map[string]int{viewer: 0}
+	seen := map[string]int{rootDID: 0}
 	predecessors := map[string]map[string]struct{}{}
-	frontier := []string{viewer}
+	frontier := []string{rootDID}
 	truncated := false
 
 	for degree := 1; degree <= maxDegree; degree++ {
@@ -84,7 +84,7 @@ func Compute(ctx context.Context, adjacency Adjacency, viewer string, maxDegree,
 		nextFrontier := make([]string, 0)
 		for _, issuer := range frontier {
 			for _, subject := range edges[issuer] {
-				if subject == "" || subject == viewer {
+				if subject == "" || subject == rootDID {
 					continue
 				}
 
@@ -127,7 +127,7 @@ func Compute(ctx context.Context, adjacency Adjacency, viewer string, maxDegree,
 
 	accounts := make([]Account, 0, len(seen)-1)
 	for did, degree := range seen {
-		if did == viewer {
+		if did == rootDID {
 			continue
 		}
 

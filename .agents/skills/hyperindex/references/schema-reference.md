@@ -54,7 +54,7 @@ Last updated on 2026-06-29 for pending `recordTimeline` schema changes. Baseline
 | `externalLabels` | activeOnly: `Boolean`, sources: `[String!]`, subjects: `[String!]!`, values: `[String!]` | Query locally ingested external ATProto labels by DID or AT-URI subject. |
 | `search` | after: `String`, collection: `String`, first: `Int`, query: `String!` | Search records by text content |
 | `collectionStats` | collections: `[String!]` | Get record counts for collections (efficient aggregate query) |
-| `endorsementClosure` | viewer: `String!`, degree: `Int!` | Compute the bounded viewer-centric Certified endorsement graph closure from active endorsement badge awards. |
+| `endorsementClosure` | where: `EndorsementClosureWhereInput!`, first: `Int`, after: `String` | Query the bounded DID-rooted Certified endorsement graph closure from active endorsement badge awards. |
 | `collectionTimeSeries` | collection: `String!` | Get time series data for a collection (records grouped by date) |
 
 ## Typed record collections
@@ -140,22 +140,47 @@ Rows are ordered by top-level record JSON `createdAt` descending, then `uri` des
 
 ## Certified endorsement closure
 
-`endorsementClosure(viewer, degree)` returns `EndorsementClosureResult`:
+`endorsementClosure(where, first, after)` returns `EndorsementClosureConnection`:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `accounts` | `[EndorsementAccount!]!` | Accounts reachable from the viewer through active Certified endorsement awards, sorted by degree then DID. |
+| `edges` | `[EndorsementAccountEdge!]!` | Paginated closure accounts in fixed degree-ascending, DID-ascending order. |
+| `pageInfo` | `PageInfo!` | Forward pagination metadata. |
+| `totalCount` | `Int` | Total number of accounts in the filtered closure before pagination. |
 | `truncated` | `Boolean!` | True when the server-side account cap was reached and the in-flight BFS ring was trimmed. |
+
+`EndorsementClosureWhereInput` fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `did` | `DIDFilterInput!` | Required root DID filter. Use exactly `did: { eq: "did:..." }`; `in` is not supported because each closure is computed from one DID. |
+| `degree` | `EndorsementClosureDegreeFilterInput` | Optional returned-degree filter with `eq`, `in`, `lte`, and `gte`; values must be `1`, `2`, or `3`. |
 
 `EndorsementAccount` fields:
 
 | Field | Type | Description |
 | --- | --- | --- |
 | `did` | `String!` | DID of the reached account. |
-| `degree` | `Int!` | Smallest endorsement hop distance from the viewer. |
+| `degree` | `Int!` | Smallest endorsement hop distance from the root DID. |
 | `via` | `[String!]!` | Up to 64 previous-ring DIDs that led to this account; empty for direct degree-1 accounts. |
 
-`degree` must be `1`, `2`, or `3`, and results are cumulative. The resolver computes active edges at request time from Certified badge award, definition, and response records; no persisted endorsement edge table is required. Only badge awards whose subject is the `app.certified.defs#did` account DID union member count as account endorsement edges; record strongRef subjects are ignored. Badge-definition `allowedIssuers` allowlists are respected when present.
+Example:
+
+```graphql
+query EndorsementClosure($did: String!) {
+  endorsementClosure(
+    where: { did: { eq: $did }, degree: { lte: 3 } }
+    first: 100
+  ) {
+    truncated
+    totalCount
+    pageInfo { hasNextPage endCursor }
+    edges { cursor node { did degree via } }
+  }
+}
+```
+
+The resolver computes active edges at request time from Certified badge award, definition, and response records; no persisted endorsement edge table is required. Only badge awards whose subject is the `app.certified.defs#did` account DID union member count as account endorsement edges; record strongRef subjects are ignored. Badge-definition `allowedIssuers` allowlists are respected when present.
 
 
 ## Filter inputs

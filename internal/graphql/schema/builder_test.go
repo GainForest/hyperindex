@@ -2056,9 +2056,14 @@ func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
 	result := graphql.Do(graphql.Params{
 		Schema: *schema,
 		RequestString: `{
-			endorsementClosure(viewer: "did:plc:viewer", degree: 3) {
+			endorsementClosure(
+				where: { did: { eq: "did:plc:viewer" }, degree: { lte: 3 } }
+				first: 10
+			) {
 				truncated
-				accounts { did degree via }
+				totalCount
+				pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+				edges { cursor node { did degree via } }
 			}
 		}`,
 		Context: ctx,
@@ -2073,10 +2078,25 @@ func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
 		t.Fatalf("truncated = %v, want false", closure["truncated"])
 	}
 
-	accounts := closure["accounts"].([]interface{})
-	got := make([]map[string]interface{}, 0, len(accounts))
-	for _, account := range accounts {
-		got = append(got, account.(map[string]interface{}))
+	if closure["totalCount"] != 4 {
+		t.Fatalf("totalCount = %v, want 4", closure["totalCount"])
+	}
+	pageInfo := closure["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false || pageInfo["hasPreviousPage"] != false {
+		t.Fatalf("pageInfo = %#v, want no previous or next page", pageInfo)
+	}
+	if pageInfo["startCursor"] == nil || pageInfo["endCursor"] == nil {
+		t.Fatalf("pageInfo cursors = %#v, want start and end cursors", pageInfo)
+	}
+
+	edges := closure["edges"].([]interface{})
+	got := make([]map[string]interface{}, 0, len(edges))
+	for _, edge := range edges {
+		edgeMap := edge.(map[string]interface{})
+		if edgeMap["cursor"] == "" {
+			t.Fatal("edge cursor is empty")
+		}
+		got = append(got, edgeMap["node"].(map[string]interface{}))
 	}
 
 	want := []map[string]interface{}{
@@ -2090,17 +2110,95 @@ func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
 	}
 }
 
+func TestEndorsementClosureResolverPaginatesAndFiltersDegrees(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement-pagination"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{URI: endorsementBadgeURI, CID: "cid-endorsement", DID: "did:plc:issuer", Collection: "app.certified.badge.definition", JSON: `{"title":"Endorsement","badgeType":"endorsement","createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:viewer/app.certified.badge.award/alice-pagination", CID: "cid-award-alice", DID: "did:plc:viewer", Collection: "app.certified.badge.award", JSON: `{"badge":{"uri":"` + endorsementBadgeURI + `"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:alice"},"createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:viewer/app.certified.badge.award/bob-pagination", CID: "cid-award-bob", DID: "did:plc:viewer", Collection: "app.certified.badge.award", JSON: `{"badge":{"uri":"` + endorsementBadgeURI + `"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bob"},"createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:alice/app.certified.badge.award/carol-pagination", CID: "cid-award-carol", DID: "did:plc:alice", Collection: "app.certified.badge.award", JSON: `{"badge":{"uri":"` + endorsementBadgeURI + `"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:carol"},"createdAt":"2026-01-01T00:00:00Z"}`},
+	})
+
+	result := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `{
+			endorsementClosure(
+				where: { did: { eq: "did:plc:viewer" }, degree: { eq: 1 } }
+				first: 1
+			) {
+				totalCount
+				edges { cursor node { did degree } }
+				pageInfo { hasNextPage hasPreviousPage endCursor }
+			}
+		}`,
+		Context: ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected GraphQL errors: %v", result.Errors)
+	}
+	closure := result.Data.(map[string]interface{})["endorsementClosure"].(map[string]interface{})
+	if closure["totalCount"] != 2 {
+		t.Fatalf("totalCount = %v, want 2", closure["totalCount"])
+	}
+	edges := closure["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+	firstNode := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if firstNode["did"] != "did:plc:alice" || firstNode["degree"] != 1 {
+		t.Fatalf("first node = %#v, want alice degree 1", firstNode)
+	}
+	pageInfo := closure["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != true || pageInfo["hasPreviousPage"] != false {
+		t.Fatalf("pageInfo = %#v, want next page only", pageInfo)
+	}
+	after := pageInfo["endCursor"].(string)
+
+	result = graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `query($after: String!) {
+			endorsementClosure(
+				where: { did: { eq: "did:plc:viewer" }, degree: { eq: 1 } }
+				first: 1
+				after: $after
+			) {
+				edges { node { did degree } }
+				pageInfo { hasNextPage hasPreviousPage }
+			}
+		}`,
+		VariableValues: map[string]interface{}{"after": after},
+		Context:        ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected second-page GraphQL errors: %v", result.Errors)
+	}
+	closure = result.Data.(map[string]interface{})["endorsementClosure"].(map[string]interface{})
+	edges = closure["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("second page len(edges) = %d, want 1", len(edges))
+	}
+	secondNode := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if secondNode["did"] != "did:plc:bob" || secondNode["degree"] != 1 {
+		t.Fatalf("second node = %#v, want bob degree 1", secondNode)
+	}
+	pageInfo = closure["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false || pageInfo["hasPreviousPage"] != true {
+		t.Fatalf("second pageInfo = %#v, want previous page only", pageInfo)
+	}
+}
+
 func TestEndorsementClosureResolverRejectsInvalidArgs(t *testing.T) {
 	schema := buildAllTestdataSchema(t)
 	ctx := setupSchemaRecordsTestDB(t, nil)
 
 	result := graphql.Do(graphql.Params{
 		Schema:        *schema,
-		RequestString: `{ endorsementClosure(viewer: "not-a-did", degree: 1) { truncated } }`,
+		RequestString: `{ endorsementClosure(where: { did: { eq: "not-a-did" } }) { truncated } }`,
 		Context:       ctx,
 	})
 	if len(result.Errors) == 0 {
-		t.Fatal("expected GraphQL error for invalid viewer DID")
+		t.Fatal("expected GraphQL error for invalid root DID")
 	}
 	if !strings.Contains(result.Errors[0].Message, "not a valid DID") {
 		t.Fatalf("error = %q, want invalid DID message", result.Errors[0].Message)
@@ -2108,13 +2206,25 @@ func TestEndorsementClosureResolverRejectsInvalidArgs(t *testing.T) {
 
 	result = graphql.Do(graphql.Params{
 		Schema:        *schema,
-		RequestString: `{ endorsementClosure(viewer: "did:plc:viewer", degree: 4) { truncated } }`,
+		RequestString: `{ endorsementClosure(where: { did: { in: ["did:plc:viewer"] } }) { truncated } }`,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL error for where.did.in")
+	}
+	if !strings.Contains(result.Errors[0].Message, "where.did.eq") {
+		t.Fatalf("error = %q, want where.did.eq guidance", result.Errors[0].Message)
+	}
+
+	result = graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ endorsementClosure(where: { did: { eq: "did:plc:viewer" }, degree: { lte: 4 } }) { truncated } }`,
 		Context:       ctx,
 	})
 	if len(result.Errors) == 0 {
 		t.Fatal("expected GraphQL error for invalid degree")
 	}
-	if !strings.Contains(result.Errors[0].Message, "degree must be") {
+	if !strings.Contains(result.Errors[0].Message, "where.degree.lte must be between") {
 		t.Fatalf("error = %q, want invalid degree message", result.Errors[0].Message)
 	}
 }

@@ -683,16 +683,20 @@ func (b *Builder) buildQueryType() *graphql.Object {
 
 	// Add endorsementClosure query for the Certified endorsement trust graph.
 	fields["endorsementClosure"] = &graphql.Field{
-		Type:        graphql.NewNonNull(endorsementClosureResultType),
-		Description: "Compute the viewer-centric Certified endorsement graph closure from active endorsement badge awards. Degree must be 1, 2, or 3.",
+		Type:        graphql.NewNonNull(endorsementClosureConnectionType),
+		Description: "Query the bounded DID-rooted Certified endorsement graph closure from active endorsement badge awards.",
 		Args: graphql.FieldConfigArgument{
-			"viewer": &graphql.ArgumentConfig{
-				Type:        graphql.NewNonNull(graphql.String),
-				Description: "Viewer DID to start from. The viewer is excluded from returned accounts.",
+			"where": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(endorsementClosureWhereInput),
+				Description: "Closure filters. where.did.eq is required; where.degree may constrain returned hop distances from 1 through 3.",
 			},
-			"degree": &graphql.ArgumentConfig{
-				Type:        graphql.NewNonNull(graphql.Int),
-				Description: "Maximum endorsement hop count to include. Valid values are 1, 2, and 3; results are cumulative.",
+			"first": &graphql.ArgumentConfig{
+				Type:        graphql.Int,
+				Description: "Number of closure accounts to return (default 20, maximum 1000).",
+			},
+			"after": &graphql.ArgumentConfig{
+				Type:        graphql.String,
+				Description: "Cursor to start after (forward pagination).",
 			},
 		},
 		Resolve: b.createEndorsementClosureResolver(),

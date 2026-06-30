@@ -128,16 +128,17 @@ func TestComputeCapsAndSortsVia(t *testing.T) {
 		t.Fatalf("Compute() error = %v", err)
 	}
 
-	var target *Account
+	targetIndex := -1
 	for i := range got.Accounts {
 		if got.Accounts[i].DID == "did:plc:target" {
-			target = &got.Accounts[i]
+			targetIndex = i
 			break
 		}
 	}
-	if target == nil {
+	if targetIndex < 0 {
 		t.Fatal("target account was not returned")
 	}
+	target := got.Accounts[targetIndex]
 	if len(target.Via) != MaxVia {
 		t.Fatalf("len(target.Via) = %d, want %d", len(target.Via), MaxVia)
 	}
@@ -154,20 +155,20 @@ func TestComputeValidation(t *testing.T) {
 	graph := stubAdjacency{}
 
 	tests := []struct {
-		name   string
-		viewer string
-		degree int
-		cap    int
+		name    string
+		rootDID string
+		degree  int
+		cap     int
 	}{
-		{name: "missing viewer", viewer: "", degree: 1, cap: 10},
-		{name: "degree too low", viewer: "did:plc:viewer", degree: 0, cap: 10},
-		{name: "degree too high", viewer: "did:plc:viewer", degree: 4, cap: 10},
-		{name: "cap not positive", viewer: "did:plc:viewer", degree: 1, cap: 0},
+		{name: "missing root DID", rootDID: "", degree: 1, cap: 10},
+		{name: "degree too low", rootDID: "did:plc:viewer", degree: 0, cap: 10},
+		{name: "degree too high", rootDID: "did:plc:viewer", degree: 4, cap: 10},
+		{name: "cap not positive", rootDID: "did:plc:viewer", degree: 1, cap: 0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := Compute(ctx, graph, tt.viewer, tt.degree, tt.cap); err == nil {
+			if _, err := Compute(ctx, graph, tt.rootDID, tt.degree, tt.cap); err == nil {
 				t.Fatal("Compute() error = nil, want validation error")
 			}
 		})
