@@ -164,6 +164,7 @@ func TestComputeValidation(t *testing.T) {
 		{name: "degree too low", rootDID: "did:plc:viewer", degree: 0, cap: 10},
 		{name: "degree too high", rootDID: "did:plc:viewer", degree: 4, cap: 10},
 		{name: "cap not positive", rootDID: "did:plc:viewer", degree: 1, cap: 0},
+		{name: "cap would overflow edge limit", rootDID: "did:plc:viewer", degree: 1, cap: maxSafeClosureAccounts + 1},
 	}
 
 	for _, tt := range tests {

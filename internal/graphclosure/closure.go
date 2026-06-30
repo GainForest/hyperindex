@@ -24,6 +24,8 @@ const (
 	MaxVia = 64
 )
 
+var maxSafeClosureAccounts = int(^uint(0)>>1) / MaxVia
+
 // Adjacency provides batched forward edges for a set of source DIDs.
 // Implementations should return up to limit source -> target edges for the
 // requested sources, grouped by source DID. Implementations must apply a
@@ -64,6 +66,9 @@ func Compute(ctx context.Context, adjacency Adjacency, rootDID string, maxDegree
 	if accountCap <= 0 {
 		return Result{}, fmt.Errorf("graph closure cap must be positive, got %d", accountCap)
 	}
+	if accountCap > maxSafeClosureAccounts {
+		return Result{}, fmt.Errorf("graph closure cap must be at most %d, got %d", maxSafeClosureAccounts, accountCap)
+	}
 
 	seen := map[string]int{rootDID: 0}
 	predecessors := map[string]map[string]struct{}{}
@@ -77,6 +82,9 @@ func Compute(ctx context.Context, adjacency Adjacency, rootDID string, maxDegree
 			break
 		}
 
+		if remainingAccounts > maxSafeClosureAccounts {
+			return Result{}, fmt.Errorf("remaining graph closure account cap must be at most %d, got %d", maxSafeClosureAccounts, remainingAccounts)
+		}
 		edgeLimit := remainingAccounts * MaxVia
 		edges, edgesTruncated, err := adjacency.AdjacentForLimit(ctx, frontier, edgeLimit)
 		if err != nil {
