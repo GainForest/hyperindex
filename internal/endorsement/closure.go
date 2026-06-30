@@ -25,10 +25,11 @@ const (
 )
 
 // Adjacency provides batched forward endorsement edges for a set of issuer DIDs.
-// Implementations should return every active issuer -> subject edge for the
-// requested issuers, grouped by issuer DID.
+// Implementations should return up to limit active issuer -> subject edges for
+// the requested issuers, grouped by issuer DID. The boolean return value must be
+// true when more edges matched than were returned.
 type Adjacency interface {
-	EndorsementAdjacencyFor(ctx context.Context, issuers []string) (map[string][]string, error)
+	EndorsementAdjacencyForLimit(ctx context.Context, issuers []string, limit int) (map[string][]string, bool, error)
 }
 
 // Account is one account reached by the viewer-centric endorsement closure.
@@ -68,7 +69,14 @@ func Compute(ctx context.Context, adjacency Adjacency, viewer string, maxDegree,
 	truncated := false
 
 	for degree := 1; degree <= maxDegree; degree++ {
-		edges, err := adjacency.EndorsementAdjacencyFor(ctx, frontier)
+		remainingAccounts := accountCap - (len(seen) - 1)
+		if remainingAccounts <= 0 {
+			truncated = true
+			break
+		}
+
+		edgeLimit := remainingAccounts * MaxVia
+		edges, edgesTruncated, err := adjacency.EndorsementAdjacencyForLimit(ctx, frontier, edgeLimit)
 		if err != nil {
 			return Result{}, fmt.Errorf("load endorsement edges for degree %d: %w", degree, err)
 		}
@@ -105,6 +113,9 @@ func Compute(ctx context.Context, adjacency Adjacency, viewer string, maxDegree,
 			}
 		}
 
+		if edgesTruncated {
+			truncated = true
+		}
 		if truncated {
 			break
 		}

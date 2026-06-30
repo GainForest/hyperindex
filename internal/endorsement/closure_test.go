@@ -11,20 +11,27 @@ import (
 
 type stubAdjacency map[string][]string
 
-func (s stubAdjacency) EndorsementAdjacencyFor(_ context.Context, issuers []string) (map[string][]string, error) {
+func (s stubAdjacency) EndorsementAdjacencyForLimit(_ context.Context, issuers []string, limit int) (map[string][]string, bool, error) {
 	out := make(map[string][]string, len(issuers))
+	count := 0
 	for _, issuer := range issuers {
-		out[issuer] = append([]string(nil), s[issuer]...)
+		for _, subject := range s[issuer] {
+			count++
+			if count > limit {
+				return out, true, nil
+			}
+			out[issuer] = append(out[issuer], subject)
+		}
 	}
-	return out, nil
+	return out, false, nil
 }
 
 var errAdjacencyUnavailable = errors.New("database unavailable")
 
 type failingAdjacency struct{}
 
-func (failingAdjacency) EndorsementAdjacencyFor(context.Context, []string) (map[string][]string, error) {
-	return nil, errAdjacencyUnavailable
+func (failingAdjacency) EndorsementAdjacencyForLimit(context.Context, []string, int) (map[string][]string, bool, error) {
+	return nil, false, errAdjacencyUnavailable
 }
 
 func TestCompute(t *testing.T) {

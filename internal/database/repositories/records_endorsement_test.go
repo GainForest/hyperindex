@@ -124,16 +124,19 @@ func runEndorsementAdjacencyAllowedIssuers(t *testing.T, repo *repositories.Reco
 	openBadgeURI := "at://did:plc:issuer/app.certified.badge.definition/open-" + suffix
 	restrictedBadgeURI := "at://did:plc:issuer/app.certified.badge.definition/restricted-" + suffix
 	emptyAllowedBadgeURI := "at://did:plc:issuer/app.certified.badge.definition/empty-" + suffix
+	nullAllowedBadgeURI := "at://did:plc:issuer/app.certified.badge.definition/null-" + suffix
 	insertRecord(t, repo, openBadgeURI, "cid-open-"+suffix, "did:plc:issuer", "app.certified.badge.definition", `{"title":"Open","badgeType":"endorsement"}`)
 	insertRecord(t, repo, restrictedBadgeURI, "cid-restricted-"+suffix, "did:plc:issuer", "app.certified.badge.definition", `{"title":"Restricted","badgeType":"endorsement","allowedIssuers":[{"$type":"app.certified.defs#did","did":"did:plc:allowed"}]}`)
 	insertRecord(t, repo, emptyAllowedBadgeURI, "cid-empty-"+suffix, "did:plc:issuer", "app.certified.badge.definition", `{"title":"Empty","badgeType":"endorsement","allowedIssuers":[]}`)
+	insertRecord(t, repo, nullAllowedBadgeURI, "cid-null-"+suffix, "did:plc:issuer", "app.certified.badge.definition", `{"title":"Null","badgeType":"endorsement","allowedIssuers":null}`)
 
 	insertRecord(t, repo, "at://did:plc:anyone/app.certified.badge.award/open-"+suffix, "cid-award-open-"+suffix, "did:plc:anyone", "app.certified.badge.award", `{"badge":{"uri":"`+openBadgeURI+`"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:open"}}`)
 	insertRecord(t, repo, "at://did:plc:allowed/app.certified.badge.award/allowed-"+suffix, "cid-award-allowed-"+suffix, "did:plc:allowed", "app.certified.badge.award", `{"badge":{"uri":"`+restrictedBadgeURI+`"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:allowedsubject"}}`)
 	insertRecord(t, repo, "at://did:plc:blocked/app.certified.badge.award/blocked-"+suffix, "cid-award-blocked-"+suffix, "did:plc:blocked", "app.certified.badge.award", `{"badge":{"uri":"`+restrictedBadgeURI+`"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:blockedsubject"}}`)
 	insertRecord(t, repo, "at://did:plc:empty/app.certified.badge.award/empty-"+suffix, "cid-award-empty-"+suffix, "did:plc:empty", "app.certified.badge.award", `{"badge":{"uri":"`+emptyAllowedBadgeURI+`"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:emptysubject"}}`)
+	insertRecord(t, repo, "at://did:plc:null/app.certified.badge.award/null-"+suffix, "cid-award-null-"+suffix, "did:plc:null", "app.certified.badge.award", `{"badge":{"uri":"`+nullAllowedBadgeURI+`"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:nullsubject"}}`)
 
-	got, err := repo.EndorsementAdjacencyFor(ctx, []string{"did:plc:anyone", "did:plc:allowed", "did:plc:blocked", "did:plc:empty"})
+	got, err := repo.EndorsementAdjacencyFor(ctx, []string{"did:plc:anyone", "did:plc:allowed", "did:plc:blocked", "did:plc:empty", "did:plc:null"})
 	if err != nil {
 		t.Fatalf("EndorsementAdjacencyFor() error = %v", err)
 	}
@@ -144,6 +147,44 @@ func runEndorsementAdjacencyAllowedIssuers(t *testing.T, repo *repositories.Reco
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("EndorsementAdjacencyFor() = %#v, want %#v", got, want)
+	}
+}
+
+func TestEndorsementAdjacencyForLimitSQLite(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	runEndorsementAdjacencyLimit(t, db.Records, testSuffix(t))
+}
+
+func TestEndorsementAdjacencyForLimitPostgres(t *testing.T) {
+	repo, ok := setupPostgresRecordsRepository(t)
+	if !ok {
+		t.Skip("PostgreSQL endorsement adjacency limit test requires DATABASE_URL pointing at a postgres database named test or ending with _test/-test")
+	}
+
+	runEndorsementAdjacencyLimit(t, repo, testSuffix(t))
+}
+
+func runEndorsementAdjacencyLimit(t *testing.T, repo *repositories.RecordsRepository, suffix string) {
+	t.Helper()
+	ctx := context.Background()
+
+	badgeURI := "at://did:plc:issuer/app.certified.badge.definition/limit-" + suffix
+	insertRecord(t, repo, badgeURI, "cid-limit-"+suffix, "did:plc:issuer", "app.certified.badge.definition", `{"title":"Limit","badgeType":"endorsement"}`)
+	for _, subject := range []string{"did:plc:a", "did:plc:b", "did:plc:c"} {
+		rkey := strings.TrimPrefix(subject, "did:plc:")
+		insertRecord(t, repo, "at://did:plc:issuer/app.certified.badge.award/"+rkey+"-"+suffix, "cid-award-"+rkey+"-"+suffix, "did:plc:issuer", "app.certified.badge.award", `{"badge":{"uri":"`+badgeURI+`"},"subject":{"$type":"app.certified.defs#did","did":"`+subject+`"}}`)
+	}
+
+	got, truncated, err := repo.EndorsementAdjacencyForLimit(ctx, []string{"did:plc:issuer"}, 2)
+	if err != nil {
+		t.Fatalf("EndorsementAdjacencyForLimit() error = %v", err)
+	}
+	want := map[string][]string{"did:plc:issuer": {"did:plc:a", "did:plc:b"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("EndorsementAdjacencyForLimit() = %#v, want %#v", got, want)
+	}
+	if !truncated {
+		t.Fatal("EndorsementAdjacencyForLimit() truncated = false, want true")
 	}
 }
 
@@ -164,6 +205,9 @@ func setupPostgresRecordsRepository(t *testing.T) (*repositories.RecordsReposito
 	ctx := context.Background()
 	if err := migrations.Run(ctx, exec); err != nil {
 		t.Fatalf("failed to run postgres migrations: %v", err)
+	}
+	if _, err := exec.Exec(ctx, "DELETE FROM record", nil); err != nil {
+		t.Fatalf("failed to clear postgres test records: %v", err)
 	}
 
 	return repositories.NewRecordsRepository(exec), true

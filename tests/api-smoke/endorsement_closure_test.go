@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/GainForest/hyperindex/internal/endorsement"
 )
 
 const (
@@ -176,7 +178,9 @@ func computeEndorsementSmokeClosure(edges []endorsementSmokeEdge, viewer string,
 						if predecessors[subject] == nil {
 							predecessors[subject] = map[string]bool{}
 						}
-						predecessors[subject][issuer] = true
+						if len(predecessors[subject]) < endorsement.MaxVia {
+							predecessors[subject][issuer] = true
+						}
 					}
 					continue
 				}
@@ -264,7 +268,7 @@ func queryEndorsementClosure(t testing.TB, config smokeConfig, viewer string) en
 
 func endorsementDefinitionAllowsIssuer(definition Record, issuer string) bool {
 	rawAllowed, exists := definition.Value["allowedIssuers"]
-	if !exists || rawAllowed == nil {
+	if !exists {
 		return true
 	}
 	allowedIssuers, ok := rawAllowed.([]any)
