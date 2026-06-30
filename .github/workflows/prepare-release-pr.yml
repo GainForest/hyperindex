@@ -50,6 +50,19 @@ jobs:
 
           printf 'Found %s unreleased fragment(s).\n' "${#fragments[@]}"
 
+      - name: Verify release label exists
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/labels/release" >/dev/null; then
+            echo "Release label exists."
+            exit 0
+          fi
+
+          echo "::error::Required release label 'release' does not exist. Create it before running this workflow."
+          exit 1
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
