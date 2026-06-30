@@ -688,7 +688,7 @@ func (b *Builder) buildQueryType() *graphql.Object {
 		Args: graphql.FieldConfigArgument{
 			"where": &graphql.ArgumentConfig{
 				Type:        graphql.NewNonNull(endorsementClosureWhereInput),
-				Description: "Closure filters. where.did.eq is required; where.degree may constrain returned hop distances from 1 through 3.",
+				Description: "Closure filters. where.did.eq is required; optional where.degree.eq selects one returned hop distance from 1 through 3.",
 			},
 			"first": &graphql.ArgumentConfig{
 				Type:        graphql.Int,

@@ -128,7 +128,7 @@ For DID-rooted Certified endorsement networks, use `endorsementClosure(where: ..
 ```graphql
 query EndorsementClosure($did: String!) {
   endorsementClosure(
-    where: { did: { eq: $did }, degree: { lte: 3 } }
+    where: { did: { eq: $did } }
     first: 100
   ) {
     truncated
@@ -146,7 +146,7 @@ query EndorsementClosure($did: String!) {
 }
 ```
 
-`where.did.eq` is required and selects the root DID. `where.degree` may constrain returned hop distances with `eq`, `in`, `lte`, or `gte`; values must be `1`, `2`, or `3`. Results are sorted by degree then DID. `via` lists up to 64 previous-ring DIDs that led to the account; it is empty for direct degree-1 accounts. `truncated: true` means the server-side account cap was reached. The resolver computes active endorsement edges from current Certified badge award, definition, and response records at request time; it only counts badge awards whose subject is the `app.certified.defs#did` account DID union member, ignores record strongRef subjects, respects badge-definition `allowedIssuers` allowlists, and does not use a persisted edge table.
+`where.did.eq` is required and selects the root DID. Optional `where.degree.eq` returns only one hop distance; the value must be `1`, `2`, or `3`. Omit `where.degree` to return all supported degrees. Results are sorted by degree then DID. `via` lists up to 64 previous-ring DIDs that led to the account; it is empty for direct degree-1 accounts. `truncated: true` means the server-side account cap was reached. The resolver computes active endorsement edges from current Certified badge award, definition, and response records at request time; it only counts badge awards whose subject is the `app.certified.defs#did` account DID union member, ignores record strongRef subjects, respects badge-definition `allowedIssuers` allowlists, and does not use a persisted edge table.
 
 If a workflow needs unsupported nested matching, use one of these patterns:
 

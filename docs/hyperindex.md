@@ -192,7 +192,7 @@ Use `endorsementClosure(where, first, after)` when a client needs a DID-rooted C
 ```graphql
 query EndorsementClosure($did: String!) {
   endorsementClosure(
-    where: { did: { eq: $did }, degree: { lte: 3 } }
+    where: { did: { eq: $did } }
     first: 100
   ) {
     truncated
@@ -216,7 +216,7 @@ Variables:
 { "did": "did:plc:example" }
 ```
 
-`where.did.eq` is required and selects the root DID. `where.degree` may constrain returned hop distances with `eq`, `in`, `lte`, or `gte`; values must be `1`, `2`, or `3`. Results are sorted by degree then DID. `via` lists up to 64 previous-ring DIDs that led to an account and is empty for degree-1 accounts. `truncated` is `true` when the server-side account cap is reached; clients should treat the response as a useful subset, not a complete network.
+`where.did.eq` is required and selects the root DID. Optional `where.degree.eq` returns only one hop distance; the value must be `1`, `2`, or `3`. Omit `where.degree` to return all supported degrees. Results are sorted by degree then DID. `via` lists up to 64 previous-ring DIDs that led to an account and is empty for degree-1 accounts. `truncated` is `true` when the server-side account cap is reached; clients should treat the response as a useful subset, not a complete network.
 
 The resolver computes edges from current `app.certified.badge.award`, `app.certified.badge.definition`, and `app.certified.badge.response` records at request time. An active edge requires an endorsement-typed badge definition, an `app.certified.defs#did` account subject with a valid DID, an issuer allowed by `allowedIssuers` when that badge definition has an allowlist, no self-loop, and no rejection response authored by the subject for that award. Badge awards to record strongRefs do not create account endorsement edges.
 

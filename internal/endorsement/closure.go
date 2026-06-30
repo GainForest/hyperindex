@@ -26,8 +26,10 @@ const (
 
 // Adjacency provides batched forward endorsement edges for a set of issuer DIDs.
 // Implementations should return up to limit active issuer -> subject edges for
-// the requested issuers, grouped by issuer DID. The boolean return value must be
-// true when more edges matched than were returned.
+// the requested issuers, grouped by issuer DID. Implementations must apply a
+// deterministic edge order before enforcing the limit, and each issuer's subject
+// slice must also be deterministic. The boolean return value must be true when
+// more edges matched than were returned.
 type Adjacency interface {
 	EndorsementAdjacencyForLimit(ctx context.Context, issuers []string, limit int) (map[string][]string, bool, error)
 }

@@ -46,8 +46,17 @@ func (r *RecordsRepository) endorsementAdjacencyFor(ctx context.Context, issuers
 	}
 
 	batchSize := len(issuers)
-	if r.db.Dialect() == database.SQLite && batchSize > SQLParamBatchSize {
-		batchSize = SQLParamBatchSize
+	if r.db.Dialect() == database.SQLite {
+		maxBatchSize := SQLParamBatchSize
+		if options.Limit > 0 {
+			maxBatchSize--
+		}
+		if maxBatchSize <= 0 {
+			return nil, false, fmt.Errorf("SQLite endorsement adjacency batch size must be positive")
+		}
+		if batchSize > maxBatchSize {
+			batchSize = maxBatchSize
+		}
 	}
 
 	remainingLimit := options.Limit

@@ -2057,7 +2057,7 @@ func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
 		Schema: *schema,
 		RequestString: `{
 			endorsementClosure(
-				where: { did: { eq: "did:plc:viewer" }, degree: { lte: 3 } }
+				where: { did: { eq: "did:plc:viewer" } }
 				first: 10
 			) {
 				truncated
@@ -2218,14 +2218,23 @@ func TestEndorsementClosureResolverRejectsInvalidArgs(t *testing.T) {
 
 	result = graphql.Do(graphql.Params{
 		Schema:        *schema,
-		RequestString: `{ endorsementClosure(where: { did: { eq: "did:plc:viewer" }, degree: { lte: 4 } }) { truncated } }`,
+		RequestString: `{ endorsementClosure(where: { did: { eq: "did:plc:viewer" }, degree: { eq: 4 } }) { truncated } }`,
 		Context:       ctx,
 	})
 	if len(result.Errors) == 0 {
 		t.Fatal("expected GraphQL error for invalid degree")
 	}
-	if !strings.Contains(result.Errors[0].Message, "where.degree.lte must be between") {
+	if !strings.Contains(result.Errors[0].Message, "where.degree.eq must be between") {
 		t.Fatalf("error = %q, want invalid degree message", result.Errors[0].Message)
+	}
+
+	result = graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ endorsementClosure(where: { did: { eq: "did:plc:viewer" }, degree: { lte: 3 } }) { truncated } }`,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL error for unsupported degree operator")
 	}
 }
 

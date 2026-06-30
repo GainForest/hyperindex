@@ -154,7 +154,7 @@ Rows are ordered by top-level record JSON `createdAt` descending, then `uri` des
 | Field | Type | Description |
 | --- | --- | --- |
 | `did` | `DIDFilterInput!` | Required root DID filter. Use exactly `did: { eq: "did:..." }`; `in` is not supported because each closure is computed from one DID. |
-| `degree` | `EndorsementClosureDegreeFilterInput` | Optional returned-degree filter with `eq`, `in`, `lte`, and `gte`; values must be `1`, `2`, or `3`. |
+| `degree` | `EndorsementClosureDegreeFilterInput` | Optional returned-degree filter with `eq`; values must be `1`, `2`, or `3`. Omit it to return all supported degrees. |
 
 `EndorsementAccount` fields:
 
@@ -169,7 +169,7 @@ Example:
 ```graphql
 query EndorsementClosure($did: String!) {
   endorsementClosure(
-    where: { did: { eq: $did }, degree: { lte: 3 } }
+    where: { did: { eq: $did } }
     first: 100
   ) {
     truncated

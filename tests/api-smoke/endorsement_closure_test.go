@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/GainForest/hyperindex/internal/endorsement"
+	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
 const (
@@ -34,9 +35,11 @@ type endorsementSmokeAccount struct {
 
 type endorsementClosureQueryResponse struct {
 	EndorsementClosure struct {
-		Truncated bool `json:"truncated"`
+		Truncated bool     `json:"truncated"`
+		PageInfo  pageInfo `json:"pageInfo"`
 		Edges     []struct {
-			Node endorsementSmokeAccount `json:"node"`
+			Cursor string                  `json:"cursor"`
+			Node   endorsementSmokeAccount `json:"node"`
 		} `json:"edges"`
 	} `json:"endorsementClosure"`
 }
@@ -74,9 +77,9 @@ func TestEndorsementClosureBehaviorSmoke(t *testing.T) {
 func fetchActiveEndorsementSmokeEdges(t testing.TB, config smokeConfig) []endorsementSmokeEdge {
 	t.Helper()
 
-	definitionRecords := fetchGenericRecords(t, config, endorsementSmokeBadgeDefinitionCollection, 1000).Records.Edges
-	awardRecords := fetchGenericRecords(t, config, endorsementSmokeBadgeAwardCollection, 1000).Records.Edges
-	responseRecords := fetchGenericRecords(t, config, endorsementSmokeBadgeResponseCollection, 1000).Records.Edges
+	definitionRecords := fetchAllGenericRecords(t, config, endorsementSmokeBadgeDefinitionCollection)
+	awardRecords := fetchAllGenericRecords(t, config, endorsementSmokeBadgeAwardCollection)
+	responseRecords := fetchAllGenericRecords(t, config, endorsementSmokeBadgeResponseCollection)
 
 	endorsementDefinitions := make(map[string]Record, len(definitionRecords))
 	for _, edge := range definitionRecords {
@@ -243,28 +246,22 @@ func (r endorsementClosureQueryResponse) accounts() []endorsementSmokeAccount {
 func queryEndorsementClosure(t testing.TB, config smokeConfig, rootDID string) endorsementClosureQueryResponse {
 	t.Helper()
 
-	response := postGraphQL(t, context.Background(), config, "SmokeEndorsementClosure", `
-		query SmokeEndorsementClosure($did: String!) {
-			endorsementClosure(where: { did: { eq: $did }, degree: { lte: 3 } }, first: 1000) {
-				truncated
-				edges {
-					node {
-						did
-						degree
-						via
-					}
-				}
-			}
+	var merged endorsementClosureQueryResponse
+	after := ""
+	for {
+		page := queryEndorsementClosurePage(t, config, rootDID, after)
+		merged.EndorsementClosure.Truncated = page.EndorsementClosure.Truncated
+		merged.EndorsementClosure.Edges = append(merged.EndorsementClosure.Edges, page.EndorsementClosure.Edges...)
+		if !page.EndorsementClosure.PageInfo.HasNextPage {
+			break
 		}
-	`, map[string]any{
-		"did": rootDID,
-	})
-
-	var decoded endorsementClosureQueryResponse
-	if err := json.Unmarshal(response.Data, &decoded); err != nil {
-		t.Fatalf("SmokeEndorsementClosure: decode response data for root DID %q: %v", rootDID, err)
+		if page.EndorsementClosure.PageInfo.EndCursor == "" {
+			t.Fatalf("SmokeEndorsementClosure: root DID %q has next page without an end cursor", rootDID)
+		}
+		after = page.EndorsementClosure.PageInfo.EndCursor
 	}
-	for index, account := range decoded.accounts() {
+
+	for index, account := range merged.accounts() {
 		if account.DID == "" {
 			t.Fatalf("SmokeEndorsementClosure: account[%d].did is empty", index)
 		}
@@ -274,6 +271,43 @@ func queryEndorsementClosure(t testing.TB, config smokeConfig, rootDID string) e
 		if account.Degree == 1 && len(account.Via) != 0 {
 			t.Fatalf("SmokeEndorsementClosure: account[%d].via = %#v, want empty for degree 1", index, account.Via)
 		}
+	}
+	return merged
+}
+
+func queryEndorsementClosurePage(t testing.TB, config smokeConfig, rootDID string, after string) endorsementClosureQueryResponse {
+	t.Helper()
+
+	var afterValue any
+	if after != "" {
+		afterValue = after
+	}
+	response := postGraphQL(t, context.Background(), config, "SmokeEndorsementClosure", `
+		query SmokeEndorsementClosure($did: String!, $after: String) {
+			endorsementClosure(where: { did: { eq: $did } }, first: 1000, after: $after) {
+				truncated
+				pageInfo {
+					hasNextPage
+					endCursor
+				}
+				edges {
+					cursor
+					node {
+						did
+						degree
+						via
+					}
+				}
+			}
+		}
+	`, map[string]any{
+		"did":   rootDID,
+		"after": afterValue,
+	})
+
+	var decoded endorsementClosureQueryResponse
+	if err := json.Unmarshal(response.Data, &decoded); err != nil {
+		t.Fatalf("SmokeEndorsementClosure: decode response data for root DID %q: %v", rootDID, err)
 	}
 	return decoded
 }
@@ -332,7 +366,7 @@ func endorsementSmokeStringValue(value map[string]any, key string) string {
 }
 
 func isSmokeDID(value string) bool {
-	return strings.HasPrefix(value, "did:plc:") || strings.HasPrefix(value, "did:web:")
+	return oauth.IsValidDID(value)
 }
 
 func formatEndorsementSmokeEdges(edges []endorsementSmokeEdge) string {

@@ -34,30 +34,18 @@ var endorsementAccountType = graphql.NewObject(graphql.ObjectConfig{
 
 var endorsementClosureDegreeFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	Name:        "EndorsementClosureDegreeFilterInput",
-	Description: "Filter conditions for endorsement closure hop distance. Values must be 1, 2, or 3.",
+	Description: "Optional exact filter for endorsement closure hop distance. Values must be 1, 2, or 3.",
 	Fields: graphql.InputObjectConfigFieldMap{
 		"eq": &graphql.InputObjectFieldConfig{
 			Type:        graphql.Int,
 			Description: "Equal to this endorsement hop distance.",
-		},
-		"in": &graphql.InputObjectFieldConfig{
-			Type:        graphql.NewList(graphql.NewNonNull(graphql.Int)),
-			Description: "Value is one of these endorsement hop distances.",
-		},
-		"lte": &graphql.InputObjectFieldConfig{
-			Type:        graphql.Int,
-			Description: "Less than or equal to this endorsement hop distance.",
-		},
-		"gte": &graphql.InputObjectFieldConfig{
-			Type:        graphql.Int,
-			Description: "Greater than or equal to this endorsement hop distance.",
 		},
 	},
 })
 
 var endorsementClosureWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	Name:        "EndorsementClosureWhereInput",
-	Description: "Filters for the Certified endorsement closure. did.eq is required and selects the root DID. degree may constrain returned hop distances from 1 through 3.",
+	Description: "Filters for the Certified endorsement closure. did.eq is required and selects the root DID. Optional degree.eq selects one returned hop distance from 1 through 3.",
 	Fields: graphql.InputObjectConfigFieldMap{
 		"did": &graphql.InputObjectFieldConfig{
 			Type:        graphql.NewNonNull(gqltypes.DIDFilterInput),
@@ -65,7 +53,7 @@ var endorsementClosureWhereInput = graphql.NewInputObject(graphql.InputObjectCon
 		},
 		"degree": &graphql.InputObjectFieldConfig{
 			Type:        endorsementClosureDegreeFilterInput,
-			Description: "Optional returned-degree filter. Supported operators are eq, in, lte, and gte with values from 1 through 3.",
+			Description: "Optional returned-degree filter. Supports eq with values from 1 through 3.",
 		},
 	},
 })
@@ -109,10 +97,9 @@ var endorsementClosureConnectionType = graphql.NewObject(graphql.ObjectConfig{
 })
 
 type endorsementClosureWhere struct {
-	RootDID        string
-	MinDegree      int
-	MaxDegree      int
-	AllowedDegrees map[int]bool
+	RootDID   string
+	MinDegree int
+	MaxDegree int
 }
 
 func (b *Builder) createEndorsementClosureResolver() graphql.FieldResolveFn {
@@ -159,7 +146,7 @@ func parseEndorsementClosureWhere(raw interface{}) (endorsementClosureWhere, err
 	if rawDegree, exists := whereMap["degree"]; exists && rawDegree != nil {
 		degreeFilter, ok := rawDegree.(map[string]interface{})
 		if !ok {
-			return endorsementClosureWhere{}, fmt.Errorf("where.degree must be an object with supported operators eq, in, lte, or gte")
+			return endorsementClosureWhere{}, fmt.Errorf("where.degree must be an object with supported operator eq")
 		}
 		if err := applyEndorsementClosureDegreeFilter(&where, degreeFilter); err != nil {
 			return endorsementClosureWhere{}, err
@@ -172,60 +159,21 @@ func parseEndorsementClosureWhere(raw interface{}) (endorsementClosureWhere, err
 }
 
 func applyEndorsementClosureDegreeFilter(where *endorsementClosureWhere, degreeFilter map[string]interface{}) error {
-	for op, value := range degreeFilter {
-		switch op {
-		case "eq":
-			degree, err := endorsementClosureDegreeValue(op, value)
-			if err != nil {
-				return err
-			}
-			where.MinDegree = degree
-			where.MaxDegree = degree
-			where.AllowedDegrees = map[int]bool{degree: true}
-		case "in":
-			values, ok := value.([]interface{})
-			if !ok || len(values) == 0 {
-				return fmt.Errorf("where.degree.in must be a non-empty list of endorsement degrees from 1 through %d", endorsement.MaxDegree)
-			}
-			allowed := make(map[int]bool, len(values))
-			minDegree := endorsement.MaxDegree
-			maxDegree := 1
-			for _, rawDegree := range values {
-				degree, err := endorsementClosureDegreeValue(op, rawDegree)
-				if err != nil {
-					return err
-				}
-				allowed[degree] = true
-				if degree < minDegree {
-					minDegree = degree
-				}
-				if degree > maxDegree {
-					maxDegree = degree
-				}
-			}
-			where.MinDegree = minDegree
-			where.MaxDegree = maxDegree
-			where.AllowedDegrees = allowed
-		case "lte":
-			degree, err := endorsementClosureDegreeValue(op, value)
-			if err != nil {
-				return err
-			}
-			if degree < where.MaxDegree {
-				where.MaxDegree = degree
-			}
-		case "gte":
-			degree, err := endorsementClosureDegreeValue(op, value)
-			if err != nil {
-				return err
-			}
-			if degree > where.MinDegree {
-				where.MinDegree = degree
-			}
-		default:
-			return fmt.Errorf("where.degree.%s is not supported by endorsementClosure; use eq, in, lte, or gte", op)
+	for op := range degreeFilter {
+		if op != "eq" {
+			return fmt.Errorf("where.degree.%s is not supported by endorsementClosure; use where.degree.eq", op)
 		}
 	}
+	value, exists := degreeFilter["eq"]
+	if !exists || value == nil {
+		return nil
+	}
+	degree, err := endorsementClosureDegreeValue("eq", value)
+	if err != nil {
+		return err
+	}
+	where.MinDegree = degree
+	where.MaxDegree = degree
 	return nil
 }
 
@@ -244,9 +192,6 @@ func filterEndorsementClosureAccounts(accounts []endorsement.Account, where endo
 	filtered := make([]endorsement.Account, 0, len(accounts))
 	for _, account := range accounts {
 		if account.Degree < where.MinDegree || account.Degree > where.MaxDegree {
-			continue
-		}
-		if where.AllowedDegrees != nil && !where.AllowedDegrees[account.Degree] {
 			continue
 		}
 		filtered = append(filtered, account)

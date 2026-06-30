@@ -92,6 +92,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - Three-level nested filters for `org.hypercerts.collection`, including same-element `any` semantics for `where: { items: { any: { itemIdentifier: { uri: { eq: ... }, cid: { eq: ... } } } } }`
 - Positive and negative nested activity-claim filters for contributor identities, one-level refs/unions such as `rights.uri` and `image.uri`, depth-limited presence filters such as `description.facets.any.index.isNull`, and schema coverage that nested arrays inside an existing `any` expose presence checks but not another `any`
 - `app.certified.badge.award` exposes the derived `badgeType: StringFilterInput` where filter
+- Optional `endorsementClosure` behavior for active Certified endorsement edges, closure pagination, and DID-subject validation when configured in the expectations file
 - `org.hypercerts.claim.activity` image presence filtering with `where: { image: { isNull: false } }`
 - Optional external record-label filtering and pagination for `org.hypercerts.claim.activity`
 - Author-account label filtering for likely-test, standard, high-quality, no-filter, `has`, `none`, multi-value `has`, and pagination on `org.hypercerts.claim.activity` when configured in the expectations file
