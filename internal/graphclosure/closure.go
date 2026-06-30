@@ -1,5 +1,5 @@
-// Package endorsement computes bounded Certified endorsement graph closures.
-package endorsement
+// Package graphclosure computes bounded directed graph closures.
+package graphclosure
 
 import (
 	"context"
@@ -8,52 +8,52 @@ import (
 )
 
 const (
-	// MaxDegree is the deepest endorsement hop count accepted by the public
-	// endorsementClosure GraphQL field. Keeping traversal shallow prevents
-	// accidental network-wide graph scans from one request.
+	// MaxDegree is the deepest hop count accepted by the closure algorithm.
+	// Keeping traversal shallow prevents accidental network-wide graph scans from
+	// one request.
 	MaxDegree = 3
 
-	// DefaultClosureCap is the maximum number of accounts returned by one
+	// DefaultClosureCap is the maximum number of account nodes returned by one
 	// closure computation before the response is marked truncated. The root DID
 	// seed does not count against this cap.
 	DefaultClosureCap = 3000
 
 	// MaxVia limits how many same-degree predecessor DIDs are recorded for one
-	// account. This keeps dense endorsement graphs from turning a capped node set
-	// into an unbounded provenance payload.
+	// account node. This keeps dense graphs from turning a capped node set into an
+	// unbounded provenance payload.
 	MaxVia = 64
 )
 
-// Adjacency provides batched forward endorsement edges for a set of issuer DIDs.
-// Implementations should return up to limit active issuer -> subject edges for
-// the requested issuers, grouped by issuer DID. Implementations must apply a
-// deterministic edge order before enforcing the limit, and each issuer's subject
+// Adjacency provides batched forward edges for a set of source DIDs.
+// Implementations should return up to limit source -> target edges for the
+// requested sources, grouped by source DID. Implementations must apply a
+// deterministic edge order before enforcing the limit, and each source's target
 // slice must also be deterministic. The boolean return value must be true when
 // more edges matched than were returned.
 type Adjacency interface {
-	EndorsementAdjacencyForLimit(ctx context.Context, issuers []string, limit int) (map[string][]string, bool, error)
+	AdjacentForLimit(ctx context.Context, sources []string, limit int) (map[string][]string, bool, error)
 }
 
-// Account is one account reached by the DID-rooted endorsement closure.
+// Account is one account node reached by the DID-rooted graph closure.
 type Account struct {
 	DID    string
 	Degree int
 	Via    []string
 }
 
-// Result contains the bounded endorsement closure and whether the traversal was
-// cut short by the configured account cap.
+// Result contains the bounded graph closure and whether the traversal was cut
+// short by the configured account cap or adjacency edge limit.
 type Result struct {
 	Accounts  []Account
 	Truncated bool
 }
 
-// Compute walks active endorsement edges breadth-first from rootDID up to
-// maxDegree. The returned accounts are cumulative, assigned to their minimum
-// reachable degree, and sorted by degree then DID for stable GraphQL responses.
+// Compute walks directed edges breadth-first from rootDID up to maxDegree. The
+// returned accounts are cumulative, assigned to their minimum reachable degree,
+// and sorted by degree then DID for stable API responses.
 func Compute(ctx context.Context, adjacency Adjacency, rootDID string, maxDegree, accountCap int) (Result, error) {
 	if adjacency == nil {
-		return Result{}, fmt.Errorf("endorsement adjacency source is required")
+		return Result{}, fmt.Errorf("graph adjacency source is required")
 	}
 	if rootDID == "" {
 		return Result{}, fmt.Errorf("root DID is required")
@@ -62,7 +62,7 @@ func Compute(ctx context.Context, adjacency Adjacency, rootDID string, maxDegree
 		return Result{}, fmt.Errorf("degree must be between 1 and %d, got %d", MaxDegree, maxDegree)
 	}
 	if accountCap <= 0 {
-		return Result{}, fmt.Errorf("endorsement closure cap must be positive, got %d", accountCap)
+		return Result{}, fmt.Errorf("graph closure cap must be positive, got %d", accountCap)
 	}
 
 	seen := map[string]int{rootDID: 0}
@@ -78,9 +78,9 @@ func Compute(ctx context.Context, adjacency Adjacency, rootDID string, maxDegree
 		}
 
 		edgeLimit := remainingAccounts * MaxVia
-		edges, edgesTruncated, err := adjacency.EndorsementAdjacencyForLimit(ctx, frontier, edgeLimit)
+		edges, edgesTruncated, err := adjacency.AdjacentForLimit(ctx, frontier, edgeLimit)
 		if err != nil {
-			return Result{}, fmt.Errorf("load endorsement edges for degree %d: %w", degree, err)
+			return Result{}, fmt.Errorf("load graph edges for degree %d: %w", degree, err)
 		}
 
 		nextFrontier := make([]string, 0)

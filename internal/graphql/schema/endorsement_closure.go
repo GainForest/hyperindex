@@ -1,12 +1,13 @@
 package schema
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
 	"github.com/graphql-go/graphql"
 
-	"github.com/GainForest/hyperindex/internal/endorsement"
+	"github.com/GainForest/hyperindex/internal/graphclosure"
 	"github.com/GainForest/hyperindex/internal/graphql/query"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	gqltypes "github.com/GainForest/hyperindex/internal/graphql/types"
@@ -102,6 +103,18 @@ type endorsementClosureWhere struct {
 	MaxDegree int
 }
 
+type endorsementAdjacencySource interface {
+	EndorsementAdjacencyForLimit(ctx context.Context, issuers []string, limit int) (map[string][]string, bool, error)
+}
+
+type endorsementClosureAdjacency struct {
+	source endorsementAdjacencySource
+}
+
+func (a endorsementClosureAdjacency) AdjacentForLimit(ctx context.Context, sources []string, limit int) (map[string][]string, bool, error) {
+	return a.source.EndorsementAdjacencyForLimit(ctx, sources, limit)
+}
+
 func (b *Builder) createEndorsementClosureResolver() graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
 		where, err := parseEndorsementClosureWhere(p.Args["where"])
@@ -114,7 +127,8 @@ func (b *Builder) createEndorsementClosureResolver() graphql.FieldResolveFn {
 			return nil, fmt.Errorf("endorsement closure cannot run because record repositories are unavailable; retry after the request context is initialised")
 		}
 
-		result, err := endorsement.Compute(p.Context, repos.Records, where.RootDID, where.MaxDegree, endorsement.DefaultClosureCap)
+		adjacency := endorsementClosureAdjacency{source: repos.Records}
+		result, err := graphclosure.Compute(p.Context, adjacency, where.RootDID, where.MaxDegree, graphclosure.DefaultClosureCap)
 		if err != nil {
 			return nil, fmt.Errorf("compute endorsement closure: %w", err)
 		}
@@ -142,7 +156,7 @@ func parseEndorsementClosureWhere(raw interface{}) (endorsementClosureWhere, err
 		return endorsementClosureWhere{}, fmt.Errorf("where.did.eq %q is not a valid DID; use a did:plc: or did:web: identifier", rootDID)
 	}
 
-	where := endorsementClosureWhere{RootDID: rootDID, MinDegree: 1, MaxDegree: endorsement.MaxDegree}
+	where := endorsementClosureWhere{RootDID: rootDID, MinDegree: 1, MaxDegree: graphclosure.MaxDegree}
 	if rawDegree, exists := whereMap["degree"]; exists && rawDegree != nil {
 		degreeFilter, ok := rawDegree.(map[string]interface{})
 		if !ok {
@@ -153,7 +167,7 @@ func parseEndorsementClosureWhere(raw interface{}) (endorsementClosureWhere, err
 		}
 	}
 	if where.MinDegree > where.MaxDegree {
-		return endorsementClosureWhere{}, fmt.Errorf("where.degree selects no valid endorsement degrees; use values from 1 through %d", endorsement.MaxDegree)
+		return endorsementClosureWhere{}, fmt.Errorf("where.degree selects no valid endorsement degrees; use values from 1 through %d", graphclosure.MaxDegree)
 	}
 	return where, nil
 }
@@ -180,16 +194,16 @@ func applyEndorsementClosureDegreeFilter(where *endorsementClosureWhere, degreeF
 func endorsementClosureDegreeValue(op string, raw interface{}) (int, error) {
 	degree, ok := raw.(int)
 	if !ok {
-		return 0, fmt.Errorf("where.degree.%s must be an integer from 1 through %d", op, endorsement.MaxDegree)
+		return 0, fmt.Errorf("where.degree.%s must be an integer from 1 through %d", op, graphclosure.MaxDegree)
 	}
-	if degree < 1 || degree > endorsement.MaxDegree {
-		return 0, fmt.Errorf("where.degree.%s must be between 1 and %d, got %d", op, endorsement.MaxDegree, degree)
+	if degree < 1 || degree > graphclosure.MaxDegree {
+		return 0, fmt.Errorf("where.degree.%s must be between 1 and %d, got %d", op, graphclosure.MaxDegree, degree)
 	}
 	return degree, nil
 }
 
-func filterEndorsementClosureAccounts(accounts []endorsement.Account, where endorsementClosureWhere) []endorsement.Account {
-	filtered := make([]endorsement.Account, 0, len(accounts))
+func filterEndorsementClosureAccounts(accounts []graphclosure.Account, where endorsementClosureWhere) []graphclosure.Account {
+	filtered := make([]graphclosure.Account, 0, len(accounts))
 	for _, account := range accounts {
 		if account.Degree < where.MinDegree || account.Degree > where.MaxDegree {
 			continue
@@ -199,7 +213,7 @@ func filterEndorsementClosureAccounts(accounts []endorsement.Account, where endo
 	return filtered
 }
 
-func paginateEndorsementClosureAccounts(accounts []endorsement.Account, truncated bool, args map[string]interface{}) (map[string]interface{}, error) {
+func paginateEndorsementClosureAccounts(accounts []graphclosure.Account, truncated bool, args map[string]interface{}) (map[string]interface{}, error) {
 	pageSize, _ := args["first"].(int)
 	pageSize = query.ClampPageSize(pageSize)
 
@@ -250,7 +264,7 @@ func paginateEndorsementClosureAccounts(accounts []endorsement.Account, truncate
 	}, nil
 }
 
-func encodeEndorsementClosureCursor(account endorsement.Account) string {
+func encodeEndorsementClosureCursor(account graphclosure.Account) string {
 	return encodeCursorValues(strconv.Itoa(account.Degree), account.DID)
 }
 
@@ -266,8 +280,8 @@ func decodeEndorsementClosureCursor(cursor string) (int, string, error) {
 	if err != nil {
 		return 0, "", fmt.Errorf("degree component must be an integer")
 	}
-	if degree < 1 || degree > endorsement.MaxDegree {
-		return 0, "", fmt.Errorf("degree component must be between 1 and %d", endorsement.MaxDegree)
+	if degree < 1 || degree > graphclosure.MaxDegree {
+		return 0, "", fmt.Errorf("degree component must be between 1 and %d", graphclosure.MaxDegree)
 	}
 	if !oauth.IsValidDID(parts[1]) {
 		return 0, "", fmt.Errorf("DID component must be a did:plc: or did:web: identifier")
@@ -275,7 +289,7 @@ func decodeEndorsementClosureCursor(cursor string) (int, string, error) {
 	return degree, parts[1], nil
 }
 
-func endorsementClosureStartOffset(accounts []endorsement.Account, cursorDegree int, cursorDID string) int {
+func endorsementClosureStartOffset(accounts []graphclosure.Account, cursorDegree int, cursorDID string) int {
 	for i, account := range accounts {
 		if account.Degree > cursorDegree || (account.Degree == cursorDegree && account.DID > cursorDID) {
 			return i

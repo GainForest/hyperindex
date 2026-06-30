@@ -1,4 +1,4 @@
-package endorsement
+package graphclosure
 
 import (
 	"context"
@@ -11,16 +11,16 @@ import (
 
 type stubAdjacency map[string][]string
 
-func (s stubAdjacency) EndorsementAdjacencyForLimit(_ context.Context, issuers []string, limit int) (map[string][]string, bool, error) {
-	out := make(map[string][]string, len(issuers))
+func (s stubAdjacency) AdjacentForLimit(_ context.Context, sources []string, limit int) (map[string][]string, bool, error) {
+	out := make(map[string][]string, len(sources))
 	count := 0
-	for _, issuer := range issuers {
-		for _, subject := range s[issuer] {
+	for _, source := range sources {
+		for _, target := range s[source] {
 			count++
 			if count > limit {
 				return out, true, nil
 			}
-			out[issuer] = append(out[issuer], subject)
+			out[source] = append(out[source], target)
 		}
 	}
 	return out, false, nil
@@ -30,7 +30,7 @@ var errAdjacencyUnavailable = errors.New("database unavailable")
 
 type failingAdjacency struct{}
 
-func (failingAdjacency) EndorsementAdjacencyForLimit(context.Context, []string, int) (map[string][]string, bool, error) {
+func (failingAdjacency) AdjacentForLimit(context.Context, []string, int) (map[string][]string, bool, error) {
 	return nil, false, errAdjacencyUnavailable
 }
 

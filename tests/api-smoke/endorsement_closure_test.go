@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/GainForest/hyperindex/internal/endorsement"
+	"github.com/GainForest/hyperindex/internal/graphclosure"
 	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
@@ -184,7 +184,7 @@ func computeEndorsementSmokeClosure(edges []endorsementSmokeEdge, rootDID string
 						if predecessors[subject] == nil {
 							predecessors[subject] = map[string]bool{}
 						}
-						if len(predecessors[subject]) < endorsement.MaxVia {
+						if len(predecessors[subject]) < graphclosure.MaxVia {
 							predecessors[subject][issuer] = true
 						}
 					}
