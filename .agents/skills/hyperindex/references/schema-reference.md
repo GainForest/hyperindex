@@ -162,7 +162,15 @@ Rows are ordered by top-level record JSON `createdAt` descending, then `uri` des
 | --- | --- | --- |
 | `did` | `String!` | DID of the reached account. |
 | `degree` | `Int!` | Smallest endorsement hop distance from the root DID. |
-| `via` | `[String!]!` | Up to 64 previous-ring DIDs that led to this account; empty for direct degree-1 accounts. |
+| `certifiedProfileData` | `AppCertifiedActorProfile` | Certified profile for the reached account, or null when no profile record exists. |
+| `viaAccounts` | `[EndorsementViaAccount!]!` | Up to 64 previous-ring accounts that led to this account; empty for direct degree-1 accounts. |
+
+`EndorsementViaAccount` fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `did` | `String!` | DID of the predecessor account. |
+| `certifiedProfileData` | `AppCertifiedActorProfile` | Certified profile for the predecessor account, or null when no profile record exists. |
 
 Example:
 
@@ -175,7 +183,18 @@ query EndorsementClosure($did: String!) {
     truncated
     totalCount
     pageInfo { hasNextPage endCursor }
-    edges { cursor node { did degree via } }
+    edges {
+      cursor
+      node {
+        did
+        degree
+        certifiedProfileData { did displayName avatar }
+        viaAccounts {
+          did
+          certifiedProfileData { did displayName avatar }
+        }
+      }
+    }
   }
 }
 ```

@@ -306,12 +306,25 @@ func TestSchemaExposesPublicSmokeQueryFields(t *testing.T) {
 		if got := namedTypeName(didField.Type); got != "EndorsementClosureDIDFilterInput" {
 			t.Fatalf("EndorsementClosureWhereInput.did type = %q, want EndorsementClosureDIDFilterInput", got)
 		}
-		didFilter := requireSchemaType(t, typesByName(schema.Types), "EndorsementClosureDIDFilterInput")
+		types := typesByName(schema.Types)
+		didFilter := requireSchemaType(t, types, "EndorsementClosureDIDFilterInput")
 		didFilterFields := inputFieldsByName(didFilter.InputFields)
 		requireSchemaInputField(t, didFilterFields, "eq")
 		if _, exists := didFilterFields["in"]; exists {
 			t.Fatal("EndorsementClosureDIDFilterInput exposes unsupported field in")
 		}
+
+		accountType := requireSchemaType(t, types, "EndorsementAccount")
+		accountFields := fieldsByName(accountType.Fields)
+		requireSchemaField(t, accountFields, "certifiedProfileData")
+		requireSchemaField(t, accountFields, "viaAccounts")
+		if _, exists := accountFields["via"]; exists {
+			t.Fatal("EndorsementAccount exposes removed field via")
+		}
+		viaAccountType := requireSchemaType(t, types, "EndorsementViaAccount")
+		viaAccountFields := fieldsByName(viaAccountType.Fields)
+		requireSchemaField(t, viaAccountFields, "did")
+		requireSchemaField(t, viaAccountFields, "certifiedProfileData")
 	}
 
 	smokeLog("✓ Public schema has expected GraphQL query fields")

@@ -8,29 +8,11 @@ import (
 	"github.com/graphql-go/graphql"
 
 	"github.com/GainForest/hyperindex/internal/graphclosure"
+	"github.com/GainForest/hyperindex/internal/graphql/certifiedprofiles"
 	"github.com/GainForest/hyperindex/internal/graphql/query"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/oauth"
 )
-
-var endorsementAccountType = graphql.NewObject(graphql.ObjectConfig{
-	Name:        "EndorsementAccount",
-	Description: "One account reached by the DID-rooted Certified endorsement closure.",
-	Fields: graphql.Fields{
-		"did": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.String),
-			Description: "DID of the account reached through active Certified endorsement awards.",
-		},
-		"degree": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.Int),
-			Description: "Smallest endorsement hop distance from the root DID. 1 means directly endorsed by the root DID; 2 and 3 are indirect endorsements.",
-		},
-		"via": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(graphql.String))),
-			Description: "Degree-(degree-1) predecessor DIDs that led to this account. Empty for degree-1 accounts. The list is deduplicated, sorted, and capped per account.",
-		},
-	},
-})
 
 var endorsementClosureDIDFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	Name:        "EndorsementClosureDIDFilterInput",
@@ -69,43 +51,82 @@ var endorsementClosureWhereInput = graphql.NewInputObject(graphql.InputObjectCon
 	},
 })
 
-var endorsementClosureEdgeType = graphql.NewObject(graphql.ObjectConfig{
-	Name:        "EndorsementAccountEdge",
-	Description: "An edge in the endorsement closure connection.",
-	Fields: graphql.Fields{
-		"cursor": &graphql.Field{
+func (b *Builder) buildEndorsementClosureTypes() {
+	viaFields := graphql.Fields{
+		"did": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
-			Description: "Opaque cursor for this endorsement account.",
+			Description: "DID of the predecessor account that led to the reached account.",
 		},
-		"node": &graphql.Field{
-			Type:        graphql.NewNonNull(endorsementAccountType),
-			Description: "The endorsement account at the end of the edge.",
+	}
+	accountFields := graphql.Fields{
+		"did": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "DID of the account reached through active Certified endorsement awards.",
 		},
-	},
-})
+		"degree": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Int),
+			Description: "Smallest endorsement hop distance from the root DID. 1 means directly endorsed by the root DID; 2 and 3 are indirect endorsements.",
+		},
+	}
+	if profileType, ok := b.recordTypes[certifiedprofiles.CollectionID]; ok {
+		viaFields["certifiedProfileData"] = certifiedprofiles.Field(profileType)
+		accountFields["certifiedProfileData"] = certifiedprofiles.Field(profileType)
+	}
 
-var endorsementClosureConnectionType = graphql.NewObject(graphql.ObjectConfig{
-	Name:        "EndorsementClosureConnection",
-	Description: "A paginated, bounded Certified endorsement graph closure rooted at one DID.",
-	Fields: graphql.Fields{
-		"edges": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(endorsementClosureEdgeType))),
-			Description: "Closure accounts in fixed degree-ascending, DID-ascending order.",
+	b.endorsementViaAccountType = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "EndorsementViaAccount",
+		Description: "A predecessor account that led to an endorsement closure account.",
+		Fields:      viaFields,
+	})
+	accountFields["viaAccounts"] = &graphql.Field{
+		Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(b.endorsementViaAccountType))),
+		Description: "Degree-(degree-1) predecessor accounts that led to this account. Empty for degree-1 accounts. The list is deduplicated, sorted, and capped per account.",
+	}
+
+	b.endorsementAccountType = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "EndorsementAccount",
+		Description: "One account reached by the DID-rooted Certified endorsement closure.",
+		Fields:      accountFields,
+	})
+
+	b.endorsementClosureEdgeType = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "EndorsementAccountEdge",
+		Description: "An edge in the endorsement closure connection.",
+		Fields: graphql.Fields{
+			"cursor": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.String),
+				Description: "Opaque cursor for this endorsement account.",
+			},
+			"node": &graphql.Field{
+				Type:        graphql.NewNonNull(b.endorsementAccountType),
+				Description: "The endorsement account at the end of the edge.",
+			},
 		},
-		"pageInfo": &graphql.Field{
-			Type:        graphql.NewNonNull(query.PageInfoType),
-			Description: "Pagination information for the closure connection.",
+	})
+
+	b.endorsementClosureConnType = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "EndorsementClosureConnection",
+		Description: "A paginated, bounded Certified endorsement graph closure rooted at one DID.",
+		Fields: graphql.Fields{
+			"edges": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(b.endorsementClosureEdgeType))),
+				Description: "Closure accounts in fixed degree-ascending, DID-ascending order.",
+			},
+			"pageInfo": &graphql.Field{
+				Type:        graphql.NewNonNull(query.PageInfoType),
+				Description: "Pagination information for the closure connection.",
+			},
+			"totalCount": &graphql.Field{
+				Type:        graphql.Int,
+				Description: "Total number of accounts in the filtered closure before pagination.",
+			},
+			"truncated": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Boolean),
+				Description: "True when the server-side account cap was reached and the in-flight BFS ring was trimmed.",
+			},
 		},
-		"totalCount": &graphql.Field{
-			Type:        graphql.Int,
-			Description: "Total number of accounts in the filtered closure before pagination.",
-		},
-		"truncated": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.Boolean),
-			Description: "True when the server-side account cap was reached and the in-flight BFS ring was trimmed.",
-		},
-	},
-})
+	})
+}
 
 type endorsementClosureWhere struct {
 	RootDID   string
@@ -144,8 +165,39 @@ func (b *Builder) createEndorsementClosureResolver() graphql.FieldResolveFn {
 		}
 
 		accounts := filterEndorsementClosureAccounts(result.Accounts, where)
-		return paginateEndorsementClosureAccounts(accounts, result.Truncated, p.Args)
+		profileHydration, err := b.hydrateCertifiedProfilesForEndorsementClosure(p, repos, accounts)
+		if err != nil {
+			return nil, err
+		}
+		return paginateEndorsementClosureAccounts(accounts, result.Truncated, p.Args, profileHydration)
 	}
+}
+
+func (b *Builder) hydrateCertifiedProfilesForEndorsementClosure(p graphql.ResolveParams, repos *resolver.Repositories, accounts []graphclosure.Account) (*certifiedProfileHydration, error) {
+	requirements := externalLabelHydrationRequirements{}
+	shouldHydrate := false
+	if isFieldPathSelected(p, "edges", "node", "certifiedProfileData") {
+		shouldHydrate = true
+		requirements.merge(externalLabelHydrationRequirementsForPath(p, "edges", "node", "certifiedProfileData", "externalLabels"))
+	}
+	if isFieldPathSelected(p, "edges", "node", "viaAccounts", "certifiedProfileData") {
+		shouldHydrate = true
+		requirements.merge(externalLabelHydrationRequirementsForPath(p, "edges", "node", "viaAccounts", "certifiedProfileData", "externalLabels"))
+	}
+	if !shouldHydrate {
+		return nil, nil
+	}
+
+	dids := make([]string, 0, len(accounts))
+	for _, account := range accounts {
+		dids = append(dids, account.DID)
+		dids = append(dids, account.Via...)
+	}
+	profiles, err := b.hydrateCertifiedProfilesForDIDs(p, repos, dids, requirements)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate endorsement closure certified profiles: %w", err)
+	}
+	return profiles, nil
 }
 
 func parseEndorsementClosureWhere(raw interface{}) (endorsementClosureWhere, error) {
@@ -223,7 +275,7 @@ func filterEndorsementClosureAccounts(accounts []graphclosure.Account, where end
 	return filtered
 }
 
-func paginateEndorsementClosureAccounts(accounts []graphclosure.Account, truncated bool, args map[string]interface{}) (map[string]interface{}, error) {
+func paginateEndorsementClosureAccounts(accounts []graphclosure.Account, truncated bool, args map[string]interface{}, profileHydration *certifiedProfileHydration) (map[string]interface{}, error) {
 	pageSize, _ := args["first"].(int)
 	pageSize = query.ClampPageSize(pageSize)
 
@@ -251,13 +303,15 @@ func paginateEndorsementClosureAccounts(accounts []graphclosure.Account, truncat
 			startCursor = cursor
 		}
 		endCursor = cursor
+		node := map[string]interface{}{
+			"did":         account.DID,
+			"degree":      account.Degree,
+			"viaAccounts": endorsementViaAccountNodes(account.Via, profileHydration),
+		}
+		attachEndorsementCertifiedProfileData(node, account.DID, profileHydration)
 		edges = append(edges, map[string]interface{}{
 			"cursor": cursor,
-			"node": map[string]interface{}{
-				"did":    account.DID,
-				"degree": account.Degree,
-				"via":    account.Via,
-			},
+			"node":   node,
 		})
 	}
 
@@ -272,6 +326,28 @@ func paginateEndorsementClosureAccounts(accounts []graphclosure.Account, truncat
 		"totalCount": len(accounts),
 		"truncated":  truncated,
 	}, nil
+}
+
+func endorsementViaAccountNodes(dids []string, profileHydration *certifiedProfileHydration) []interface{} {
+	accounts := make([]interface{}, 0, len(dids))
+	for _, did := range dids {
+		node := map[string]interface{}{"did": did}
+		attachEndorsementCertifiedProfileData(node, did, profileHydration)
+		accounts = append(accounts, node)
+	}
+	return accounts
+}
+
+func attachEndorsementCertifiedProfileData(node map[string]interface{}, did string, hydration *certifiedProfileHydration) {
+	if hydration == nil {
+		return
+	}
+	profile, ok := hydration.byDID[did]
+	if !ok || profile == nil {
+		node[certifiedprofiles.SourceKey] = nil
+		return
+	}
+	node[certifiedprofiles.SourceKey] = profile
 }
 
 func encodeEndorsementClosureCursor(account graphclosure.Account) string {

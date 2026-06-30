@@ -33,13 +33,23 @@ type endorsementSmokeAccount struct {
 	Via    []string `json:"via"`
 }
 
+type endorsementClosureResponseViaAccount struct {
+	DID string `json:"did"`
+}
+
+type endorsementClosureResponseAccount struct {
+	DID         string                                 `json:"did"`
+	Degree      int                                    `json:"degree"`
+	ViaAccounts []endorsementClosureResponseViaAccount `json:"viaAccounts"`
+}
+
 type endorsementClosureQueryResponse struct {
 	EndorsementClosure struct {
 		Truncated bool     `json:"truncated"`
 		PageInfo  pageInfo `json:"pageInfo"`
 		Edges     []struct {
-			Cursor string                  `json:"cursor"`
-			Node   endorsementSmokeAccount `json:"node"`
+			Cursor string                            `json:"cursor"`
+			Node   endorsementClosureResponseAccount `json:"node"`
 		} `json:"edges"`
 	} `json:"endorsementClosure"`
 }
@@ -238,7 +248,11 @@ func endorsementSmokeHasIndirect(accounts []endorsementSmokeAccount) bool {
 func (r endorsementClosureQueryResponse) accounts() []endorsementSmokeAccount {
 	accounts := make([]endorsementSmokeAccount, 0, len(r.EndorsementClosure.Edges))
 	for _, edge := range r.EndorsementClosure.Edges {
-		accounts = append(accounts, edge.Node)
+		via := make([]string, 0, len(edge.Node.ViaAccounts))
+		for _, account := range edge.Node.ViaAccounts {
+			via = append(via, account.DID)
+		}
+		accounts = append(accounts, endorsementSmokeAccount{DID: edge.Node.DID, Degree: edge.Node.Degree, Via: via})
 	}
 	return accounts
 }
@@ -295,7 +309,7 @@ func queryEndorsementClosurePage(t testing.TB, config smokeConfig, rootDID strin
 					node {
 						did
 						degree
-						via
+						viaAccounts { did }
 					}
 				}
 			}

@@ -1,4 +1,4 @@
 kind: added
-body: Add a bounded `endorsementClosure(where, first, after)` GraphQL connection for Certified endorsement networks. The resolver computes active account-to-account endorsement badge edges at request time, respects badge-definition issuer allowlists, supports exact degree filtering from 1 through 3, returns predecessor provenance, and marks responses truncated when the server-side cap is reached. Its root DID input exposes only `eq` because each closure request is rooted at one DID.
+body: Add a bounded `endorsementClosure(where, first, after)` GraphQL connection for Certified endorsement networks. The resolver computes active account-to-account endorsement badge edges at request time, respects badge-definition issuer allowlists, supports exact degree filtering from 1 through 3, exposes predecessor accounts through `viaAccounts`, hydrates Certified profile data for reached and predecessor accounts, and marks responses truncated when the server-side cap is reached. Its root DID input exposes only `eq` because each closure request is rooted at one DID.
 custom:
   Affects: user

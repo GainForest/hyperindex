@@ -1794,20 +1794,26 @@ func assertRawCIDLinkShape(t *testing.T, value map[string]interface{}, cid strin
 func buildAllTestdataSchema(t *testing.T) *graphql.Schema {
 	t.Helper()
 
+	builder := buildAllTestdataBuilder(t)
+	schema, err := builder.Build()
+	if err != nil {
+		t.Fatalf("buildAllTestdataSchema: failed to build schema: %v", err)
+	}
+	return schema
+}
+
+func buildAllTestdataBuilder(t *testing.T) *Builder {
+	t.Helper()
+
 	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
 	if err != nil {
-		t.Fatalf("buildAllTestdataSchema: failed to load lexicons: %v", err)
+		t.Fatalf("buildAllTestdataBuilder: failed to load lexicons: %v", err)
 	}
 	registry := lexicon.NewRegistry()
 	for _, lex := range lexicons {
 		registry.Register(lex)
 	}
-
-	schema, err := NewBuilder(registry).Build()
-	if err != nil {
-		t.Fatalf("buildAllTestdataSchema: failed to build schema: %v", err)
-	}
-	return schema
+	return NewBuilder(registry)
 }
 
 func buildActivitySchema(t *testing.T) *graphql.Schema {
@@ -2022,12 +2028,45 @@ func TestEndorsementClosureWhereInputUsesExactDIDFilter(t *testing.T) {
 	if _, ok := didFilterFields["in"]; ok {
 		t.Fatal("EndorsementClosureDIDFilterInput exposes unsupported in field")
 	}
+
+	builder := buildAllTestdataBuilder(t)
+	if _, err := builder.Build(); err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+	accountFields := builder.endorsementAccountType.Fields()
+	if _, ok := accountFields["certifiedProfileData"]; !ok {
+		t.Fatal("EndorsementAccount missing certifiedProfileData field")
+	}
+	if _, ok := accountFields["viaAccounts"]; !ok {
+		t.Fatal("EndorsementAccount missing viaAccounts field")
+	}
+	if _, ok := accountFields["via"]; ok {
+		t.Fatal("EndorsementAccount exposes removed via field")
+	}
+	viaFields := builder.endorsementViaAccountType.Fields()
+	if _, ok := viaFields["certifiedProfileData"]; !ok {
+		t.Fatal("EndorsementViaAccount missing certifiedProfileData field")
+	}
 }
 
 func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
 	schema := buildAllTestdataSchema(t)
 	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement"
 	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:alice/app.certified.actor.profile/self",
+			CID:        "cid-profile-alice",
+			DID:        "did:plc:alice",
+			Collection: "app.certified.actor.profile",
+			JSON:       `{"displayName":"Alice Profile","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:carol/app.certified.actor.profile/self",
+			CID:        "cid-profile-carol",
+			DID:        "did:plc:carol",
+			Collection: "app.certified.actor.profile",
+			JSON:       `{"displayName":"Carol Profile","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
 		{
 			URI:        endorsementBadgeURI,
 			CID:        "cid-endorsement",
@@ -2082,7 +2121,15 @@ func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
 				truncated
 				totalCount
 				pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
-				edges { cursor node { did degree via } }
+				edges {
+					cursor
+					node {
+						did
+						degree
+						certifiedProfileData { displayName }
+						viaAccounts { did certifiedProfileData { displayName } }
+					}
+				}
 			}
 		}`,
 		Context: ctx,
@@ -2119,10 +2166,10 @@ func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
 	}
 
 	want := []map[string]interface{}{
-		{"did": "did:plc:alice", "degree": 1, "via": []interface{}{}},
-		{"did": "did:plc:bob", "degree": 1, "via": []interface{}{}},
-		{"did": "did:plc:carol", "degree": 2, "via": []interface{}{"did:plc:alice", "did:plc:bob"}},
-		{"did": "did:plc:dana", "degree": 3, "via": []interface{}{"did:plc:carol"}},
+		{"did": "did:plc:alice", "degree": 1, "certifiedProfileData": map[string]interface{}{"displayName": "Alice Profile"}, "viaAccounts": []interface{}{}},
+		{"did": "did:plc:bob", "degree": 1, "certifiedProfileData": nil, "viaAccounts": []interface{}{}},
+		{"did": "did:plc:carol", "degree": 2, "certifiedProfileData": map[string]interface{}{"displayName": "Carol Profile"}, "viaAccounts": []interface{}{map[string]interface{}{"did": "did:plc:alice", "certifiedProfileData": map[string]interface{}{"displayName": "Alice Profile"}}, map[string]interface{}{"did": "did:plc:bob", "certifiedProfileData": nil}}},
+		{"did": "did:plc:dana", "degree": 3, "certifiedProfileData": nil, "viaAccounts": []interface{}{map[string]interface{}{"did": "did:plc:carol", "certifiedProfileData": map[string]interface{}{"displayName": "Carol Profile"}}}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("accounts = %#v, want %#v", got, want)
