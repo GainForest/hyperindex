@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="hyperindex.png" alt="Hyperindex" width="600">
-</p>
-
 # Hyperindex (hi)
 
 **A Go AT Protocol AppView server that indexes records and exposes them via GraphQL**
