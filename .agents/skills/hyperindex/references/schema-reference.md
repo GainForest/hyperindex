@@ -54,6 +54,7 @@ Last updated on 2026-06-29 for pending `recordTimeline` schema changes. Baseline
 | `externalLabels` | activeOnly: `Boolean`, sources: `[String!]`, subjects: `[String!]!`, values: `[String!]` | Query locally ingested external ATProto labels by DID or AT-URI subject. |
 | `search` | after: `String`, collection: `String`, first: `Int`, query: `String!` | Search records by text content |
 | `collectionStats` | collections: `[String!]` | Get record counts for collections (efficient aggregate query) |
+| `endorsementClosure` | where: `EndorsementClosureWhereInput!`, first: `Int`, after: `String` | Query the bounded DID-rooted Certified endorsement graph closure from active endorsement badge awards. |
 | `collectionTimeSeries` | collection: `String!` | Get time series data for a collection (records grouped by date) |
 
 ## Typed record collections
@@ -137,6 +138,70 @@ Rows are ordered by top-level record JSON `createdAt` descending, then `uri` des
 | `value` | `JSON!` | Decoded AT Protocol record payload. |
 | `certifiedProfileData` | `AppCertifiedActorProfile` | Virtual profile data for the record author when the schema includes `app.certified.actor.profile`. |
 
+## Certified endorsement closure
+
+`endorsementClosure(where, first, after)` returns `EndorsementClosureConnection`:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `edges` | `[EndorsementAccountEdge!]!` | Paginated closure accounts in fixed degree-ascending, DID-ascending order. |
+| `pageInfo` | `PageInfo!` | Forward pagination metadata. |
+| `totalCount` | `Int` | Total number of accounts in the filtered closure before pagination. |
+| `truncated` | `Boolean!` | True when the server-side account cap was reached and the in-flight BFS ring was trimmed. |
+
+`EndorsementClosureWhereInput` fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `did` | `EndorsementClosureDIDFilterInput!` | Required root DID filter. This input exposes only `eq` because each closure is computed from one DID. |
+| `degree` | `EndorsementClosureDegreeFilterInput` | Optional returned-degree filter with `eq`; values must be `1`, `2`, or `3`. Omit it to return all supported degrees. |
+
+`EndorsementAccount` fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `did` | `String!` | DID of the reached account. |
+| `degree` | `Int!` | Smallest endorsement hop distance from the root DID. |
+| `certifiedProfileData` | `AppCertifiedActorProfile` | Certified profile for the reached account, or null when no profile record exists. |
+| `viaAccounts` | `[EndorsementViaAccount!]!` | Up to 64 previous-ring accounts that led to this account; empty for direct degree-1 accounts. |
+
+`EndorsementViaAccount` fields:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `did` | `String!` | DID of the predecessor account. |
+| `certifiedProfileData` | `AppCertifiedActorProfile` | Certified profile for the predecessor account, or null when no profile record exists. |
+
+Example:
+
+```graphql
+query EndorsementClosure($did: String!) {
+  endorsementClosure(
+    where: { did: { eq: $did } }
+    first: 100
+  ) {
+    truncated
+    totalCount
+    pageInfo { hasNextPage endCursor }
+    edges {
+      cursor
+      node {
+        did
+        degree
+        certifiedProfileData { did displayName avatar }
+        viaAccounts {
+          did
+          certifiedProfileData { did displayName avatar }
+        }
+      }
+    }
+  }
+}
+```
+
+The resolver computes active edges at request time from Certified badge award, definition, and response records; no persisted endorsement edge table is required. Only badge awards whose subject is the `app.certified.defs#did` account DID union member count as account endorsement edges; record strongRef subjects are ignored. Badge-definition `allowedIssuers` allowlists are respected when present.
+
+
 ## Filter inputs
 
 Scalar field filters support value comparisons. Generated typed `where` inputs also include a metadata-level `uri: URIFilterInput` field so clients can filter by exact AT-URI or batch hydrate records by URI without querying JSON payload fields. Complex fields expose `isNull` presence checks. Arrays, refs, and unions may also expose generated nested filters up to three lexicon path segments deep; nested scalar leaves use exact filters (`eq`, `in`, `isNull`) and array filters use `any`. Multiple predicates inside the same array `any` must match the same array item. Nested array fields inside an existing `any` scope expose presence checks only, not another `any`. Nested filters do not support substring operators (`contains`, `startsWith`), comparison operators (`gt`, `lt`, `gte`, `lte`), arbitrary JSON paths, nested sorting, or automatic strong-ref dereferencing. For example, `items.any.itemIdentifier.uri.contains` and `items.any.itemWeight.gt` are rejected at query validation time because nested leaves expose exact-match inputs only.
@@ -207,6 +272,14 @@ Filter conditions for DID fields (column-level). Only eq and in are supported.
 | --- | --- | --- |
 | `eq` | `String` | Equals |
 | `in` | `[String!]` | In list |
+
+### `EndorsementClosureDIDFilterInput`
+
+Exact root DID filter for `endorsementClosure`. Only `eq` is supported because each closure request is rooted at one DID.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `eq` | `String` | Root DID for the endorsement closure. |
 
 ### `URIFilterInput`
 

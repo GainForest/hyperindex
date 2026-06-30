@@ -43,6 +43,11 @@ type Builder struct {
 
 	recordTimelineNode       *graphql.Object
 	recordTimelineConnection *graphql.Object
+
+	endorsementAccountType     *graphql.Object
+	endorsementViaAccountType  *graphql.Object
+	endorsementClosureEdgeType *graphql.Object
+	endorsementClosureConnType *graphql.Object
 }
 
 // NewBuilder creates a new schema builder.
@@ -74,7 +79,10 @@ func (b *Builder) Build() (*graphql.Schema, error) {
 	// Phase 2c: Build record timeline types now that generated profile types are available.
 	b.buildRecordTimelineTypes()
 
-	// Phase 2d: Build per-collection WhereInput types
+	// Phase 2d: Build endorsement closure types now that generated profile types are available.
+	b.buildEndorsementClosureTypes()
+
+	// Phase 2e: Build per-collection WhereInput types
 	if err := b.buildWhereInputTypes(); err != nil {
 		return nil, err
 	}
@@ -681,6 +689,27 @@ func (b *Builder) buildQueryType() *graphql.Object {
 		Resolve: b.createCollectionStatsResolver(),
 	}
 
+	// Add endorsementClosure query for the Certified endorsement trust graph.
+	fields["endorsementClosure"] = &graphql.Field{
+		Type:        graphql.NewNonNull(b.endorsementClosureConnType),
+		Description: "Query the bounded DID-rooted Certified endorsement graph closure from active endorsement badge awards.",
+		Args: graphql.FieldConfigArgument{
+			"where": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(endorsementClosureWhereInput),
+				Description: "Closure filters. where.did.eq is required; optional where.degree.eq selects one returned hop distance from 1 through 3.",
+			},
+			"first": &graphql.ArgumentConfig{
+				Type:        graphql.Int,
+				Description: "Number of closure accounts to return (default 20, maximum 1000).",
+			},
+			"after": &graphql.ArgumentConfig{
+				Type:        graphql.String,
+				Description: "Cursor to start after (forward pagination).",
+			},
+		},
+		Resolve: b.createEndorsementClosureResolver(),
+	}
+
 	// Add collectionTimeSeries query for time series data
 	fields["collectionTimeSeries"] = &graphql.Field{
 		Type:        collectionTimeSeriesType,
@@ -1174,6 +1203,19 @@ func (b *Builder) hydrateCertifiedProfileForSingleRecord(p graphql.ResolveParams
 	}
 	externalLabelRequirements := externalLabelHydrationRequirementsForPath(p, "certifiedProfileData", "externalLabels")
 	return b.hydrateCertifiedProfilesForRecords(p, repos, []*repositories.Record{rec}, externalLabelRequirements)
+}
+
+func (b *Builder) hydrateCertifiedProfilesForDIDs(p graphql.ResolveParams, repos *resolver.Repositories, dids []string, externalLabelRequirements externalLabelHydrationRequirements) (*certifiedProfileHydration, error) {
+	records := make([]*repositories.Record, 0, len(dids))
+	seen := make(map[string]bool, len(dids))
+	for _, did := range dids {
+		if did == "" || seen[did] {
+			continue
+		}
+		seen[did] = true
+		records = append(records, &repositories.Record{DID: did})
+	}
+	return b.hydrateCertifiedProfilesForRecords(p, repos, records, externalLabelRequirements)
 }
 
 func (b *Builder) hydrateCertifiedProfilesForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record, externalLabelRequirements externalLabelHydrationRequirements) (*certifiedProfileHydration, error) {

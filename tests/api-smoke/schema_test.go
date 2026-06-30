@@ -295,6 +295,38 @@ func TestSchemaExposesPublicSmokeQueryFields(t *testing.T) {
 
 	requireSchemaField(t, queryFields, "collectionStats")
 
+	if config.expectations.EndorsementClosure.configured() {
+		endorsementClosureField := requireSchemaField(t, queryFields, "endorsementClosure")
+		whereArg := requireSchemaArgument(t, endorsementClosureField, "where")
+		requireSchemaArgument(t, endorsementClosureField, "first")
+		requireSchemaArgument(t, endorsementClosureField, "after")
+
+		whereInput := requireSchemaType(t, typesByName(schema.Types), namedTypeName(whereArg.Type))
+		didField := requireSchemaInputField(t, inputFieldsByName(whereInput.InputFields), "did")
+		if got := namedTypeName(didField.Type); got != "EndorsementClosureDIDFilterInput" {
+			t.Fatalf("EndorsementClosureWhereInput.did type = %q, want EndorsementClosureDIDFilterInput", got)
+		}
+		types := typesByName(schema.Types)
+		didFilter := requireSchemaType(t, types, "EndorsementClosureDIDFilterInput")
+		didFilterFields := inputFieldsByName(didFilter.InputFields)
+		requireSchemaInputField(t, didFilterFields, "eq")
+		if _, exists := didFilterFields["in"]; exists {
+			t.Fatal("EndorsementClosureDIDFilterInput exposes unsupported field in")
+		}
+
+		accountType := requireSchemaType(t, types, "EndorsementAccount")
+		accountFields := fieldsByName(accountType.Fields)
+		requireSchemaField(t, accountFields, "certifiedProfileData")
+		requireSchemaField(t, accountFields, "viaAccounts")
+		if _, exists := accountFields["via"]; exists {
+			t.Fatal("EndorsementAccount exposes removed field via")
+		}
+		viaAccountType := requireSchemaType(t, types, "EndorsementViaAccount")
+		viaAccountFields := fieldsByName(viaAccountType.Fields)
+		requireSchemaField(t, viaAccountFields, "did")
+		requireSchemaField(t, viaAccountFields, "certifiedProfileData")
+	}
+
 	smokeLog("✓ Public schema has expected GraphQL query fields")
 }
 

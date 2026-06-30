@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/bluesky-social/indigo/atproto/syntax"
 )
 
 // DefaultPLCDirectoryURL is the default PLC directory URL.
@@ -206,9 +208,14 @@ func parseDIDDocument(data []byte) (*DIDDocument, error) {
 	return &doc, nil
 }
 
-// IsValidDID checks if a string is a valid DID format.
-func IsValidDID(did string) bool {
-	return strings.HasPrefix(did, "did:plc:") || strings.HasPrefix(did, "did:web:")
+// IsValidDID checks whether a string is a syntactically valid did:plc or did:web identifier.
+func IsValidDID(raw string) bool {
+	did, err := syntax.ParseDID(raw)
+	if err != nil {
+		return false
+	}
+	method := did.Method()
+	return method == "plc" || method == "web"
 }
 
 // IsDIDPLC checks if a DID uses the plc method.
