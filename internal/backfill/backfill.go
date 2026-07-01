@@ -13,6 +13,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/config"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 // Config configures the backfill operation.
@@ -108,6 +109,7 @@ type Backfiller struct {
 	recordsRepo  *repositories.RecordsRepository
 	actorsRepo   *repositories.ActorsRepository
 	activityRepo *repositories.IndexingActivityRepository
+	validator    validation.RecordValidator
 
 	// httpSem is a global semaphore limiting concurrent HTTP requests.
 	// This prevents overwhelming the network and running out of file descriptors.
@@ -126,6 +128,7 @@ func NewBackfiller(
 	recordsRepo *repositories.RecordsRepository,
 	actorsRepo *repositories.ActorsRepository,
 	activityRepo *repositories.IndexingActivityRepository,
+	validators ...validation.RecordValidator,
 ) *Backfiller {
 	// Create DID resolver with custom PLC URL
 	didResolver := oauth.NewDIDResolver(
@@ -141,12 +144,18 @@ func NewBackfiller(
 	// Start cleanup routine (every 5 minutes)
 	stopCleanup := didCache.StartCleanupRoutine(5 * time.Minute)
 
+	var validator validation.RecordValidator
+	if len(validators) > 0 {
+		validator = validators[0]
+	}
+
 	return &Backfiller{
 		config:           cfg,
 		client:           NewClient(cfg.RelayURL, cfg.PLCURL, cfg.MaxHTTPConcurrent),
 		recordsRepo:      recordsRepo,
 		actorsRepo:       actorsRepo,
 		activityRepo:     activityRepo,
+		validator:        validator,
 		httpSem:          make(chan struct{}, cfg.MaxHTTPConcurrent),
 		didCache:         didCache,
 		stopCacheCleanup: stopCleanup,
@@ -523,6 +532,7 @@ func (b *Backfiller) processRepo(ctx context.Context, pdsURL string, data *Atpro
 			)
 			atomic.AddInt64(&b.stats.Errors, 1)
 		} else {
+			b.updateValidationMetadata(ctx, filteredRecords)
 			insertedCount = len(filteredRecords)
 			atomic.AddInt64(&b.stats.RecordsInserted, int64(insertedCount))
 
@@ -652,6 +662,7 @@ func (b *Backfiller) processRepoLegacy(ctx context.Context, pdsURL string, data 
 			}
 
 			if result == repositories.Inserted {
+				b.updateRecordValidationMetadata(ctx, rec.URI, collection, extractRKeyFromURI(rec.URI), []byte(rec.Value))
 				totalInserted++
 				atomic.AddInt64(&b.stats.RecordsInserted, 1)
 				// Log activity for the inserted record
@@ -736,6 +747,7 @@ func (b *Backfiller) BackfillActor(ctx context.Context, did string) (int, error)
 		if err := b.recordsRepo.BatchInsert(ctx, filteredRecords); err != nil {
 			return 0, fmt.Errorf("batch insert failed: %w", err)
 		}
+		b.updateValidationMetadata(ctx, filteredRecords)
 
 		// Log activity for each inserted record
 		if b.activityRepo != nil {
@@ -781,6 +793,7 @@ func (b *Backfiller) backfillActorLegacy(ctx context.Context, data *AtprotoData)
 			}
 
 			if result == repositories.Inserted {
+				b.updateRecordValidationMetadata(ctx, rec.URI, collection, extractRKeyFromURI(rec.URI), []byte(rec.Value))
 				totalRecords++
 				// Log activity for the inserted record
 				if b.activityRepo != nil {
@@ -801,6 +814,26 @@ func (b *Backfiller) backfillActorLegacy(ctx context.Context, data *AtprotoData)
 	)
 
 	return totalRecords, nil
+}
+
+func (b *Backfiller) updateValidationMetadata(ctx context.Context, records []*repositories.Record) {
+	if b.validator == nil {
+		return
+	}
+	for _, rec := range records {
+		b.updateRecordValidationMetadata(ctx, rec.URI, rec.Collection, rec.RKey, []byte(rec.JSON))
+	}
+}
+
+func (b *Backfiller) updateRecordValidationMetadata(ctx context.Context, uri, collection, rkey string, rawJSON []byte) {
+	if b.validator == nil {
+		return
+	}
+	result := b.validator.ValidateRecord(collection, rkey, rawJSON)
+	if err := b.recordsRepo.UpdateValidationStatus(ctx, uri, result.Status, result.Error, result.LexiconHash); err != nil {
+		slog.Debug("[backfill] Failed to update validation metadata", "uri", uri, "error", err)
+		atomic.AddInt64(&b.stats.Errors, 1)
+	}
 }
 
 // extractRKeyFromURI extracts the rkey from an AT-URI (at://did/collection/rkey).

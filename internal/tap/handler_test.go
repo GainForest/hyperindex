@@ -10,6 +10,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/tap"
 	"github.com/GainForest/hyperindex/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 // setupHandler creates an IndexHandler backed by a real in-memory SQLite database.
@@ -19,6 +20,21 @@ func setupHandler(t *testing.T) (*tap.IndexHandler, *testutil.TestDB, *subscript
 	pubsub := subscription.NewPubSub()
 	handler := tap.NewIndexHandler(db.Records, db.Actors, db.Activity, pubsub)
 	return handler, db, pubsub
+}
+
+type fakeRecordValidator struct {
+	result validation.Result
+}
+
+func (v fakeRecordValidator) ValidateRecord(collection string, rkey string, rawJSON []byte) validation.Result {
+	return v.result
+}
+
+func (v fakeRecordValidator) LexiconHash(collection string) (string, bool) {
+	if v.result.LexiconHash == "" {
+		return "", false
+	}
+	return v.result.LexiconHash, true
 }
 
 func TestIndexHandler_HandleRecord_Create(t *testing.T) {
@@ -77,6 +93,96 @@ func TestIndexHandler_HandleRecord_Create(t *testing.T) {
 		}
 	default:
 		t.Error("expected pubsub event to be published for create")
+	}
+}
+
+func TestIndexHandler_HandleRecord_InvalidRecordStoresMetadataWithoutPublishing(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	pubsub := subscription.NewPubSub()
+	handler := tap.NewIndexHandler(db.Records, db.Actors, db.Activity, pubsub, fakeRecordValidator{result: validation.Result{
+		Status:      validation.StatusInvalid,
+		Error:       "missing required field: name",
+		LexiconHash: "hash-1",
+	}})
+	ctx := context.Background()
+	sub := pubsub.Subscribe("app.bsky.feed.post")
+	defer pubsub.Unsubscribe(sub)
+
+	event := &tap.RecordEvent{
+		DID:        "did:plc:alice",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post-invalid",
+		Action:     tap.ActionCreate,
+		CID:        "bafyinvalid",
+		Record:     json.RawMessage(`{"unexpected":"value"}`),
+	}
+
+	if err := handler.HandleRecord(ctx, event); err != nil {
+		t.Fatalf("HandleRecord returned error: %v", err)
+	}
+
+	uri := "at://did:plc:alice/app.bsky.feed.post/post-invalid"
+	rec, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("record not found after invalid create: %v", err)
+	}
+	if rec.ValidationStatus != validation.StatusInvalid {
+		t.Fatalf("ValidationStatus = %q, want %q", rec.ValidationStatus, validation.StatusInvalid)
+	}
+	if rec.ValidationError != "missing required field: name" {
+		t.Fatalf("ValidationError = %q", rec.ValidationError)
+	}
+	if rec.LexiconHash != "hash-1" {
+		t.Fatalf("LexiconHash = %q, want hash-1", rec.LexiconHash)
+	}
+
+	select {
+	case event := <-sub.Events:
+		t.Fatalf("unexpected pubsub event for invalid record: %#v", event)
+	default:
+	}
+}
+
+func TestIndexHandler_HandleRecord_UnknownSchemaStoresMetadataWithoutPublishing(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	pubsub := subscription.NewPubSub()
+	handler := tap.NewIndexHandler(db.Records, db.Actors, nil, pubsub, fakeRecordValidator{result: validation.Result{
+		Status: validation.StatusUnknownSchema,
+		Error:  "no saved lexicon for collection app.bsky.feed.post",
+	}})
+	ctx := context.Background()
+	sub := pubsub.Subscribe("app.bsky.feed.post")
+	defer pubsub.Unsubscribe(sub)
+
+	event := &tap.RecordEvent{
+		DID:        "did:plc:alice",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post-unknown",
+		Action:     tap.ActionCreate,
+		CID:        "bafyunknown",
+		Record:     json.RawMessage(`{"text":"hello"}`),
+	}
+
+	if err := handler.HandleRecord(ctx, event); err != nil {
+		t.Fatalf("HandleRecord returned error: %v", err)
+	}
+
+	uri := "at://did:plc:alice/app.bsky.feed.post/post-unknown"
+	rec, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("record not found after unknown-schema create: %v", err)
+	}
+	if rec.ValidationStatus != validation.StatusUnknownSchema {
+		t.Fatalf("ValidationStatus = %q, want %q", rec.ValidationStatus, validation.StatusUnknownSchema)
+	}
+	if rec.LexiconHash != "" {
+		t.Fatalf("LexiconHash = %q, want empty", rec.LexiconHash)
+	}
+
+	select {
+	case event := <-sub.Events:
+		t.Fatalf("unexpected pubsub event for unknown-schema record: %#v", event)
+	default:
 	}
 }
 

@@ -45,12 +45,13 @@ Use production by default for consumer examples. `api.indexer.hypercerts.dev` is
 ## Before answering
 
 1. If the user asks for an exact field, filter, enum, or union and you are not sure, introspect the endpoint first.
-2. Prefer schema-specific queries such as `orgHypercertsClaimActivity` over generic `records` when the collection has a typed query.
-3. Use `recordTimeline` when the caller needs one newest-first feed across multiple collections. It requires `where.collection.in`, supports optional `where.did.in` author filtering, and does not expose `totalCount`.
-4. Always include pagination (`first`, `after`, `pageInfo { hasNextPage endCursor }`) in list examples.
-5. Keep selection sets small. Add fields only when needed for the workflow.
-6. Use inline fragments for union fields such as descriptions, images, attachment content, proof fields, and strong references.
-7. Do not assume the target endpoint exposes every feature described in this skill. `main` may be ahead of staging, and staging may be ahead of production. When a query depends on newer schema features such as `recordTimeline`, nested filters, author labels, or collection-specific fields, introspect the target endpoint first. If the feature is missing, tell the user which endpoint lacks it and offer the closest fallback, such as `search(query: ..., collection: ...)` plus client-side filtering.
+2. Prefer schema-specific queries such as `orgHypercertsClaimActivity` over generic `records` when the collection has a typed query and the caller only needs schema-valid records.
+3. Use generic `records(collection: ...)` when the caller needs raw JSON, operational debugging, unknown-schema records, or records hidden from typed GraphQL by validation metadata.
+4. Use `recordTimeline` when the caller needs one newest-first feed across multiple collections. It requires `where.collection.in`, supports optional `where.did.in` author filtering, and does not expose `totalCount`.
+5. Always include pagination (`first`, `after`, `pageInfo { hasNextPage endCursor }`) in list examples.
+6. Keep selection sets small. Add fields only when needed for the workflow.
+7. Use inline fragments for union fields such as descriptions, images, attachment content, proof fields, and strong references.
+8. Do not assume the target endpoint exposes every feature described in this skill. `main` may be ahead of staging, and staging may be ahead of production. When a query depends on newer schema features such as `recordTimeline`, nested filters, author labels, validation metadata, or collection-specific fields, introspect the target endpoint first. If the feature is missing, tell the user which endpoint lacks it and offer the closest fallback, such as `search(query: ..., collection: ...)` plus client-side filtering.
 
 Detailed schema reference: [references/schema-reference.md](references/schema-reference.md)
 
@@ -156,7 +157,39 @@ If a workflow needs unsupported nested matching, use one of these patterns:
 
 - Use typed nested/presence filters to narrow the set, then filter client-side.
 - Use `search(query: ..., collection: ...)` to find records whose JSON contains a referenced AT-URI or string.
-- Use `records(collection: ...)` as a fallback for collections without typed schema coverage.
+- Use `records(collection: ...)` as a fallback for collections without typed schema coverage or for raw debugging.
+
+## Validation gate and generic records
+
+Hyperindex stores every observed AT Protocol record in its raw record table. Typed GraphQL collection fields only expose rows whose `validationStatus` is `valid`, meaning the record conforms to the saved Lexicon used to generate the running schema. Records whose status is `invalid`, `unknown_schema`, or `validation_error` are hidden from typed list queries, typed `ByUri` queries, typed counts, and typed create/update subscription payloads.
+
+Use generic `records(collection: ...)` for operational visibility into all raw rows, including records hidden from typed GraphQL. Generic record nodes expose validation metadata:
+
+```graphql
+query RawRecords($collection: String!) {
+  records(collection: $collection, first: 20) {
+    edges {
+      node {
+        uri
+        cid
+        did
+        collection
+        rkey
+        validationStatus
+        validationError
+        validatedAt
+        lexiconHash
+        value
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+Validation is local-only during ingestion. Hyperindex checks records against its saved Lexicons and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources while classifying records.
+
+Lexicon upload/register/delete updates validation state immediately, but public typed GraphQL schema shape is generated at startup. After a Lexicon change, restart or redeploy Hyperindex before expecting `/graphql` introspection or typed fields to reflect newly added, removed, or structurally changed collections.
 
 ## Generic record timeline
 

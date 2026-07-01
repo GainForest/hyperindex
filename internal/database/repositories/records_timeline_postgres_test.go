@@ -3,6 +3,7 @@ package repositories_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -13,7 +14,124 @@ import (
 	"github.com/GainForest/hyperindex/internal/database/migrations"
 	"github.com/GainForest/hyperindex/internal/database/postgres"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
+
+func TestRecordsRepository_ValidationMetadataPostgres(t *testing.T) {
+	exec := newPostgresRecordsTestExecutor(t)
+	repo := repositories.NewRecordsRepository(exec)
+	ctx := context.Background()
+	collection := "com.example.record"
+	validURI := "at://did:plc:test/com.example.record/01-valid"
+	staleURI := "at://did:plc:test/com.example.record/02-stale"
+	invalidURI := "at://did:plc:test/com.example.record/03-invalid"
+	otherURI := "at://did:plc:test/com.example.other/01-valid"
+
+	for _, rec := range []struct {
+		uri        string
+		collection string
+		status     validation.Status
+		errorText  string
+		hash       string
+	}{
+		{validURI, collection, validation.StatusValid, "", "hash-current"},
+		{staleURI, collection, validation.StatusValid, "", "hash-old"},
+		{invalidURI, collection, validation.StatusInvalid, "missing required field: name", "hash-current"},
+		{otherURI, "com.example.other", validation.StatusValid, "", "hash-other"},
+	} {
+		if _, err := repo.Insert(ctx, rec.uri, "cid", "did:plc:test", rec.collection, `{"name":"test"}`); err != nil {
+			t.Fatalf("Insert(%s) error = %v", rec.uri, err)
+		}
+		if err := repo.UpdateValidationStatus(ctx, rec.uri, rec.status, rec.errorText, rec.hash); err != nil {
+			t.Fatalf("UpdateValidationStatus(%s) error = %v", rec.uri, err)
+		}
+	}
+
+	invalid, err := repo.GetByURI(ctx, invalidURI)
+	if err != nil {
+		t.Fatalf("GetByURI(invalid) error = %v", err)
+	}
+	if invalid.ValidationStatus != validation.StatusInvalid || invalid.ValidationError == "" || invalid.LexiconHash != "hash-current" || invalid.ValidatedAt == nil {
+		t.Fatalf("invalid record metadata = status:%q error:%q hash:%q validatedAt:%v", invalid.ValidationStatus, invalid.ValidationError, invalid.LexiconHash, invalid.ValidatedAt)
+	}
+
+	needingValidation, err := repo.ListRecordsNeedingValidation(ctx, collection, "hash-current", "", 10)
+	if err != nil {
+		t.Fatalf("ListRecordsNeedingValidation() error = %v", err)
+	}
+	assertRecordURIs(t, needingValidation, []string{staleURI, invalidURI})
+
+	if err := repo.MarkCollectionUnknownSchema(ctx, collection, "lexicon removed for collection"); err != nil {
+		t.Fatalf("MarkCollectionUnknownSchema() error = %v", err)
+	}
+	for _, uri := range []string{validURI, staleURI, invalidURI} {
+		rec, err := repo.GetByURI(ctx, uri)
+		if err != nil {
+			t.Fatalf("GetByURI(%s) error = %v", uri, err)
+		}
+		if rec.ValidationStatus != validation.StatusUnknownSchema || rec.ValidationError != "lexicon removed for collection" || rec.LexiconHash != "" || rec.ValidatedAt == nil {
+			t.Fatalf("%s metadata = status:%q error:%q hash:%q validatedAt:%v", uri, rec.ValidationStatus, rec.ValidationError, rec.LexiconHash, rec.ValidatedAt)
+		}
+	}
+	other, err := repo.GetByURI(ctx, otherURI)
+	if err != nil {
+		t.Fatalf("GetByURI(other) error = %v", err)
+	}
+	if other.ValidationStatus != validation.StatusValid || other.LexiconHash != "hash-other" {
+		t.Fatalf("other collection metadata changed: status=%q hash=%q", other.ValidationStatus, other.LexiconHash)
+	}
+}
+
+func TestRecordsRepository_ValidOnlyQueriesPostgres(t *testing.T) {
+	exec := newPostgresRecordsTestExecutor(t)
+	repo := repositories.NewRecordsRepository(exec)
+	ctx := context.Background()
+	collection := "com.example.record"
+	validURI := "at://did:plc:test/com.example.record/01-valid"
+	invalidURI := "at://did:plc:test/com.example.record/02-invalid"
+	otherURI := "at://did:plc:test/com.example.other/01-valid"
+
+	for _, rec := range []struct {
+		uri        string
+		collection string
+		status     validation.Status
+	}{
+		{validURI, collection, validation.StatusValid},
+		{invalidURI, collection, validation.StatusInvalid},
+		{otherURI, "com.example.other", validation.StatusValid},
+	} {
+		if _, err := repo.Insert(ctx, rec.uri, "cid", "did:plc:test", rec.collection, `{"name":"test"}`); err != nil {
+			t.Fatalf("Insert(%s) error = %v", rec.uri, err)
+		}
+		if err := repo.UpdateValidationStatus(ctx, rec.uri, rec.status, "hidden", "hash-current"); err != nil {
+			t.Fatalf("UpdateValidationStatus(%s) error = %v", rec.uri, err)
+		}
+	}
+	if err := repo.UpdateValidationStatus(ctx, validURI, validation.StatusValid, "", "hash-current"); err != nil {
+		t.Fatalf("UpdateValidationStatus(valid) error = %v", err)
+	}
+
+	if _, err := repo.GetValidByURI(ctx, validURI, collection); err != nil {
+		t.Fatalf("GetValidByURI(valid) error = %v", err)
+	}
+	if _, err := repo.GetValidByURI(ctx, invalidURI, collection); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetValidByURI(invalid) error = %v, want sql.ErrNoRows", err)
+	}
+
+	records, err := repo.GetValidByCollectionSortedWithKeysetCursorAndExternalLabelFilters(ctx, collection, nil, repositories.DIDFilter{}, repositories.ExternalLabelFilterSet{}, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("GetValidByCollectionSortedWithKeysetCursorAndExternalLabelFilters() error = %v", err)
+	}
+	assertRecordURIs(t, records, []string{validURI})
+
+	count, err := repo.GetValidCollectionCountFilteredWithExternalLabelFilters(ctx, collection, nil, repositories.DIDFilter{}, repositories.ExternalLabelFilterSet{})
+	if err != nil {
+		t.Fatalf("GetValidCollectionCountFilteredWithExternalLabelFilters() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("valid count = %d, want 1", count)
+	}
+}
 
 func TestRecordsRepository_RecordTimelinePostgres(t *testing.T) {
 	exec := newPostgresRecordsTestExecutor(t)

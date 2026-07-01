@@ -20,6 +20,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 // loadLexiconsFromDir loads all lexicon JSON files from a directory tree.
@@ -1573,6 +1574,11 @@ func setupSchemaRecordsTestDB(t *testing.T, recordsToInsert []*repositories.Reco
 	db := testutil.SetupTestDB(t)
 	if err := db.Records.BatchInsert(ctx, recordsToInsert); err != nil {
 		t.Fatalf("setupSchemaRecordsTestDB: failed to insert records: %v", err)
+	}
+	for _, rec := range recordsToInsert {
+		if err := db.Records.UpdateValidationStatus(ctx, rec.URI, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("setupSchemaRecordsTestDB: failed to mark record valid: %v", err)
+		}
 	}
 
 	repos := &resolver.Repositories{
@@ -3184,6 +3190,9 @@ func TestCertifiedProfileDataMissingProfileReturnsNull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert record: %v", err)
 	}
+	if err := db.Records.UpdateValidationStatus(ctx, "at://did:plc:missing/com.example.certified.consumer/rkey1", validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+		t.Fatalf("mark record valid: %v", err)
+	}
 	repos := &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels}
 	ctx = resolver.WithRepositories(ctx, repos)
 
@@ -3273,6 +3282,11 @@ func setupCertifiedProfileGraphQLTestDB(t *testing.T) context.Context {
 		},
 	}); err != nil {
 		t.Fatalf("setupCertifiedProfileGraphQLTestDB: insert records: %v", err)
+	}
+	for _, uri := range []string{consumerURI, profileURI} {
+		if err := db.Records.UpdateValidationStatus(ctx, uri, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("setupCertifiedProfileGraphQLTestDB: mark valid: %v", err)
+		}
 	}
 
 	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
@@ -3380,6 +3394,11 @@ func setupExternalLabelsLargePageGraphQLTestDB(t *testing.T) (context.Context, m
 	if err := records.BatchInsert(ctx, allRecords); err != nil {
 		t.Fatalf("setupExternalLabelsLargePageGraphQLTestDB: failed to insert records: %v", err)
 	}
+	for _, rec := range allRecords {
+		if err := records.UpdateValidationStatus(ctx, rec.URI, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("setupExternalLabelsLargePageGraphQLTestDB: failed to mark valid: %v", err)
+		}
+	}
 
 	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
 	if err := externalLabels.PersistEvent(ctx, url, 1, labelInputs); err != nil {
@@ -3408,6 +3427,9 @@ func setupExternalLabelsGraphQLTestDB(t *testing.T) context.Context {
 		RKey:       "rkey1",
 	}}); err != nil {
 		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to insert record: %v", err)
+	}
+	if err := records.UpdateValidationStatus(ctx, recordURI, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to mark valid: %v", err)
 	}
 
 	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
@@ -3710,6 +3732,9 @@ func setupAuthorLabelsWhereTestDB(t *testing.T) (context.Context, map[string]str
 		if _, err := db.Executor.DB().ExecContext(ctx, "UPDATE record SET indexed_at = ? WHERE uri = ?", indexedAt, uri); err != nil {
 			t.Fatalf("setupAuthorLabelsWhereTestDB: set indexed_at %s: %v", rkey, err)
 		}
+		if err := records.UpdateValidationStatus(ctx, uri, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("setupAuthorLabelsWhereTestDB: mark valid %s: %v", rkey, err)
+		}
 	}
 
 	cidSpecificAccountLabel := "account-label-cid"
@@ -3749,6 +3774,9 @@ func setupExternalLabelsWhereTestDB(t *testing.T) (context.Context, map[string]s
 		indexedAt := fmt.Sprintf("2025-01-02T03:04:%02dZ", i+1)
 		if _, err := db.Executor.DB().ExecContext(ctx, "UPDATE record SET indexed_at = ? WHERE uri = ?", indexedAt, uri); err != nil {
 			t.Fatalf("setupExternalLabelsWhereTestDB: set indexed_at %s: %v", rkey, err)
+		}
+		if err := records.UpdateValidationStatus(ctx, uri, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("setupExternalLabelsWhereTestDB: mark valid %s: %v", rkey, err)
 		}
 	}
 
@@ -3955,5 +3983,82 @@ func TestRecordTimelineGraphQLValidationAndShape(t *testing.T) {
 	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: [] } }, first: 1) { edges { cursor } } }`, Context: context.Background()})
 	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "where.collection.in must include at least one") {
 		t.Fatalf("no-repository validation errors = %v, want validation before empty connection", result.Errors)
+	}
+}
+
+func TestRecordValidationGateGraphQLVisibility(t *testing.T) {
+	registry := lexicon.NewRegistry()
+	registry.Register(&lexicon.Lexicon{ID: "com.example.validation.record", Defs: lexicon.Defs{Main: &lexicon.RecordDef{Type: "record", Key: "tid", Properties: []lexicon.PropertyEntry{{Name: "text", Property: lexicon.Property{Type: lexicon.TypeString}}}}}})
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	validURI := "at://did:plc:test/com.example.validation.record/valid"
+	invalidURI := "at://did:plc:test/com.example.validation.record/invalid"
+	if err := db.Records.BatchInsert(ctx, []*repositories.Record{
+		{URI: validURI, CID: "cid-valid", DID: "did:plc:test", Collection: "com.example.validation.record", JSON: `{"text":"valid"}`, RKey: "valid"},
+		{URI: invalidURI, CID: "cid-invalid", DID: "did:plc:test", Collection: "com.example.validation.record", JSON: `{"text":"invalid"}`, RKey: "invalid"},
+	}); err != nil {
+		t.Fatalf("BatchInsert() error = %v", err)
+	}
+	if err := db.Records.UpdateValidationStatus(ctx, validURI, validation.StatusValid, "", "hash-current"); err != nil {
+		t.Fatalf("mark valid: %v", err)
+	}
+	if err := db.Records.UpdateValidationStatus(ctx, invalidURI, validation.StatusInvalid, "missing required field: name", "hash-current"); err != nil {
+		t.Fatalf("mark invalid: %v", err)
+	}
+	ctx = resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels})
+
+	query := `{
+		comExampleValidationRecord(first: 10) { totalCount edges { node { uri text } } }
+		invalid: comExampleValidationRecordByUri(uri: "` + invalidURI + `") { uri }
+		raw: records(collection: "com.example.validation.record", first: 10) {
+			totalCount
+			edges { node { uri validationStatus validationError lexiconHash } }
+		}
+	}`
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	typed := data["comExampleValidationRecord"].(map[string]interface{})
+	if got := typed["totalCount"]; got != 1 {
+		t.Fatalf("typed totalCount = %v, want 1", got)
+	}
+	typedEdges := typed["edges"].([]interface{})
+	if len(typedEdges) != 1 {
+		t.Fatalf("typed edges = %d, want 1", len(typedEdges))
+	}
+	if got := typedEdges[0].(map[string]interface{})["node"].(map[string]interface{})["uri"]; got != validURI {
+		t.Fatalf("typed URI = %v, want %s", got, validURI)
+	}
+	if data["invalid"] != nil {
+		t.Fatalf("invalid typed byUri = %#v, want nil", data["invalid"])
+	}
+
+	raw := data["raw"].(map[string]interface{})
+	if got := raw["totalCount"]; got != 2 {
+		t.Fatalf("raw totalCount = %v, want 2", got)
+	}
+	rawEdges := raw["edges"].([]interface{})
+	statuses := map[string]string{}
+	errorsByURI := map[string]string{}
+	for _, edge := range rawEdges {
+		node := edge.(map[string]interface{})["node"].(map[string]interface{})
+		uri := node["uri"].(string)
+		statuses[uri] = node["validationStatus"].(string)
+		if errText, ok := node["validationError"].(string); ok {
+			errorsByURI[uri] = errText
+		}
+	}
+	if statuses[validURI] != string(validation.StatusValid) || statuses[invalidURI] != string(validation.StatusInvalid) {
+		t.Fatalf("raw statuses = %#v", statuses)
+	}
+	if errorsByURI[invalidURI] != "missing required field: name" {
+		t.Fatalf("raw invalid validationError = %q", errorsByURI[invalidURI])
 	}
 }

@@ -9,14 +9,16 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 // IndexHandler implements EventHandler and stores events in the database.
 type IndexHandler struct {
-	records  *repositories.RecordsRepository
-	actors   *repositories.ActorsRepository
-	activity *repositories.IndexingActivityRepository // records indexing activity
-	pubsub   *subscription.PubSub
+	records   *repositories.RecordsRepository
+	actors    *repositories.ActorsRepository
+	activity  *repositories.IndexingActivityRepository // records indexing activity
+	pubsub    *subscription.PubSub
+	validator validation.RecordValidator
 }
 
 // NewIndexHandler creates a new IndexHandler.
@@ -25,12 +27,18 @@ func NewIndexHandler(
 	actors *repositories.ActorsRepository,
 	activity *repositories.IndexingActivityRepository,
 	pubsub *subscription.PubSub,
+	validators ...validation.RecordValidator,
 ) *IndexHandler {
+	var validator validation.RecordValidator
+	if len(validators) > 0 {
+		validator = validators[0]
+	}
 	return &IndexHandler{
-		records:  records,
-		actors:   actors,
-		activity: activity,
-		pubsub:   pubsub,
+		records:   records,
+		actors:    actors,
+		activity:  activity,
+		pubsub:    pubsub,
+		validator: validator,
 	}
 }
 
@@ -75,12 +83,21 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 			}
 		}
 
-		// Publish to GraphQL subscriptions
+		validationStatus := validation.StatusValid
+		if h.validator != nil {
+			result := h.validator.ValidateRecord(event.Collection, event.RKey, event.Record)
+			validationStatus = result.Status
+			if err := h.records.UpdateValidationStatus(ctx, uri, result.Status, result.Error, result.LexiconHash); err != nil {
+				return fmt.Errorf("failed to update record validation metadata: %w", err)
+			}
+		}
+
+		// Publish typed GraphQL subscriptions only for records that validated successfully.
 		eventType := subscription.EventCreate
 		if event.Action == ActionUpdate {
 			eventType = subscription.EventUpdate
 		}
-		if h.pubsub != nil {
+		if h.pubsub != nil && validationStatus == validation.StatusValid {
 			h.pubsub.PublishRecord(eventType, uri, event.CID, event.DID, event.Collection, event.Record)
 		}
 

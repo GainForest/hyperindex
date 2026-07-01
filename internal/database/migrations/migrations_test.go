@@ -77,6 +77,8 @@ func TestMigrations_Run(t *testing.T) {
 		"idx_external_label_active_lookup",
 		"idx_record_timeline_author_collection_created",
 		"idx_record_timeline_collection_created",
+		"idx_record_collection_validation",
+		"idx_record_collection_lexicon_hash",
 	}
 
 	for _, index := range expectedIndexes {
@@ -87,6 +89,25 @@ func TestMigrations_Run(t *testing.T) {
 		if err != nil {
 			t.Errorf("expected index %q to exist, but got error: %v", index, err)
 		}
+	}
+
+	assertSQLiteRecordValidationColumns(ctx, t, exec)
+
+	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO record (uri, cid, did, collection, json) VALUES (?, ?, ?, ?, ?)`,
+		"at://did:plc:test/com.example.record/default", "cid", "did:plc:test", "com.example.record", `{"name":"default"}`); err != nil {
+		t.Fatalf("failed to insert record for validation metadata default check: %v", err)
+	}
+	var defaultStatus string
+	var validationError, validatedAt, lexiconHash sql.NullString
+	if err := exec.DB().QueryRowContext(ctx, `SELECT validation_status, validation_error, validated_at, lexicon_hash FROM record WHERE uri = ?`,
+		"at://did:plc:test/com.example.record/default").Scan(&defaultStatus, &validationError, &validatedAt, &lexiconHash); err != nil {
+		t.Fatalf("failed to query validation metadata defaults: %v", err)
+	}
+	if defaultStatus != "unknown_schema" {
+		t.Fatalf("validation_status default = %q, want unknown_schema", defaultStatus)
+	}
+	if validationError.Valid || validatedAt.Valid || lexiconHash.Valid {
+		t.Fatalf("validation metadata nullable defaults = error:%v validatedAt:%v hash:%v, want all null", validationError.Valid, validatedAt.Valid, lexiconHash.Valid)
 	}
 }
 
@@ -206,7 +227,27 @@ func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "indexing_activity_pkey")
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_indexing_activity_timestamp")
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_indexing_activity_rkey")
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_collection_validation")
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_collection_lexicon_hash")
 	assertPostgresSequenceExists(ctx, t, exec, schemaName, "indexing_activity_id_seq")
+
+	assertPostgresRecordValidationColumns(ctx, t, exec, schemaName)
+	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO record (uri, cid, did, collection, json, rkey) VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+		"at://did:plc:test/com.example.record/default", "cid", "did:plc:test", "com.example.record", `{"name":"default"}`, "default"); err != nil {
+		t.Fatalf("failed to insert postgres record for validation metadata default check: %v", err)
+	}
+	var defaultStatus string
+	var validationError, validatedAt, lexiconHash sql.NullString
+	if err := exec.DB().QueryRowContext(ctx, `SELECT validation_status, validation_error, validated_at::text, lexicon_hash FROM record WHERE uri = $1`,
+		"at://did:plc:test/com.example.record/default").Scan(&defaultStatus, &validationError, &validatedAt, &lexiconHash); err != nil {
+		t.Fatalf("failed to query postgres validation metadata defaults: %v", err)
+	}
+	if defaultStatus != "unknown_schema" {
+		t.Fatalf("postgres validation_status default = %q, want unknown_schema", defaultStatus)
+	}
+	if validationError.Valid || validatedAt.Valid || lexiconHash.Valid {
+		t.Fatalf("postgres validation metadata nullable defaults = error:%v validatedAt:%v hash:%v, want all null", validationError.Valid, validatedAt.Valid, lexiconHash.Valid)
+	}
 }
 
 func TestMigrations_BackfillsRecordCreatedAtPostgres(t *testing.T) {
@@ -376,6 +417,70 @@ func TestMigrations_Rollback(t *testing.T) {
 
 	if countAfter != countBefore-1 {
 		t.Errorf("expected %d migrations after rollback, got %d", countBefore-1, countAfter)
+	}
+}
+
+func assertSQLiteRecordValidationColumns(ctx context.Context, t *testing.T, exec *sqlite.Executor) {
+	t.Helper()
+
+	rows, err := exec.DB().QueryContext(ctx, "PRAGMA table_info(record)")
+	if err != nil {
+		t.Fatalf("failed to inspect sqlite record columns: %v", err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]string)
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var primaryKey int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("failed to scan sqlite column metadata: %v", err)
+		}
+		columns[name] = columnType
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("failed to iterate sqlite column metadata: %v", err)
+	}
+
+	for _, column := range []string{"validation_status", "validation_error", "validated_at", "lexicon_hash"} {
+		if _, ok := columns[column]; !ok {
+			t.Fatalf("sqlite record column %q missing", column)
+		}
+	}
+}
+
+func assertPostgresRecordValidationColumns(ctx context.Context, t *testing.T, exec *postgres.Executor, schemaName string) {
+	t.Helper()
+
+	rows, err := exec.DB().QueryContext(ctx, `
+		SELECT column_name
+		FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = 'record'
+		  AND column_name IN ('validation_status', 'validation_error', 'validated_at', 'lexicon_hash')`, schemaName)
+	if err != nil {
+		t.Fatalf("failed to inspect postgres record validation columns: %v", err)
+	}
+	defer rows.Close()
+
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("failed to scan postgres column metadata: %v", err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("failed to iterate postgres column metadata: %v", err)
+	}
+
+	for _, column := range []string{"validation_status", "validation_error", "validated_at", "lexicon_hash"} {
+		if !columns[column] {
+			t.Fatalf("postgres record column %q missing", column)
+		}
 	}
 }
 

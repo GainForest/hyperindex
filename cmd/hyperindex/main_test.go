@@ -6,14 +6,19 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/GainForest/hyperindex/internal/buildinfo"
 	"github.com/GainForest/hyperindex/internal/config"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 func TestRootEndpointReturnsBuildInfoVersion(t *testing.T) {
@@ -296,6 +301,91 @@ func TestStatsUsesPersistedLabelerURLOverride(t *testing.T) {
 	diagnostic := labelers[0].(map[string]any)
 	if diagnostic["url"] != persistedURL {
 		t.Fatalf("url = %v, want persisted override %s", diagnostic["url"], persistedURL)
+	}
+}
+
+func TestSetupGraphQLHashesSavedLexiconsAndClassifiesBeforeServing(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.SetupTestDB(t)
+	lexiconDir := t.TempDir()
+	writeTestLexiconFile(t, lexiconDir, "com.example.record.json", setupGraphQLTestLexicon)
+
+	uri := "at://did:plc:test/com.example.record/one"
+	if _, err := db.Records.Insert(ctx, uri, "cid", "did:plc:test", "com.example.record", `{"name":"ok"}`); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+
+	svc := labelerTestServices(db)
+	collections, err := setupGraphQL(chi.NewRouter(), &config.Config{
+		ExternalBaseURL: "https://example.com",
+		LexiconDir:      lexiconDir,
+	}, svc, nil, nil)
+	if err != nil {
+		t.Fatalf("setupGraphQL() error = %v", err)
+	}
+	if len(collections) != 0 {
+		t.Fatalf("collections = %v, want none without JetstreamCollections or DB lexicons", collections)
+	}
+	wantHash := validation.HashLexiconJSON([]byte(setupGraphQLTestLexicon))
+	if gotHash, ok := svc.validator.LexiconHash("com.example.record"); !ok || gotHash != wantHash {
+		t.Fatalf("validator hash = %q, %v; want %q, true", gotHash, ok, wantHash)
+	}
+
+	rec, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI() error = %v", err)
+	}
+	if rec.ValidationStatus != validation.StatusValid {
+		t.Fatalf("ValidationStatus = %q, want %q", rec.ValidationStatus, validation.StatusValid)
+	}
+	if rec.LexiconHash != wantHash {
+		t.Fatalf("LexiconHash = %q, want %q", rec.LexiconHash, wantHash)
+	}
+	if rec.ValidatedAt == nil {
+		t.Fatal("ValidatedAt is nil, want startup classification timestamp")
+	}
+}
+
+func TestSetupGraphQLFailsLoudlyOnCorruptSavedLexicon(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	lexiconDir := t.TempDir()
+	writeTestLexiconFile(t, lexiconDir, "broken.json", `{"id":"com.example.broken","defs":`)
+
+	_, err := setupGraphQL(chi.NewRouter(), &config.Config{
+		ExternalBaseURL: "https://example.com",
+		LexiconDir:      lexiconDir,
+	}, labelerTestServices(db), nil, nil)
+	if err == nil {
+		t.Fatal("setupGraphQL() error = nil, want corrupt lexicon error")
+	}
+	if !strings.Contains(err.Error(), "failed to load lexicons from directory") {
+		t.Fatalf("setupGraphQL() error = %v, want directory load failure", err)
+	}
+}
+
+const setupGraphQLTestLexicon = `{
+  "lexicon": 1,
+  "id": "com.example.record",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {"type": "string"}
+        }
+      }
+    }
+  }
+}`
+
+func writeTestLexiconFile(t *testing.T, dir string, name string, body string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
 }
 
