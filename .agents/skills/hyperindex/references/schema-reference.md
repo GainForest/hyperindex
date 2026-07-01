@@ -103,7 +103,7 @@ The generic `records(collection: ...)` query returns all raw records for the col
 | `validationStatus` | `String!` | One of `valid`, `invalid`, `unknown_schema`, or `validation_error`. |
 | `validationError` | `String` | Explanation of the failed or hidden validation state, when available. |
 | `validatedAt` | `String` | Timestamp when Hyperindex last classified the record against a saved Lexicon. |
-| `lexiconHash` | `String` | SHA-256 hash of the exact saved Lexicon JSON bytes used for classification. |
+| `lexiconHash` | `String` | SHA-256 validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used for classification. |
 
 Public typed GraphQL schema shape is generated at startup. Lexicon upload/register/delete updates validation state immediately, but newly added, removed, or structurally changed typed fields require a Hyperindex restart or redeploy before `/graphql` exposes the new schema shape.
 

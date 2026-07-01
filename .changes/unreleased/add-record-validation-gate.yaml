@@ -1,4 +1,4 @@
 kind: changed
-body: Add a record validation gate that keeps raw indexed records available while typed GraphQL only serves records that validate against saved Lexicons. Generic record queries expose validation metadata for debugging, and operators should restart or redeploy after Lexicon schema changes to refresh the generated typed GraphQL schema shape.
+body: Add a record validation gate that keeps raw indexed records available while typed GraphQL only serves records that validate against saved Lexicons, including record key rules and transitive referenced Lexicon changes. Generic record queries expose validation metadata for debugging, and operators should restart or redeploy after Lexicon schema changes to refresh the generated typed GraphQL schema shape.
 custom:
   Affects: user

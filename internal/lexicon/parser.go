@@ -43,20 +43,22 @@ type rawObjectDef struct {
 
 // rawProperty is used to parse property definitions.
 type rawProperty struct {
-	Type        string          `json:"type"`
-	Format      string          `json:"format,omitempty"`
-	Ref         string          `json:"ref,omitempty"`
-	Refs        []string        `json:"refs,omitempty"`
-	Items       json.RawMessage `json:"items,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Default     any             `json:"default,omitempty"`
-	Minimum     *float64        `json:"minimum,omitempty"`
-	Maximum     *float64        `json:"maximum,omitempty"`
-	MinLength   *int            `json:"minLength,omitempty"`
-	MaxLength   *int            `json:"maxLength,omitempty"`
-	Enum        []string        `json:"enum,omitempty"`
-	Const       string          `json:"const,omitempty"`
-	KnownValues []string        `json:"knownValues,omitempty"`
+	Type        string                     `json:"type"`
+	Format      string                     `json:"format,omitempty"`
+	Ref         string                     `json:"ref,omitempty"`
+	Refs        []string                   `json:"refs,omitempty"`
+	Items       json.RawMessage            `json:"items,omitempty"`
+	Required    []string                   `json:"required,omitempty"`
+	Properties  map[string]json.RawMessage `json:"properties,omitempty"`
+	Description string                     `json:"description,omitempty"`
+	Default     any                        `json:"default,omitempty"`
+	Minimum     *float64                   `json:"minimum,omitempty"`
+	Maximum     *float64                   `json:"maximum,omitempty"`
+	MinLength   *int                       `json:"minLength,omitempty"`
+	MaxLength   *int                       `json:"maxLength,omitempty"`
+	Enum        []string                   `json:"enum,omitempty"`
+	Const       string                     `json:"const,omitempty"`
+	KnownValues []string                   `json:"knownValues,omitempty"`
 }
 
 // rawArrayItems is used to parse array item definitions.
@@ -285,6 +287,14 @@ func parseProperty(data json.RawMessage) (*Property, error) {
 			return nil, fmt.Errorf("failed to parse items: %w", err)
 		}
 		prop.Items = items
+	}
+
+	if raw.Type == TypeObject && len(raw.Properties) > 0 {
+		props, err := parseProperties(raw.Properties, raw.Required)
+		if err != nil {
+			return nil, err
+		}
+		prop.InlineObject = &ObjectDef{Type: TypeObject, RequiredFields: raw.Required, Properties: props}
 	}
 
 	return prop, nil

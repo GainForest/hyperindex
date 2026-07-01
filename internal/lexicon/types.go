@@ -120,6 +120,11 @@ type Property struct {
 
 	// KnownValues lists known values (for open enums)
 	KnownValues []string `json:"knownValues,omitempty"`
+
+	// InlineObject carries the nested schema for properties declared directly as
+	// type object instead of by reference. It is nil for non-object properties and
+	// for object properties without an inline schema.
+	InlineObject *ObjectDef `json:"-"`
 }
 
 // ArrayItems defines the type of items in an array property.

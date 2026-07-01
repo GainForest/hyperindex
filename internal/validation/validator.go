@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 
@@ -56,15 +58,29 @@ func HashLexiconJSON(raw []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// LexiconHash returns the exact-byte saved lexicon hash for a collection.
+// LexiconHash returns the validation fingerprint for a collection. The
+// fingerprint includes the collection lexicon and every saved lexicon reached
+// through ref or union properties, so changes to helper definitions make
+// previously validated records stale.
 func (v *Validator) LexiconHash(collection string) (string, bool) {
 	if v == nil {
 		return "", false
 	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	hash, ok := v.hashes[collection]
-	return hash, ok
+	if _, ok := v.hashes[collection]; !ok {
+		return "", false
+	}
+	ids := v.referencedLexiconIDs(collection)
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		hash, ok := v.hashes[id]
+		if !ok {
+			continue
+		}
+		parts = append(parts, id+"="+hash)
+	}
+	return HashLexiconJSON([]byte(strings.Join(parts, "\n"))), true
 }
 
 // SetLexiconHash records the current exact-byte saved lexicon hash for a
@@ -106,6 +122,10 @@ func (v *Validator) ValidateRecord(collection, rkey string, rawJSON []byte) Resu
 	}
 	if record == nil {
 		return Result{Status: StatusInvalid, Error: "record JSON must be an object", LexiconHash: hash}
+	}
+
+	if err := validateRecordKey(def.Key, rkey); err != nil {
+		return Result{Status: StatusInvalid, Error: err.Error(), LexiconHash: hash}
 	}
 
 	if err := v.validateRecordObject(collection, def, record, "record"); err != nil {
@@ -205,8 +225,12 @@ func (v *Validator) validateProperty(collection string, prop lexicon.Property, v
 	case lexicon.TypeUnion:
 		return v.validateUnion(collection, prop.Refs, value, path)
 	case lexicon.TypeObject:
-		if _, ok := value.(map[string]any); !ok {
+		obj, ok := value.(map[string]any)
+		if !ok {
 			return typeError(path, "object", value)
+		}
+		if prop.InlineObject != nil {
+			return v.validateObject(collection, prop.InlineObject, obj, path)
 		}
 	case lexicon.TypeBlob, lexicon.TypeCIDLink:
 		if _, ok := value.(map[string]any); !ok {
@@ -275,6 +299,96 @@ func (v *Validator) validateResolvedRef(collection string, resolved any, obj map
 		return v.validateRecordObject(collection, def, obj, path)
 	default:
 		return fmt.Errorf("field %s resolved to unsupported lexicon definition", path)
+	}
+}
+
+var tidRecordKeyPattern = regexp.MustCompile(`^[234567abcdefghijklmnopqrstuvwxyz]{13}$`)
+
+func validateRecordKey(pattern, rkey string) error {
+	switch pattern {
+	case "", "any":
+		return nil
+	case "literal:self":
+		if rkey != "self" {
+			return fmt.Errorf("record key expected literal self, got %q", rkey)
+		}
+	case "tid":
+		if !tidRecordKeyPattern.MatchString(rkey) {
+			return fmt.Errorf("record key expected tid, got %q", rkey)
+		}
+	default:
+		return nil
+	}
+	return nil
+}
+
+func (v *Validator) referencedLexiconIDs(collection string) []string {
+	seen := map[string]bool{collection: true}
+	v.collectRecordRefLexicons(collection, collection, seen)
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func (v *Validator) collectRecordRefLexicons(collection, refContext string, seen map[string]bool) {
+	def, ok := v.registry.GetRecordDef(collection)
+	if !ok || def == nil {
+		return
+	}
+	v.collectPropertyRefLexicons(def.Properties, refContext, seen)
+}
+
+func (v *Validator) collectObjectRefLexicons(def *lexicon.ObjectDef, refContext string, seen map[string]bool) {
+	if def == nil {
+		return
+	}
+	v.collectPropertyRefLexicons(def.Properties, refContext, seen)
+}
+
+func (v *Validator) collectPropertyRefLexicons(properties []lexicon.PropertyEntry, refContext string, seen map[string]bool) {
+	for _, entry := range properties {
+		v.collectPropertyRefLexicon(entry.Property, refContext, seen)
+	}
+}
+
+func (v *Validator) collectPropertyRefLexicon(prop lexicon.Property, refContext string, seen map[string]bool) {
+	if prop.InlineObject != nil {
+		v.collectObjectRefLexicons(prop.InlineObject, refContext, seen)
+	}
+	if prop.Items != nil {
+		v.collectArrayItemRefLexicon(*prop.Items, refContext, seen)
+	}
+	for _, ref := range prop.GetRefs() {
+		v.collectResolvedRefLexicon(ref, refContext, seen)
+	}
+}
+
+func (v *Validator) collectArrayItemRefLexicon(item lexicon.ArrayItems, refContext string, seen map[string]bool) {
+	prop := lexicon.Property{Type: item.Type, Ref: item.Ref, Refs: item.Refs}
+	v.collectPropertyRefLexicon(prop, refContext, seen)
+}
+
+func (v *Validator) collectResolvedRefLexicon(ref, refContext string, seen map[string]bool) {
+	resolvedRef := lexicon.ResolveLocalRef(ref, refContext)
+	lexiconID := strings.SplitN(resolvedRef, "#", 2)[0]
+	alreadySeen := seen[lexiconID]
+	seen[lexiconID] = true
+	if alreadySeen {
+		return
+	}
+	resolved, ok := v.registry.ResolveRef(ref, refContext)
+	if !ok {
+		return
+	}
+	refContext = lexiconID
+	if obj, ok := resolved.(*lexicon.ObjectDef); ok {
+		v.collectObjectRefLexicons(obj, refContext, seen)
+	}
+	if rec, ok := resolved.(*lexicon.RecordDef); ok {
+		v.collectPropertyRefLexicons(rec.Properties, refContext, seen)
 	}
 }
 

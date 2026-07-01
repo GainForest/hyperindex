@@ -39,7 +39,7 @@ func TestDeleteLexiconMarksCollectionUnknownSchema(t *testing.T) {
 	if err := db.Lexicons.Upsert(ctx, "com.example.record", validationGateTestLexicon); err != nil {
 		t.Fatalf("Upsert lexicon error = %v", err)
 	}
-	uri := "at://did:plc:test/com.example.record/one"
+	uri := "at://did:plc:test/com.example.record/3jui7kd54zh2y"
 	if _, err := db.Records.Insert(ctx, uri, "cid", "did:plc:test", "com.example.record", `{"name":"ok"}`); err != nil {
 		t.Fatalf("Insert record error = %v", err)
 	}
@@ -92,7 +92,7 @@ func TestDeleteLexiconMarksCollectionUnknownSchema(t *testing.T) {
 func TestUploadLexiconsUpdatesValidationAndSchedulesRefresh(t *testing.T) {
 	ctx := context.Background()
 	db := testutil.SetupTestDB(t)
-	uri := "at://did:plc:test/com.example.record/one"
+	uri := "at://did:plc:test/com.example.record/3jui7kd54zh2y"
 	if _, err := db.Records.Insert(ctx, uri, "cid", "did:plc:test", "com.example.record", `{"name":"ok"}`); err != nil {
 		t.Fatalf("Insert record error = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestUploadLexiconsUpdatesValidationAndSchedulesRefresh(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("UploadLexicons count = %d, want 1", count)
 	}
-	wantHash := validation.HashLexiconJSON([]byte(validationGateTestLexicon))
+	wantHash := validation.HashLexiconJSON([]byte("com.example.record=" + validation.HashLexiconJSON([]byte(validationGateTestLexicon))))
 	if gotHash, ok := validator.LexiconHash("com.example.record"); !ok || gotHash != wantHash {
 		t.Fatalf("validator hash = %q, %v; want %q, true", gotHash, ok, wantHash)
 	}
@@ -123,7 +123,7 @@ func TestUploadLexiconsUpdatesValidationAndSchedulesRefresh(t *testing.T) {
 func TestRegisterLexiconUpdatesValidationAndSchedulesRefresh(t *testing.T) {
 	ctx := context.Background()
 	db := testutil.SetupTestDB(t)
-	uri := "at://did:plc:test/com.example.record/one"
+	uri := "at://did:plc:test/com.example.record/3jui7kd54zh2y"
 	if _, err := db.Records.Insert(ctx, uri, "cid", "did:plc:test", "com.example.record", `{"name":"ok"}`); err != nil {
 		t.Fatalf("Insert record error = %v", err)
 	}
@@ -146,7 +146,7 @@ func TestRegisterLexiconUpdatesValidationAndSchedulesRefresh(t *testing.T) {
 	if result["id"] != "com.example.record" {
 		t.Fatalf("registered id = %v, want com.example.record", result["id"])
 	}
-	wantHash := validation.HashLexiconJSON([]byte(validationGateTestLexicon))
+	wantHash := validation.HashLexiconJSON([]byte("com.example.record=" + validation.HashLexiconJSON([]byte(validationGateTestLexicon))))
 	if gotHash, ok := validator.LexiconHash("com.example.record"); !ok || gotHash != wantHash {
 		t.Fatalf("validator hash = %q, %v; want %q, true", gotHash, ok, wantHash)
 	}

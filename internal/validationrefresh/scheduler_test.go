@@ -38,8 +38,8 @@ func TestRefreshCollectionClassifiesRecords(t *testing.T) {
 	}
 	scheduler := validationrefresh.NewScheduler(db.Records, validator)
 
-	validURI := "at://did:plc:test/com.example.record/valid"
-	invalidURI := "at://did:plc:test/com.example.record/invalid"
+	validURI := "at://did:plc:test/com.example.record/3jui7kd54zh2y"
+	invalidURI := "at://did:plc:test/com.example.record/3jui7kd54zh3z"
 	if _, err := db.Records.Insert(ctx, validURI, "cid-valid", "did:plc:test", "com.example.record", `{"name":"ok"}`); err != nil {
 		t.Fatalf("Insert(valid) error = %v", err)
 	}

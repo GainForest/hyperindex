@@ -1096,7 +1096,8 @@ func loadLexiconsFromDir(dir string, registry *lexicon.Registry) (map[string]str
 
 		lex, parseErr := lexicon.ParseBytes(data)
 		if parseErr != nil {
-			return fmt.Errorf("failed to parse lexicon file %s: %w", path, parseErr)
+			slog.Warn("Skipping non-lexicon JSON file", "path", path, "error", parseErr)
+			return nil
 		}
 
 		registry.Register(lex)

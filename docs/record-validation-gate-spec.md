@@ -50,7 +50,7 @@ CREATE INDEX idx_record_collection_lexicon_hash
   ON record(collection, lexicon_hash);
 ```
 
-`lexicon_hash` is a fingerprint of the exact saved lexicon JSON bytes used to classify the record, for example `sha256(schema_json)`. Do not canonicalize the JSON before hashing in the first implementation. If the saved lexicon bytes change, records with an old hash are stale and should be classified against the current schema.
+`lexicon_hash` is a validation fingerprint of the exact saved lexicon JSON bytes used to classify the record. It includes the collection lexicon and every saved lexicon reached through transitive `ref` or `union` properties. If any saved lexicon in that dependency graph changes, records with an old hash are stale and should be classified against the current schema graph.
 
 ## Validation statuses
 
@@ -230,7 +230,7 @@ Public typed GraphQL schema shape is rebuilt on process restart, not hot-reloade
 When a lexicon is uploaded or registered:
 
 1. Save the lexicon JSON to the lexicons table.
-2. Compute the current `lexicon_hash` for that saved schema.
+2. Compute the current `lexicon_hash` for that saved schema and its transitive referenced lexicons.
 3. Refresh the in-memory lexicon registry used by validation classification.
 4. Classify existing records for the lexicon's collection whose validation result is missing, invalid, unknown, errored, or stale.
 
@@ -372,7 +372,7 @@ Progress logs should include at least:
 - unknown/error count
 - elapsed time
 
-If startup classification fails, startup should fail loudly instead of serving a typed API backed by unclassified records.
+If startup classification fails, startup should fail loudly instead of serving a typed API backed by unclassified records. This fail-fast behavior is intentional: production consumers already depend on typed GraphQL responses, so Hyperindex should prefer not starting over serving typed fields whose visibility was computed from stale validation metadata.
 
 ## Rollout plan
 
@@ -413,4 +413,4 @@ Per repository policy, database-related tests should cover both SQLite and Postg
 - Typed single-record queries should return `null` for invalid, unknown-schema, or validation-error rows. They should not return a GraphQL error for hidden validation states.
 - Generic/raw GraphQL should expose validation metadata in the first implementation: `validationStatus`, `validationError`, `validatedAt`, and `lexiconHash`.
 - Startup classification for existing saved lexicons should run synchronously before GraphQL starts serving, with batched progress logs. Validation refresh after upload/register should run in a goroutine. Lexicon delete should remain a synchronous bulk update to `unknown_schema`.
-- `lexicon_hash` must hash the exact saved JSON bytes from the lexicon repository. Canonical JSON hashing is intentionally out of scope for the first implementation because formatting-only refreshes are acceptable and exact-byte hashing is simpler to reason about.
+- `lexicon_hash` must hash the exact saved JSON bytes from the lexicon repository for the collection lexicon and transitive referenced lexicons. Canonical JSON hashing is intentionally out of scope for the first implementation because formatting-only refreshes are acceptable and exact-byte hashing is simpler to reason about.

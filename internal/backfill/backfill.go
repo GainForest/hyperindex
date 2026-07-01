@@ -831,7 +831,7 @@ func (b *Backfiller) updateRecordValidationMetadata(ctx context.Context, uri, co
 	}
 	result := b.validator.ValidateRecord(collection, rkey, rawJSON)
 	if err := b.recordsRepo.UpdateValidationStatus(ctx, uri, result.Status, result.Error, result.LexiconHash); err != nil {
-		slog.Debug("[backfill] Failed to update validation metadata", "uri", uri, "error", err)
+		slog.Warn("[backfill] Failed to update validation metadata", "uri", uri, "collection", collection, "rkey", rkey, "status", result.Status, "error", err)
 		atomic.AddInt64(&b.stats.Errors, 1)
 	}
 }

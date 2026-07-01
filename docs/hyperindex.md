@@ -87,7 +87,7 @@ Use the generic `records(collection: ...)` query when you need raw JSON, debuggi
 | `validationStatus` | `valid`, `invalid`, `unknown_schema`, or `validation_error` |
 | `validationError` | Explanation of why the record is hidden from typed GraphQL, when available |
 | `validatedAt` | Timestamp of the most recent local validation classification |
-| `lexiconHash` | SHA-256 hash of the exact saved Lexicon JSON bytes used for classification |
+| `lexiconHash` | SHA-256 validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used for classification |
 
 Validation is local-only. During normal ingestion Hyperindex validates against its saved Lexicons and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources.
 

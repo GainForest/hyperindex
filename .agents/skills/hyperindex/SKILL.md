@@ -187,7 +187,7 @@ query RawRecords($collection: String!) {
 }
 ```
 
-Validation is local-only during ingestion. Hyperindex checks records against its saved Lexicons and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources while classifying records.
+Validation is local-only during ingestion. Hyperindex checks records against its saved Lexicons and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources while classifying records. `lexiconHash` is a validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used during classification.
 
 Lexicon upload/register/delete updates validation state immediately, but public typed GraphQL schema shape is generated at startup. After a Lexicon change, restart or redeploy Hyperindex before expecting `/graphql` introspection or typed fields to reflect newly added, removed, or structurally changed collections.
 
