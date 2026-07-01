@@ -6,6 +6,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/graphql/schema"
 	"github.com/GainForest/hyperindex/internal/lexicon"
+	"github.com/GainForest/hyperindex/internal/validation"
+	"github.com/GainForest/hyperindex/internal/validationrefresh"
 )
 
 // testLexiconJSON is a minimal lexicon with scalar fields and complex fields
@@ -121,6 +124,7 @@ func setupFilterTestEnv(t *testing.T) *filterTestEnv {
 	if err := db.Records.BatchInsert(ctx, records); err != nil {
 		t.Fatalf("Failed to insert test records: %v", err)
 	}
+	markRecordsValid(t, ctx, db, records)
 
 	// Set deterministic indexed_at times so ordering tests are reliable
 	rawDB := db.Executor.DB()
@@ -242,6 +246,88 @@ func assertEdgeURIs(t *testing.T, edges []interface{}, wantURIs []string) {
 }
 
 // TestFilterSort_FilterByStringEq tests filtering by string equality.
+func markRecordsValid(t *testing.T, ctx context.Context, db *testDB, records []*repositories.Record) {
+	t.Helper()
+	for _, rec := range records {
+		if err := db.Records.UpdateValidationStatus(ctx, rec.URI, validation.StatusValid, "", "integration-test-valid"); err != nil {
+			t.Fatalf("Failed to mark %s valid: %v", rec.URI, err)
+		}
+	}
+}
+
+func TestTypedGraphQLUsesValidationRefreshForCertifiedProfile(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	rawLexicon, err := os.ReadFile("../../testdata/lexicons/app/certified/actor/profile.json")
+	if err != nil {
+		t.Fatalf("Read profile lexicon: %v", err)
+	}
+	registry := lexicon.NewRegistry()
+	parsed, err := lexicon.ParseBytes(rawLexicon)
+	if err != nil {
+		t.Fatalf("ParseBytes(profile) error = %v", err)
+	}
+	registry.Register(parsed)
+	validator, err := validation.NewValidatorFromLexiconBytes(map[string][]byte{
+		"app.certified.actor.profile": rawLexicon,
+	})
+	if err != nil {
+		t.Fatalf("NewValidatorFromLexiconBytes() error = %v", err)
+	}
+
+	validURI := "at://did:plc:valid/app.certified.actor.profile/self"
+	invalidURI := "at://did:plc:invalid/app.certified.actor.profile/self"
+	records := []*repositories.Record{
+		{URI: validURI, CID: "cid-valid", DID: "did:plc:valid", Collection: "app.certified.actor.profile", RKey: "self", JSON: `{"displayName":"Valid Profile","createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: invalidURI, CID: "cid-invalid", DID: "did:plc:invalid", Collection: "app.certified.actor.profile", RKey: "self", JSON: `{"displayName":"Wrong Created At","createdAt":123}`},
+	}
+	for _, rec := range records {
+		if _, err := db.Records.Insert(ctx, rec.URI, rec.CID, rec.DID, rec.Collection, rec.JSON); err != nil {
+			t.Fatalf("Insert(%s) error = %v", rec.URI, err)
+		}
+	}
+
+	scheduler := validationrefresh.NewScheduler(db.Records, validator)
+	if err := scheduler.RefreshCollection(ctx, "app.certified.actor.profile", "integration_test"); err != nil {
+		t.Fatalf("RefreshCollection() error = %v", err)
+	}
+
+	invalid, err := db.Records.GetByURI(ctx, invalidURI)
+	if err != nil {
+		t.Fatalf("GetByURI(invalid) error = %v", err)
+	}
+	if invalid.ValidationStatus != validation.StatusInvalid {
+		t.Fatalf("invalid status = %q, want %q", invalid.ValidationStatus, validation.StatusInvalid)
+	}
+	builder := schema.NewBuilder(registry)
+	gqlSchema, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	repoCtx := resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records, Actors: db.Actors, Lexicons: db.Lexicons})
+	result := graphql.Do(graphql.Params{
+		Schema: *gqlSchema,
+		RequestString: `{
+			appCertifiedActorProfile(first: 10) {
+				edges { node { uri displayName } }
+			}
+		}`,
+		Context: repoCtx,
+	})
+	edges := getEdges(t, result, "appCertifiedActorProfile")
+	if len(edges) != 1 {
+		t.Fatalf("edge count = %d, want 1", len(edges))
+	}
+	if got := getNodeField(t, edges[0], "uri"); got != validURI {
+		t.Fatalf("uri = %v, want %s", got, validURI)
+	}
+	if got := getNodeField(t, edges[0], "displayName"); got != "Valid Profile" {
+		t.Fatalf("displayName = %v, want Valid Profile", got)
+	}
+
+}
+
 func TestFilterSort_FilterByStringEq(t *testing.T) {
 	env := setupFilterTestEnv(t)
 
@@ -430,6 +516,7 @@ func TestFilterSort_FilterByComplexPresence(t *testing.T) {
 	if err := env.db.Records.BatchInsert(env.ctx, presenceRecords); err != nil {
 		t.Fatalf("Failed to insert presence test records: %v", err)
 	}
+	markRecordsValid(t, env.ctx, env.db, presenceRecords)
 
 	tests := []struct {
 		name     string
@@ -1202,6 +1289,7 @@ func TestFilterSort_IndependentTests(t *testing.T) {
 	if err := env1.db.Records.BatchInsert(env1.ctx, newRecord); err != nil {
 		t.Fatalf("Failed to insert extra record: %v", err)
 	}
+	markRecordsValid(t, env1.ctx, env1.db, newRecord)
 
 	result1After := env1.runQuery(query)
 	result2After := env2.runQuery(query)

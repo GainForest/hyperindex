@@ -10,6 +10,7 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 // ConsumerConfig configures the Jetstream consumer.
@@ -37,7 +38,8 @@ type Consumer struct {
 	activityRepo *repositories.IndexingActivityRepository
 
 	// Pub/sub for GraphQL subscriptions
-	pubsub *subscription.PubSub
+	pubsub    *subscription.PubSub
+	validator validation.RecordValidator
 
 	// Cursor tracking
 	cursor     int64
@@ -73,9 +75,15 @@ func NewConsumer(
 	configRepo *repositories.ConfigRepository,
 	activityRepo *repositories.IndexingActivityRepository,
 	pubsub *subscription.PubSub,
+	validators ...validation.RecordValidator,
 ) *Consumer {
 	if config.CursorFlushInterval == 0 {
 		config.CursorFlushInterval = 5 * time.Second
+	}
+
+	var validator validation.RecordValidator
+	if len(validators) > 0 {
+		validator = validators[0]
 	}
 
 	return &Consumer{
@@ -85,6 +93,7 @@ func NewConsumer(
 		configRepo:   configRepo,
 		activityRepo: activityRepo,
 		pubsub:       pubsub,
+		validator:    validator,
 		cursorDone:   make(chan struct{}),
 		statsStart:   time.Now(),
 	}
@@ -369,12 +378,25 @@ func (c *Consumer) handleCommit(ctx context.Context, event *Event) error {
 		}
 		c.statsMu.Unlock()
 
-		// Publish to GraphQL subscriptions
+		validationStatus := validation.StatusValid
+		if c.validator != nil {
+			result := c.validator.ValidateRecord(commit.Collection, commit.RKey, commit.Record)
+			validationStatus = result.Status
+			if err := c.recordsRepo.UpdateValidationStatus(ctx, uri, result.Status, result.Error, result.LexiconHash); err != nil {
+				errMsg := err.Error()
+				updateActivityStatus("error", &errMsg)
+				return fmt.Errorf("failed to update record validation metadata: %w", err)
+			}
+		}
+
+		// Publish typed GraphQL subscriptions only for records that validated successfully.
 		eventType := subscription.EventCreate
 		if commit.Operation == OpUpdate {
 			eventType = subscription.EventUpdate
 		}
-		c.pubsub.PublishRecord(eventType, uri, commit.CID, event.DID, commit.Collection, commit.Record)
+		if c.pubsub != nil && validationStatus == validation.StatusValid {
+			c.pubsub.PublishRecord(eventType, uri, commit.CID, event.DID, commit.Collection, commit.Record)
+		}
 
 		updateActivityStatus("success", nil)
 

@@ -78,7 +78,20 @@ Hyperindex dynamically builds its public GraphQL schema from AT Protocol Lexicon
 | `app.certified.actor.profile` | `appCertifiedActorProfile` | `appCertifiedActorProfileByUri` |
 | `app.certified.link.evm` | `appCertifiedLinkEvm` | `appCertifiedLinkEvmByUri` |
 
-Use typed queries first. They provide typed fields, filters, sorting, and pagination. Use the generic `records(collection: ...)` query when you need raw JSON or when a typed query is not available.
+Use typed queries first. They provide typed fields, filters, sorting, and pagination. Typed collection queries only expose records that Hyperindex has validated against the saved Lexicon used to generate the running schema. If an observed record is malformed for that saved schema, or if Hyperindex has no saved Lexicon for its collection, it is hidden from typed collection list queries, typed `ByUri` queries, typed counts, and typed create/update subscription payloads.
+
+Use the generic `records(collection: ...)` query when you need raw JSON, debugging visibility, or access to records that are hidden from typed GraphQL. Hyperindex stores every observed record in the raw record table even when validation fails or no saved Lexicon is available. Generic record results include validation metadata:
+
+| Field | Meaning |
+| --- | --- |
+| `validationStatus` | `valid`, `invalid`, `unknown_schema`, or `validation_error` |
+| `validationError` | Explanation of why the record is hidden from typed GraphQL, when available |
+| `validatedAt` | Timestamp of the most recent local validation classification |
+| `lexiconHash` | SHA-256 validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used for classification |
+
+Validation is local-only. During normal ingestion Hyperindex validates against its saved Lexicons and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources.
+
+Public typed GraphQL schema shape is generated at startup. Uploading, registering, or deleting a Lexicon updates validation state immediately, but newly added, removed, or structurally changed typed GraphQL fields require a Hyperindex restart or redeploy before `/graphql` exposes the new schema shape.
 
 ### Relationships between records
 

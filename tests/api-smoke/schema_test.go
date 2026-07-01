@@ -289,6 +289,12 @@ func TestSchemaExposesPublicSmokeQueryFields(t *testing.T) {
 	requireSchemaArgument(t, recordsField, "collection")
 	requireSchemaArgument(t, recordsField, "first")
 
+	genericRecordType := requireSchemaType(t, typesByName(schema.Types), "GenericRecord")
+	genericRecordFields := fieldsByName(genericRecordType.Fields)
+	for _, field := range []string{"validationStatus", "validationError", "validatedAt", "lexiconHash"} {
+		requireSchemaField(t, genericRecordFields, field)
+	}
+
 	searchField := requireSchemaField(t, queryFields, "search")
 	requireSchemaArgument(t, searchField, "query")
 	requireSchemaArgument(t, searchField, "first")

@@ -446,9 +446,23 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 				if !ok || event == nil {
 					return nil, nil
 				}
-				// Only return if collection matches
-				if event.Collection != collection {
+				// Only return typed subscription payloads for matching records. Delete
+				// events are emitted after the row is removed, so they cannot be checked
+				// against current validation metadata.
+				if event.Collection != collection || event.URI == "" {
 					return nil, nil
+				}
+				if event.Type != subscription.EventDelete {
+					repos := resolver.GetRepositories(p.Context)
+					if repos == nil || repos.Records == nil {
+						return nil, nil
+					}
+					if _, err := repos.Records.GetValidByURI(p.Context, event.URI, collection); err != nil {
+						if errors.Is(err, sql.ErrNoRows) {
+							return nil, nil
+						}
+						return nil, fmt.Errorf("failed to validate subscription record visibility: %w", err)
+					}
 				}
 				if event.Record != nil {
 					b.coerceRequiredFields(event.Record, collection)
@@ -492,6 +506,22 @@ func (b *Builder) buildGenericRecordTypes() {
 		"value": &graphql.Field{
 			Type:        types.JSONScalar,
 			Description: "The record data as JSON",
+		},
+		"validationStatus": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "Record validation status used to decide typed GraphQL visibility.",
+		},
+		"validationError": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Validation failure or operational reason when the record is hidden from typed GraphQL.",
+		},
+		"validatedAt": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Timestamp when Hyperindex last classified this record against a saved lexicon.",
+		},
+		"lexiconHash": &graphql.Field{
+			Type:        graphql.String,
+			Description: "SHA-256 hash of the exact saved lexicon JSON bytes used for validation.",
 		},
 		"externalLabels": externallabels.Field(),
 	}
@@ -1342,6 +1372,7 @@ func sortFieldValueForRecord(rec *repositories.Record, value map[string]interfac
 func (b *Builder) resolveRecordConnection(
 	p graphql.ResolveParams,
 	collection string,
+	validOnly bool,
 	buildNode nodeBuilder,
 ) (interface{}, error) {
 	repos := resolver.GetRepositories(p.Context)
@@ -1400,7 +1431,13 @@ func (b *Builder) resolveRecordConnection(
 		}
 
 		// Fetch last+1 to detect hasPreviousPage
-		records, err := repos.Records.GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, last+1, beforeCursorValues)
+		var records []*repositories.Record
+		var err error
+		if validOnly {
+			records, err = repos.Records.GetValidByCollectionReversedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, last+1, beforeCursorValues)
+		} else {
+			records, err = repos.Records.GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, last+1, beforeCursorValues)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to query records: %w", err)
 		}
@@ -1462,7 +1499,13 @@ func (b *Builder) resolveRecordConnection(
 		}
 
 		if isTotalCountRequested(p) {
-			count, err := repos.Records.GetCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+			var count int64
+			var err error
+			if validOnly {
+				count, err = repos.Records.GetValidCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+			} else {
+				count, err = repos.Records.GetCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+			}
 			if err == nil {
 				result["totalCount"] = int(count)
 			}
@@ -1489,7 +1532,13 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	// Fetch first+1 to determine hasNextPage using the sorted method
-	records, err := repos.Records.GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, first+1, afterCursorValues)
+	var records []*repositories.Record
+	var err error
+	if validOnly {
+		records, err = repos.Records.GetValidByCollectionSortedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, first+1, afterCursorValues)
+	} else {
+		records, err = repos.Records.GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, first+1, afterCursorValues)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query records: %w", err)
 	}
@@ -1550,7 +1599,13 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	if isTotalCountRequested(p) {
-		count, err := repos.Records.GetCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+		var count int64
+		var err error
+		if validOnly {
+			count, err = repos.Records.GetValidCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+		} else {
+			count, err = repos.Records.GetCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+		}
 		if err == nil {
 			result["totalCount"] = int(count)
 		}
@@ -2000,16 +2055,23 @@ func (b *Builder) createGenericRecordsResolver() graphql.FieldResolveFn {
 			return nil, fmt.Errorf("collection is required")
 		}
 
-		return b.resolveRecordConnection(p, collection,
+		return b.resolveRecordConnection(p, collection, false,
 			func(rec *repositories.Record, value map[string]interface{}) (interface{}, bool) {
-				return map[string]interface{}{
-					"uri":        rec.URI,
-					"cid":        rec.CID,
-					"did":        rec.DID,
-					"collection": rec.Collection,
-					"rkey":       rec.RKey,
-					"value":      value,
-				}, true
+				node := map[string]interface{}{
+					"uri":              rec.URI,
+					"cid":              rec.CID,
+					"did":              rec.DID,
+					"collection":       rec.Collection,
+					"rkey":             rec.RKey,
+					"value":            value,
+					"validationStatus": string(rec.ValidationStatus),
+					"validationError":  rec.ValidationError,
+					"lexiconHash":      rec.LexiconHash,
+				}
+				if rec.ValidatedAt != nil {
+					node["validatedAt"] = rec.ValidatedAt.Format(time.RFC3339)
+				}
+				return node, true
 			})
 	}
 }
@@ -2043,7 +2105,7 @@ func (b *Builder) coerceRequiredFields(data map[string]interface{}, collection s
 // createCollectionResolver creates a resolver for querying a typed collection.
 func (b *Builder) createCollectionResolver(lexiconID string) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
-		return b.resolveRecordConnection(p, lexiconID,
+		return b.resolveRecordConnection(p, lexiconID, true,
 			func(rec *repositories.Record, data map[string]interface{}) (interface{}, bool) {
 				// Inject standard record fields into the flat data
 				data["uri"] = rec.URI
@@ -2070,8 +2132,9 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 			return nil, nil
 		}
 
-		// Query database
-		rec, err := repos.Records.GetByURI(p.Context, uri)
+		// Query database. Typed single-record fields only expose records that
+		// conform to the saved lexicon for this generated collection.
+		rec, err := repos.Records.GetValidByURI(p.Context, uri, lexiconID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, nil // Not found

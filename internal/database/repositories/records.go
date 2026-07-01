@@ -12,6 +12,7 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/atproto"
 	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 // Batch size constants for SQL operations.
@@ -56,13 +57,17 @@ var ErrSQLiteAggregateParameterLimit = errors.New("sqlite query parameter count 
 
 // Record represents an AT Protocol record stored in the database.
 type Record struct {
-	URI        string
-	CID        string
-	DID        string
-	Collection string
-	JSON       string
-	IndexedAt  time.Time
-	RKey       string
+	URI              string
+	CID              string
+	DID              string
+	Collection       string
+	JSON             string
+	IndexedAt        time.Time
+	RKey             string
+	ValidationStatus validation.Status
+	ValidationError  string
+	ValidatedAt      *time.Time
+	LexiconHash      string
 }
 
 // RecordTimelineCursor identifies a position in the creation-time record
@@ -257,9 +262,9 @@ func (r *RecordsRepository) validateSQLiteAggregateParameterCount(paramCount int
 func (r *RecordsRepository) recordColumns() string {
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
-		return "uri, cid, did, collection, json::text, indexed_at::text, rkey"
+		return "uri, cid, did, collection, json::text, indexed_at::text, rkey, validation_status, validation_error, validated_at::text, lexicon_hash"
 	default:
-		return "uri, cid, did, collection, json, indexed_at, rkey"
+		return "uri, cid, did, collection, json, indexed_at, rkey, validation_status, validation_error, validated_at, lexicon_hash"
 	}
 }
 
@@ -326,6 +331,94 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 	}
 
 	return Inserted, nil
+}
+
+// UpdateValidationStatus records the local lexicon validation result for a raw record.
+func (r *RecordsRepository) UpdateValidationStatus(ctx context.Context, uri string, status validation.Status, validationError, lexiconHash string) error {
+	validationErrorValue := nullableTextValue(validationError)
+	lexiconHashValue := nullableTextValue(lexiconHash)
+
+	validatedAtExpr := "datetime('now')"
+	if r.db.Dialect() == database.PostgreSQL {
+		validatedAtExpr = "NOW()"
+	}
+
+	sqlStr := fmt.Sprintf(`UPDATE record
+		SET validation_status = %s,
+			validation_error = %s,
+			validated_at = %s,
+			lexicon_hash = %s
+		WHERE uri = %s`,
+		r.db.Placeholder(1), r.db.Placeholder(2), validatedAtExpr, r.db.Placeholder(3), r.db.Placeholder(4))
+
+	_, err := r.db.Exec(ctx, sqlStr, []database.Value{
+		database.Text(string(status)),
+		validationErrorValue,
+		lexiconHashValue,
+		database.Text(uri),
+	})
+	return err
+}
+
+// MarkCollectionUnknownSchema marks every record in a collection as hidden from
+// typed GraphQL because Hyperindex has no saved lexicon to validate it against.
+func (r *RecordsRepository) MarkCollectionUnknownSchema(ctx context.Context, collection, reason string) error {
+	validatedAtExpr := "datetime('now')"
+	if r.db.Dialect() == database.PostgreSQL {
+		validatedAtExpr = "NOW()"
+	}
+
+	sqlStr := fmt.Sprintf(`UPDATE record
+		SET validation_status = %s,
+			validation_error = %s,
+			validated_at = %s,
+			lexicon_hash = NULL
+		WHERE collection = %s`,
+		r.db.Placeholder(1), r.db.Placeholder(2), validatedAtExpr, r.db.Placeholder(3))
+
+	_, err := r.db.Exec(ctx, sqlStr, []database.Value{
+		database.Text(string(validation.StatusUnknownSchema)),
+		database.Text(reason),
+		database.Text(collection),
+	})
+	return err
+}
+
+// ListRecordsNeedingValidation returns a stable URI-ordered batch of records
+// whose saved validation metadata is missing or stale for the current lexicon.
+func (r *RecordsRepository) ListRecordsNeedingValidation(ctx context.Context, collection, currentLexiconHash, afterURI string, limit int) ([]*Record, error) {
+	if limit <= 0 {
+		limit = DefaultIterateBatchSize
+	}
+
+	sqlStr := fmt.Sprintf(`SELECT %s FROM record
+		WHERE collection = %s
+		  AND (validation_status != %s OR lexicon_hash IS NULL OR lexicon_hash != %s)
+		  AND uri > %s
+		ORDER BY uri
+		LIMIT %d`,
+		r.recordColumns(), r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3), r.db.Placeholder(4), limit)
+
+	params := []database.Value{
+		database.Text(collection),
+		database.Text(string(validation.StatusValid)),
+		database.Text(currentLexiconHash),
+		database.Text(afterURI),
+	}
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanRecords(rows)
+}
+
+func nullableTextValue(value string) database.Value {
+	if value == "" {
+		return database.Null()
+	}
+	return database.Text(value)
 }
 
 // BatchInsert inserts multiple records efficiently.
@@ -426,13 +519,45 @@ func (r *RecordsRepository) GetByURI(ctx context.Context, uri string) (*Record, 
 
 	var rec Record
 	var indexedAtStr string
+	var validationStatus string
+	var validationError, validatedAtStr, lexiconHash sql.NullString
 	err := r.db.QueryRow(ctx, sqlStr, []database.Value{database.Text(uri)},
-		&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey)
+		&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey,
+		&validationStatus, &validationError, &validatedAtStr, &lexiconHash)
 	if err != nil {
 		return nil, err
 	}
 
 	rec.IndexedAt, _ = time.Parse(time.RFC3339, indexedAtStr)
+	rec.ValidationStatus = validation.Status(validationStatus)
+	applyRecordValidationNulls(&rec, validationError, validatedAtStr, lexiconHash)
+	return &rec, nil
+}
+
+// GetValidByURI retrieves a typed-visible record by URI. It returns sql.ErrNoRows
+// when the raw record exists but is hidden by validation status or collection mismatch.
+func (r *RecordsRepository) GetValidByURI(ctx context.Context, uri, collection string) (*Record, error) {
+	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE uri = %s AND collection = %s AND validation_status = %s",
+		r.recordColumns(), r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3))
+
+	var rec Record
+	var indexedAtStr string
+	var validationStatus string
+	var validationError, validatedAtStr, lexiconHash sql.NullString
+	err := r.db.QueryRow(ctx, sqlStr, []database.Value{
+		database.Text(uri),
+		database.Text(collection),
+		database.Text(string(validation.StatusValid)),
+	},
+		&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey,
+		&validationStatus, &validationError, &validatedAtStr, &lexiconHash)
+	if err != nil {
+		return nil, err
+	}
+
+	rec.IndexedAt, _ = time.Parse(time.RFC3339, indexedAtStr)
+	rec.ValidationStatus = validation.Status(validationStatus)
+	applyRecordValidationNulls(&rec, validationError, validatedAtStr, lexiconHash)
 	return &rec, nil
 }
 
@@ -1545,6 +1670,36 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursorAndExternalLabe
 	limit int,
 	afterCursorValues []string,
 ) ([]*Record, error) {
+	return r.getByCollectionSortedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, externalLabelFilters, sort, limit, afterCursorValues, false)
+}
+
+// GetValidByCollectionSortedWithKeysetCursorAndExternalLabelFilters retrieves
+// records for typed GraphQL collection connections, excluding raw records that
+// are not valid against the saved lexicon used to generate the typed schema.
+func (r *RecordsRepository) GetValidByCollectionSortedWithKeysetCursorAndExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
+	sort *SortOption,
+	limit int,
+	afterCursorValues []string,
+) ([]*Record, error) {
+	return r.getByCollectionSortedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, externalLabelFilters, sort, limit, afterCursorValues, true)
+}
+
+func (r *RecordsRepository) getByCollectionSortedWithKeysetCursorAndExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
+	sort *SortOption,
+	limit int,
+	afterCursorValues []string,
+	validOnly bool,
+) ([]*Record, error) {
 	var whereParts []string
 	var args []any
 
@@ -1553,6 +1708,11 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursorAndExternalLabe
 	args = append(args, collection)
 
 	nextPlaceholder := 2
+	if validOnly {
+		whereParts = append(whereParts, fmt.Sprintf("validation_status = %s", r.db.Placeholder(nextPlaceholder)))
+		args = append(args, string(validation.StatusValid))
+		nextPlaceholder++
+	}
 
 	// Keyset cursor condition
 	if len(afterCursorValues) == 2 {
@@ -1692,6 +1852,36 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursorAndExternalLa
 	limit int,
 	beforeCursorValues []string,
 ) ([]*Record, error) {
+	return r.getByCollectionReversedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, externalLabelFilters, sort, limit, beforeCursorValues, false)
+}
+
+// GetValidByCollectionReversedWithKeysetCursorAndExternalLabelFilters retrieves
+// backward pages for typed GraphQL collection connections, excluding records
+// hidden by the validation gate.
+func (r *RecordsRepository) GetValidByCollectionReversedWithKeysetCursorAndExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
+	sort *SortOption,
+	limit int,
+	beforeCursorValues []string,
+) ([]*Record, error) {
+	return r.getByCollectionReversedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, externalLabelFilters, sort, limit, beforeCursorValues, true)
+}
+
+func (r *RecordsRepository) getByCollectionReversedWithKeysetCursorAndExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
+	sort *SortOption,
+	limit int,
+	beforeCursorValues []string,
+	validOnly bool,
+) ([]*Record, error) {
 	// Build the reversed sort option: flip direction
 	var reversedSort *SortOption
 	if sort == nil {
@@ -1713,6 +1903,11 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursorAndExternalLa
 	args = append(args, collection)
 
 	nextPlaceholder := 2
+	if validOnly {
+		whereParts = append(whereParts, fmt.Sprintf("validation_status = %s", r.db.Placeholder(nextPlaceholder)))
+		args = append(args, string(validation.StatusValid))
+		nextPlaceholder++
+	}
 
 	// Keyset cursor condition with reversed comparison operator.
 	// For DESC original (reversed to ASC): forward DESC uses <, so reversed uses >
@@ -1918,6 +2113,29 @@ func (r *RecordsRepository) GetCollectionCountFilteredWithExternalLabelFilters(
 	didFilter DIDFilter,
 	externalLabelFilters ExternalLabelFilterSet,
 ) (int64, error) {
+	return r.getCollectionCountFilteredWithExternalLabelFilters(ctx, collection, filters, didFilter, externalLabelFilters, false)
+}
+
+// GetValidCollectionCountFilteredWithExternalLabelFilters returns the count used
+// by typed GraphQL collection connections, excluding records hidden by the validation gate.
+func (r *RecordsRepository) GetValidCollectionCountFilteredWithExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
+) (int64, error) {
+	return r.getCollectionCountFilteredWithExternalLabelFilters(ctx, collection, filters, didFilter, externalLabelFilters, true)
+}
+
+func (r *RecordsRepository) getCollectionCountFilteredWithExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
+	validOnly bool,
+) (int64, error) {
 	var whereParts []string
 	var params []database.Value
 
@@ -1925,6 +2143,11 @@ func (r *RecordsRepository) GetCollectionCountFilteredWithExternalLabelFilters(
 	params = append(params, database.Text(collection))
 
 	nextPlaceholder := 2
+	if validOnly {
+		whereParts = append(whereParts, fmt.Sprintf("validation_status = %s", r.db.Placeholder(nextPlaceholder)))
+		params = append(params, database.Text(string(validation.StatusValid)))
+		nextPlaceholder++
+	}
 
 	// Field filters
 	filterClause, filterParams, err := r.buildFilterClause(filters, nextPlaceholder)
@@ -2300,14 +2523,34 @@ func scanRecords(rows *sql.Rows) ([]*Record, error) {
 	for rows.Next() {
 		var rec Record
 		var indexedAtStr string
-		if err := rows.Scan(&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey); err != nil {
+		var validationStatus string
+		var validationError, validatedAtStr, lexiconHash sql.NullString
+		if err := rows.Scan(&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey,
+			&validationStatus, &validationError, &validatedAtStr, &lexiconHash); err != nil {
 			return nil, err
 		}
 		// Try various timestamp formats
 		rec.IndexedAt = atproto.ParseTimestamp(indexedAtStr)
+		rec.ValidationStatus = validation.Status(validationStatus)
+		applyRecordValidationNulls(&rec, validationError, validatedAtStr, lexiconHash)
 		records = append(records, &rec)
 	}
 	return records, rows.Err()
+}
+
+func applyRecordValidationNulls(rec *Record, validationError, validatedAtStr, lexiconHash sql.NullString) {
+	if validationError.Valid {
+		rec.ValidationError = validationError.String
+	}
+	if lexiconHash.Valid {
+		rec.LexiconHash = lexiconHash.String
+	}
+	if validatedAtStr.Valid {
+		validatedAt := atproto.ParseTimestamp(validatedAtStr.String)
+		if !validatedAt.IsZero() {
+			rec.ValidatedAt = &validatedAt
+		}
+	}
 }
 
 func scanRecordTimelineRecords(rows *sql.Rows) ([]*RecordTimelineRecord, error) {
