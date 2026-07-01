@@ -65,7 +65,10 @@ func TestEndorsementClosureBehaviorSmoke(t *testing.T) {
 		t.Fatalf("endorsementClosure smoke found %d active account endorsement edges, want at least %d", len(edges), config.expectations.EndorsementClosure.MinimumActiveEdges)
 	}
 
-	rootDID, expectedAccounts, ok := selectEndorsementSmokeRoot(edges, config.expectations.EndorsementClosure.RequireIndirect)
+	rootDID, expectedAccounts, ok, err := selectEndorsementSmokeRoot(edges, config.expectations.EndorsementClosure.RequireIndirect)
+	if err != nil {
+		t.Fatalf("endorsementClosure smoke failed to compute expected closure: %v", err)
+	}
 	if !ok {
 		t.Fatalf("endorsementClosure smoke found %d active edges but no root DID with an indirect closure path; edges: %s", len(edges), formatEndorsementSmokeEdges(edges))
 	}
@@ -142,7 +145,7 @@ func fetchActiveEndorsementSmokeEdges(t testing.TB, config smokeConfig) []endors
 	return edges
 }
 
-func selectEndorsementSmokeRoot(edges []endorsementSmokeEdge, requireIndirect bool) (string, []endorsementSmokeAccount, bool) {
+func selectEndorsementSmokeRoot(edges []endorsementSmokeEdge, requireIndirect bool) (string, []endorsementSmokeAccount, bool, error) {
 	roots := make(map[string]bool)
 	for _, edge := range edges {
 		roots[edge.Issuer] = true
@@ -155,21 +158,43 @@ func selectEndorsementSmokeRoot(edges []endorsementSmokeEdge, requireIndirect bo
 	sort.Strings(rootList)
 
 	for _, rootDID := range rootList {
-		accounts := computeEndorsementSmokeClosure(edges, rootDID, 3)
+		accounts, err := computeEndorsementSmokeClosure(edges, rootDID, 3)
+		if err != nil {
+			return "", nil, false, err
+		}
 		if len(accounts) == 0 {
 			continue
 		}
 		if requireIndirect && !endorsementSmokeHasIndirect(accounts) {
 			continue
 		}
-		return rootDID, accounts, true
+		return rootDID, accounts, true, nil
 	}
 
-	return "", nil, false
+	return "", nil, false, nil
 }
 
-func computeEndorsementSmokeClosure(edges []endorsementSmokeEdge, rootDID string, maxDegree int) []endorsementSmokeAccount {
-	adjacency := make(map[string][]string)
+type endorsementSmokeAdjacency map[string][]string
+
+func (a endorsementSmokeAdjacency) AdjacentForLimit(_ context.Context, sources []string, limit int) (map[string][]string, bool, error) {
+	out := make(map[string][]string, len(sources))
+	count := 0
+	truncated := false
+	for _, source := range sources {
+		for _, subject := range a[source] {
+			count++
+			if count > limit {
+				truncated = true
+				continue
+			}
+			out[source] = append(out[source], subject)
+		}
+	}
+	return out, truncated, nil
+}
+
+func computeEndorsementSmokeClosure(edges []endorsementSmokeEdge, rootDID string, maxDegree int) ([]endorsementSmokeAccount, error) {
+	adjacency := make(endorsementSmokeAdjacency)
 	for _, edge := range edges {
 		adjacency[edge.Issuer] = append(adjacency[edge.Issuer], edge.Subject)
 	}
@@ -177,63 +202,16 @@ func computeEndorsementSmokeClosure(edges []endorsementSmokeEdge, rootDID string
 		sort.Strings(adjacency[issuer])
 	}
 
-	seen := map[string]int{rootDID: 0}
-	predecessors := map[string]map[string]bool{}
-	frontier := []string{rootDID}
-
-	for degree := 1; degree <= maxDegree; degree++ {
-		nextFrontier := make([]string, 0)
-		for _, issuer := range frontier {
-			for _, subject := range adjacency[issuer] {
-				if subject == "" || subject == rootDID {
-					continue
-				}
-
-				if existingDegree, ok := seen[subject]; ok {
-					if existingDegree == degree && degree > 1 {
-						if predecessors[subject] == nil {
-							predecessors[subject] = map[string]bool{}
-						}
-						if len(predecessors[subject]) < graphclosure.MaxVia {
-							predecessors[subject][issuer] = true
-						}
-					}
-					continue
-				}
-
-				seen[subject] = degree
-				nextFrontier = append(nextFrontier, subject)
-				if degree > 1 {
-					predecessors[subject] = map[string]bool{issuer: true}
-				}
-			}
-		}
-		if len(nextFrontier) == 0 {
-			break
-		}
-		sort.Strings(nextFrontier)
-		frontier = nextFrontier
+	result, err := graphclosure.Compute(context.Background(), adjacency, rootDID, maxDegree, graphclosure.DefaultClosureCap)
+	if err != nil {
+		return nil, err
 	}
 
-	accounts := make([]endorsementSmokeAccount, 0, len(seen)-1)
-	for did, degree := range seen {
-		if did == rootDID {
-			continue
-		}
-		via := make([]string, 0, len(predecessors[did]))
-		for predecessor := range predecessors[did] {
-			via = append(via, predecessor)
-		}
-		sort.Strings(via)
-		accounts = append(accounts, endorsementSmokeAccount{DID: did, Degree: degree, Via: via})
+	accounts := make([]endorsementSmokeAccount, 0, len(result.Accounts))
+	for _, account := range result.Accounts {
+		accounts = append(accounts, endorsementSmokeAccount{DID: account.DID, Degree: account.Degree, Via: account.Via})
 	}
-	sort.Slice(accounts, func(i, j int) bool {
-		if accounts[i].Degree != accounts[j].Degree {
-			return accounts[i].Degree < accounts[j].Degree
-		}
-		return accounts[i].DID < accounts[j].DID
-	})
-	return accounts
+	return accounts, nil
 }
 
 func endorsementSmokeHasIndirect(accounts []endorsementSmokeAccount) bool {

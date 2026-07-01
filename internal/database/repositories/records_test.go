@@ -466,6 +466,23 @@ func TestRecordsRepository_GetByURIs(t *testing.T) {
 			},
 			wantCount: 2,
 		},
+		{
+			name: "batches large URI lists",
+			setup: func(repo *repositories.RecordsRepository) {
+				for i := 0; i < repositories.SQLParamBatchSize+5; i++ {
+					uri := fmt.Sprintf("at://did:plc:test1/com.example.timeline.post/batch-%04d", i)
+					insertTestRecord(t, repo, uri, fmt.Sprintf("bafyreibatch%04d", i), "did:plc:test1", "com.example.timeline.post", fmt.Sprintf(`{"text":"batch %d"}`, i))
+				}
+			},
+			uris: func() []string {
+				uris := make([]string, 0, repositories.SQLParamBatchSize+5)
+				for i := 0; i < repositories.SQLParamBatchSize+5; i++ {
+					uris = append(uris, fmt.Sprintf("at://did:plc:test1/com.example.timeline.post/batch-%04d", i))
+				}
+				return uris
+			}(),
+			wantCount: repositories.SQLParamBatchSize + 5,
+		},
 	}
 
 	for _, tt := range tests {

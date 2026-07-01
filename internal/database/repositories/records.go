@@ -442,22 +442,39 @@ func (r *RecordsRepository) GetByURIs(ctx context.Context, uris []string) ([]*Re
 		return nil, nil
 	}
 
-	placeholders := r.db.Placeholders(len(uris), 1)
-	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE uri IN (%s)",
-		r.recordColumns(), placeholders)
+	records := make([]*Record, 0, len(uris))
+	for start := 0; start < len(uris); start += SQLParamBatchSize {
+		end := start + SQLParamBatchSize
+		if end > len(uris) {
+			end = len(uris)
+		}
+		batch := uris[start:end]
 
-	params := make([]database.Value, len(uris))
-	for i, uri := range uris {
-		params[i] = database.Text(uri)
+		placeholders := r.db.Placeholders(len(batch), 1)
+		sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE uri IN (%s)",
+			r.recordColumns(), placeholders)
+
+		params := make([]database.Value, len(batch))
+		for i, uri := range batch {
+			params[i] = database.Text(uri)
+		}
+
+		rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+		if err != nil {
+			return nil, err
+		}
+		batchRecords, scanErr := scanRecords(rows)
+		closeErr := rows.Close()
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		records = append(records, batchRecords...)
 	}
 
-	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return scanRecords(rows)
+	return records, nil
 }
 
 // GetRecordTimeline returns one creation-time page of current records across
