@@ -1,4 +1,0 @@
-kind: fixed
-body: Fix endorsement closure edge validation and profile hydration so malformed badge-award subject DIDs are ignored, SQLite profile lookups stay batched, and truncated closures are reported correctly.
-custom:
-  Affects: user
