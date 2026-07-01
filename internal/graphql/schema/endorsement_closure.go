@@ -165,11 +165,15 @@ func (b *Builder) createEndorsementClosureResolver() graphql.FieldResolveFn {
 		}
 
 		accounts := filterEndorsementClosureAccounts(result.Accounts, where)
-		profileHydration, err := b.hydrateCertifiedProfilesForEndorsementClosure(p, repos, accounts)
+		page, err := endorsementClosurePageForArgs(accounts, p.Args)
 		if err != nil {
 			return nil, err
 		}
-		return paginateEndorsementClosureAccounts(accounts, result.Truncated, p.Args, profileHydration)
+		profileHydration, err := b.hydrateCertifiedProfilesForEndorsementClosure(p, repos, page.Accounts)
+		if err != nil {
+			return nil, err
+		}
+		return buildEndorsementClosureConnection(page, result.Truncated, profileHydration), nil
 	}
 }
 
@@ -275,7 +279,14 @@ func filterEndorsementClosureAccounts(accounts []graphclosure.Account, where end
 	return filtered
 }
 
-func paginateEndorsementClosureAccounts(accounts []graphclosure.Account, truncated bool, args map[string]interface{}, profileHydration *certifiedProfileHydration) (map[string]interface{}, error) {
+type endorsementClosurePage struct {
+	Accounts        []graphclosure.Account
+	TotalCount      int
+	HasNextPage     bool
+	HasPreviousPage bool
+}
+
+func endorsementClosurePageForArgs(accounts []graphclosure.Account, args map[string]interface{}) (endorsementClosurePage, error) {
 	pageSize, _ := args["first"].(int)
 	pageSize = query.ClampPageSize(pageSize)
 
@@ -283,7 +294,7 @@ func paginateEndorsementClosureAccounts(accounts []graphclosure.Account, truncat
 	if after, ok := args["after"].(string); ok && after != "" {
 		cursorDegree, cursorDID, err := decodeEndorsementClosureCursor(after)
 		if err != nil {
-			return nil, fmt.Errorf("invalid endorsementClosure cursor: %w", err)
+			return endorsementClosurePage{}, fmt.Errorf("invalid endorsementClosure cursor: %w", err)
 		}
 		start = endorsementClosureStartOffset(accounts, cursorDegree, cursorDID)
 	}
@@ -292,12 +303,19 @@ func paginateEndorsementClosureAccounts(accounts []graphclosure.Account, truncat
 	if end > len(accounts) {
 		end = len(accounts)
 	}
-	page := accounts[start:end]
+	return endorsementClosurePage{
+		Accounts:        accounts[start:end],
+		TotalCount:      len(accounts),
+		HasNextPage:     end < len(accounts),
+		HasPreviousPage: start > 0,
+	}, nil
+}
 
-	edges := make([]interface{}, 0, len(page))
+func buildEndorsementClosureConnection(page endorsementClosurePage, truncated bool, profileHydration *certifiedProfileHydration) map[string]interface{} {
+	edges := make([]interface{}, 0, len(page.Accounts))
 	var startCursor interface{}
 	var endCursor interface{}
-	for _, account := range page {
+	for _, account := range page.Accounts {
 		cursor := encodeEndorsementClosureCursor(account)
 		if startCursor == nil {
 			startCursor = cursor
@@ -318,14 +336,14 @@ func paginateEndorsementClosureAccounts(accounts []graphclosure.Account, truncat
 	return map[string]interface{}{
 		"edges": edges,
 		"pageInfo": map[string]interface{}{
-			"hasNextPage":     end < len(accounts),
-			"hasPreviousPage": start > 0,
+			"hasNextPage":     page.HasNextPage,
+			"hasPreviousPage": page.HasPreviousPage,
 			"startCursor":     startCursor,
 			"endCursor":       endCursor,
 		},
-		"totalCount": len(accounts),
+		"totalCount": page.TotalCount,
 		"truncated":  truncated,
-	}, nil
+	}
 }
 
 func endorsementViaAccountNodes(dids []string, profileHydration *certifiedProfileHydration) []interface{} {

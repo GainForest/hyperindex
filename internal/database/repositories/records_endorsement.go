@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/GainForest/hyperindex/internal/database"
+	"github.com/GainForest/hyperindex/internal/oauth"
 )
 
 const (
@@ -169,15 +170,23 @@ func (r *RecordsRepository) endorsementAdjacencyBatch(ctx context.Context, issue
 	defer rows.Close()
 
 	out := make(map[string][]string, len(issuers))
-	rowCount := 0
+	validRowCount := 0
+	rawRowCount := 0
 	truncated := false
 	for rows.Next() {
 		var issuer, subject string
 		if err := rows.Scan(&issuer, &subject); err != nil {
 			return nil, false, fmt.Errorf("scan Certified endorsement adjacency row: %w", err)
 		}
-		rowCount++
-		if options.Limit > 0 && rowCount > options.Limit {
+		rawRowCount++
+		if options.Limit > 0 && rawRowCount > options.Limit {
+			truncated = true
+		}
+		if !oauth.IsValidDID(subject) {
+			continue
+		}
+		validRowCount++
+		if options.Limit > 0 && validRowCount > options.Limit {
 			truncated = true
 			continue
 		}
@@ -240,5 +249,9 @@ func (r *RecordsRepository) badgeDefinitionAllowsIssuerExpr(jsonColumn, issuerEx
 }
 
 func didSQLPredicate(expr string) string {
-	return fmt.Sprintf("(substr(%[1]s, 1, 8) = 'did:plc:' OR substr(%[1]s, 1, 8) = 'did:web:')", expr)
+	return fmt.Sprintf(`(
+		(substr(%[1]s, 1, 8) = 'did:plc:' OR substr(%[1]s, 1, 8) = 'did:web:')
+		AND length(%[1]s) > 8
+		AND %[1]s NOT LIKE '%% %%'
+	)`, expr)
 }

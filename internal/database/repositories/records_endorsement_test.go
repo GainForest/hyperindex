@@ -102,6 +102,8 @@ func runEndorsementAdjacencyRequiresDIDSubject(t *testing.T, repo *repositories.
 	insertRecord(t, repo, "at://did:plc:issuer/app.certified.badge.award/bare-"+suffix, "cid-award-bare-"+suffix, "did:plc:issuer", "app.certified.badge.award", `{"badge":{"uri":"`+endorsementBadgeURI+`"},"subject":"did:plc:bare"}`)
 	insertRecord(t, repo, "at://did:plc:issuer/app.certified.badge.award/strongref-"+suffix, "cid-award-strongref-"+suffix, "did:plc:issuer", "app.certified.badge.award", `{"badge":{"uri":"`+endorsementBadgeURI+`"},"subject":{"uri":"at://did:plc:record-author/app.certified.actor.profile/self","cid":"cid-profile"}}`)
 	insertRecord(t, repo, "at://did:plc:issuer/app.certified.badge.award/invalid-did-"+suffix, "cid-award-invalid-did-"+suffix, "did:plc:issuer", "app.certified.badge.award", `{"badge":{"uri":"`+endorsementBadgeURI+`"},"subject":{"$type":"app.certified.defs#did","did":"not-a-did"}}`)
+	insertRecord(t, repo, "at://did:plc:issuer/app.certified.badge.award/bad-space-"+suffix, "cid-award-bad-space-"+suffix, "did:plc:issuer", "app.certified.badge.award", `{"badge":{"uri":"`+endorsementBadgeURI+`"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bad space"}}`)
+	insertRecord(t, repo, "at://did:plc:issuer/app.certified.badge.award/empty-web-"+suffix, "cid-award-empty-web-"+suffix, "did:plc:issuer", "app.certified.badge.award", `{"badge":{"uri":"`+endorsementBadgeURI+`"},"subject":{"$type":"app.certified.defs#did","did":"did:web:"}}`)
 	insertRecord(t, repo, "at://did:plc:issuer/app.certified.badge.award/missing-type-"+suffix, "cid-award-missing-type-"+suffix, "did:plc:issuer", "app.certified.badge.award", `{"badge":{"uri":"`+endorsementBadgeURI+`"},"subject":{"did":"did:plc:missingtype"}}`)
 
 	got, err := repo.EndorsementAdjacencyFor(ctx, []string{"did:plc:issuer"})
@@ -170,7 +172,7 @@ func runEndorsementAdjacencyLimit(t *testing.T, repo *repositories.RecordsReposi
 
 	badgeURI := "at://did:plc:issuer/app.certified.badge.definition/limit-" + suffix
 	insertRecord(t, repo, badgeURI, "cid-limit-"+suffix, "did:plc:issuer", "app.certified.badge.definition", `{"title":"Limit","badgeType":"endorsement"}`)
-	for _, subject := range []string{"did:plc:a", "did:plc:b", "did:plc:c"} {
+	for _, subject := range []string{"did:plc:!", "did:plc:a", "did:plc:b", "did:plc:c"} {
 		rkey := strings.TrimPrefix(subject, "did:plc:")
 		insertRecord(t, repo, "at://did:plc:issuer/app.certified.badge.award/"+rkey+"-"+suffix, "cid-award-"+rkey+"-"+suffix, "did:plc:issuer", "app.certified.badge.award", `{"badge":{"uri":"`+badgeURI+`"},"subject":{"$type":"app.certified.defs#did","did":"`+subject+`"}}`)
 	}
