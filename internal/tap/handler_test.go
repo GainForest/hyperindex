@@ -6,12 +6,22 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/tap"
 	"github.com/GainForest/hyperindex/internal/testutil"
 	"github.com/GainForest/hyperindex/internal/validation"
 )
+
+func assertNoPubSubEvent(t *testing.T, sub *subscription.Subscriber, reason string) {
+	t.Helper()
+	select {
+	case event := <-sub.Events:
+		t.Fatalf("unexpected pubsub event for %s: %#v", reason, event)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
 
 // setupHandler creates an IndexHandler backed by a real in-memory SQLite database.
 func setupHandler(t *testing.T) (*tap.IndexHandler, *testutil.TestDB, *subscription.PubSub) {
@@ -136,11 +146,7 @@ func TestIndexHandler_HandleRecord_InvalidRecordStoresMetadataWithoutPublishing(
 		t.Fatalf("LexiconHash = %q, want hash-1", rec.LexiconHash)
 	}
 
-	select {
-	case event := <-sub.Events:
-		t.Fatalf("unexpected pubsub event for invalid record: %#v", event)
-	default:
-	}
+	assertNoPubSubEvent(t, sub, "invalid record")
 }
 
 func TestIndexHandler_HandleRecord_UnknownSchemaStoresMetadataWithoutPublishing(t *testing.T) {
@@ -179,11 +185,7 @@ func TestIndexHandler_HandleRecord_UnknownSchemaStoresMetadataWithoutPublishing(
 		t.Fatalf("LexiconHash = %q, want empty", rec.LexiconHash)
 	}
 
-	select {
-	case event := <-sub.Events:
-		t.Fatalf("unexpected pubsub event for unknown-schema record: %#v", event)
-	default:
-	}
+	assertNoPubSubEvent(t, sub, "unknown-schema record")
 }
 
 func TestIndexHandler_HandleRecord_Update(t *testing.T) {

@@ -528,7 +528,7 @@ func (r *RecordsRepository) GetByURI(ctx context.Context, uri string) (*Record, 
 		return nil, err
 	}
 
-	rec.IndexedAt, _ = time.Parse(time.RFC3339, indexedAtStr)
+	rec.IndexedAt = atproto.ParseTimestamp(indexedAtStr)
 	rec.ValidationStatus = validation.Status(validationStatus)
 	applyRecordValidationNulls(&rec, validationError, validatedAtStr, lexiconHash)
 	return &rec, nil
@@ -555,7 +555,7 @@ func (r *RecordsRepository) GetValidByURI(ctx context.Context, uri, collection s
 		return nil, err
 	}
 
-	rec.IndexedAt, _ = time.Parse(time.RFC3339, indexedAtStr)
+	rec.IndexedAt = atproto.ParseTimestamp(indexedAtStr)
 	rec.ValidationStatus = validation.Status(validationStatus)
 	applyRecordValidationNulls(&rec, validationError, validatedAtStr, lexiconHash)
 	return &rec, nil

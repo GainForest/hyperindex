@@ -429,7 +429,10 @@ func assertSQLiteRecordValidationColumns(ctx context.Context, t *testing.T, exec
 	}
 	defer rows.Close()
 
-	columns := make(map[string]string)
+	columns := make(map[string]struct {
+		columnType string
+		notNull    int
+	})
 	for rows.Next() {
 		var cid int
 		var name, columnType string
@@ -439,7 +442,10 @@ func assertSQLiteRecordValidationColumns(ctx context.Context, t *testing.T, exec
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
 			t.Fatalf("failed to scan sqlite column metadata: %v", err)
 		}
-		columns[name] = columnType
+		columns[name] = struct {
+			columnType string
+			notNull    int
+		}{columnType: columnType, notNull: notNull}
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("failed to iterate sqlite column metadata: %v", err)
@@ -450,13 +456,16 @@ func assertSQLiteRecordValidationColumns(ctx context.Context, t *testing.T, exec
 			t.Fatalf("sqlite record column %q missing", column)
 		}
 	}
+	if columns["validation_status"].notNull != 1 {
+		t.Fatalf("sqlite validation_status is nullable, want NOT NULL")
+	}
 }
 
 func assertPostgresRecordValidationColumns(ctx context.Context, t *testing.T, exec *postgres.Executor, schemaName string) {
 	t.Helper()
 
 	rows, err := exec.DB().QueryContext(ctx, `
-		SELECT column_name
+		SELECT column_name, is_nullable
 		FROM information_schema.columns
 		WHERE table_schema = $1 AND table_name = 'record'
 		  AND column_name IN ('validation_status', 'validation_error', 'validated_at', 'lexicon_hash')`, schemaName)
@@ -465,22 +474,25 @@ func assertPostgresRecordValidationColumns(ctx context.Context, t *testing.T, ex
 	}
 	defer rows.Close()
 
-	columns := make(map[string]bool)
+	columns := make(map[string]string)
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
+		var name, nullable string
+		if err := rows.Scan(&name, &nullable); err != nil {
 			t.Fatalf("failed to scan postgres column metadata: %v", err)
 		}
-		columns[name] = true
+		columns[name] = nullable
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("failed to iterate postgres column metadata: %v", err)
 	}
 
 	for _, column := range []string{"validation_status", "validation_error", "validated_at", "lexicon_hash"} {
-		if !columns[column] {
+		if _, ok := columns[column]; !ok {
 			t.Fatalf("postgres record column %q missing", column)
 		}
+	}
+	if columns["validation_status"] != "NO" {
+		t.Fatalf("postgres validation_status is nullable, want NOT NULL")
 	}
 }
 

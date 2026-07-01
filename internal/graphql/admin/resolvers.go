@@ -136,18 +136,18 @@ func (r *Resolver) notifyLexiconChange(ctx context.Context) {
 	}
 }
 
-func (r *Resolver) registerSavedLexiconForValidation(collection string, rawJSON []byte) {
+func (r *Resolver) registerSavedLexiconForValidation(collection string, rawJSON []byte) error {
 	if r.lexiconRegistry != nil {
 		parsed, err := lexicon.ParseBytes(rawJSON)
 		if err != nil {
-			slog.Warn("Failed to parse saved lexicon for validation", "collection", collection, "error", err)
-		} else {
-			r.lexiconRegistry.Register(parsed)
+			return fmt.Errorf("failed to parse saved lexicon %s for validation: %w", collection, err)
 		}
+		r.lexiconRegistry.Register(parsed)
 	}
 	if r.recordValidator != nil {
 		r.recordValidator.SetLexiconHash(collection, validation.HashLexiconJSON(rawJSON))
 	}
+	return nil
 }
 
 func (r *Resolver) scheduleValidationRefresh(collection, reason string) {
@@ -374,7 +374,9 @@ func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, e
 		if err := r.repos.Lexicons.Upsert(ctx, lexEntry.ID, string(data)); err != nil {
 			return count, fmt.Errorf("failed to save lexicon %s: %w", lexEntry.ID, err)
 		}
-		r.registerSavedLexiconForValidation(lexEntry.ID, data)
+		if err := r.registerSavedLexiconForValidation(lexEntry.ID, data); err != nil {
+			return count, err
+		}
 		uploadedCollections = append(uploadedCollections, lexEntry.ID)
 		count++
 	}
@@ -627,7 +629,9 @@ func (r *Resolver) RegisterLexicon(ctx context.Context, nsid string) (map[string
 	if err := r.repos.Lexicons.Upsert(ctx, nsid, schemaJSON); err != nil {
 		return nil, fmt.Errorf("failed to save lexicon: %w", err)
 	}
-	r.registerSavedLexiconForValidation(nsid, []byte(schemaJSON))
+	if err := r.registerSavedLexiconForValidation(nsid, []byte(schemaJSON)); err != nil {
+		return nil, err
+	}
 
 	// Notify Jetstream consumer of collection changes
 	r.notifyLexiconChange(ctx)

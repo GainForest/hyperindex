@@ -22,35 +22,46 @@ type Scheduler struct {
 	validator validation.RecordValidator
 	mu        sync.Mutex
 	running   map[string]bool
+	pending   map[string]bool
 }
 
 // NewScheduler creates an in-process validation refresh scheduler.
 func NewScheduler(records *repositories.RecordsRepository, validator validation.RecordValidator) *Scheduler {
-	return &Scheduler{records: records, validator: validator, running: make(map[string]bool)}
+	return &Scheduler{records: records, validator: validator, running: make(map[string]bool), pending: make(map[string]bool)}
 }
 
 // ScheduleValidationRefresh starts one background refresh for a collection. If a
-// refresh for the collection is already running, this call is ignored.
+// refresh is already running, it records a pending rerun so schema changes that
+// arrive mid-refresh are not dropped.
 func (s *Scheduler) ScheduleValidationRefresh(collection, reason string) {
 	s.mu.Lock()
 	if s.running[collection] {
+		s.pending[collection] = true
 		s.mu.Unlock()
 		return
 	}
 	s.running[collection] = true
 	s.mu.Unlock()
 
-	go func() {
-		defer func() {
-			s.mu.Lock()
-			delete(s.running, collection)
-			s.mu.Unlock()
-		}()
+	go s.runScheduledRefresh(collection, reason)
+}
 
+func (s *Scheduler) runScheduledRefresh(collection, reason string) {
+	for {
 		if err := s.RefreshCollection(context.Background(), collection, reason); err != nil {
 			slog.Warn("validation refresh failed", "collection", collection, "reason", reason, "error", err)
 		}
-	}()
+
+		s.mu.Lock()
+		if !s.pending[collection] {
+			delete(s.running, collection)
+			s.mu.Unlock()
+			return
+		}
+		delete(s.pending, collection)
+		s.mu.Unlock()
+		reason = "pending " + reason
+	}
 }
 
 // RefreshCollections synchronously refreshes every supplied collection. Use this

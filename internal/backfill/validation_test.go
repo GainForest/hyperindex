@@ -86,16 +86,11 @@ func TestBackfillerLegacyPathClassifiesInsertedRecords(t *testing.T) {
 			Error:  "no saved lexicon for collection com.example.record",
 		},
 	}}
+	var gotPath, gotRepo, gotCollection string
 	pds := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/xrpc/com.atproto.repo.listRecords" {
-			t.Fatalf("unexpected request path %s", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("repo"); got != "did:plc:test" {
-			t.Fatalf("repo query = %q, want did:plc:test", got)
-		}
-		if got := r.URL.Query().Get("collection"); got != "com.example.record" {
-			t.Fatalf("collection query = %q, want com.example.record", got)
-		}
+		gotPath = r.URL.Path
+		gotRepo = r.URL.Query().Get("repo")
+		gotCollection = r.URL.Query().Get("collection")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(ListRecordsResponse{Records: []ListRecordsRecord{
 			{
@@ -123,6 +118,15 @@ func TestBackfillerLegacyPathClassifiesInsertedRecords(t *testing.T) {
 	}
 	if inserted != 2 {
 		t.Fatalf("inserted = %d, want 2", inserted)
+	}
+	if gotPath != "/xrpc/com.atproto.repo.listRecords" {
+		t.Fatalf("unexpected request path %s", gotPath)
+	}
+	if gotRepo != "did:plc:test" {
+		t.Fatalf("repo query = %q, want did:plc:test", gotRepo)
+	}
+	if gotCollection != "com.example.record" {
+		t.Fatalf("collection query = %q, want com.example.record", gotCollection)
 	}
 
 	assertValidationMetadata(t, db.Records, "at://did:plc:test/com.example.record/invalid", validation.StatusInvalid, "missing required field: name", "hash-current")

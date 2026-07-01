@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/GainForest/hyperindex/internal/lexicon"
 )
@@ -178,6 +180,9 @@ func (v *Validator) validateProperty(collection string, prop lexicon.Property, v
 		if !ok {
 			return typeError(path, "string", value)
 		}
+		if err := validateStringFormat(prop.Format, s, path); err != nil {
+			return err
+		}
 		if prop.Const != "" && s != prop.Const {
 			return fmt.Errorf("field %s expected constant %q, got %q", path, prop.Const, s)
 		}
@@ -261,11 +266,12 @@ func (v *Validator) validateRef(collection, ref string, value any, path string) 
 	if ref == "" {
 		return fmt.Errorf("field %s has ref type without a ref target in saved lexicon", path)
 	}
+	resolvedRef := lexicon.ResolveLocalRef(ref, collection)
 	resolved, ok := v.registry.ResolveRef(ref, collection)
 	if !ok {
-		return fmt.Errorf("field %s references unknown saved lexicon type %s", path, lexicon.ResolveLocalRef(ref, collection))
+		return fmt.Errorf("field %s references unknown saved lexicon type %s", path, resolvedRef)
 	}
-	return v.validateResolvedRef(collection, resolved, obj, path)
+	return v.validateResolvedRef(refCollection(resolvedRef), resolved, obj, path)
 }
 
 func (v *Validator) validateUnion(collection string, refs []string, value any, path string) error {
@@ -286,7 +292,7 @@ func (v *Validator) validateUnion(collection string, refs []string, value any, p
 		if !ok {
 			return fmt.Errorf("field %s references unknown saved lexicon type %s", path, resolvedRef)
 		}
-		return v.validateResolvedRef(collection, resolved, obj, path)
+		return v.validateResolvedRef(refCollection(resolvedRef), resolved, obj, path)
 	}
 	return fmt.Errorf("field %s union type %q is not one of %s", path, typeValue, strings.Join(resolveRefs(collection, refs), ", "))
 }
@@ -303,6 +309,54 @@ func (v *Validator) validateResolvedRef(collection string, resolved any, obj map
 }
 
 var tidRecordKeyPattern = regexp.MustCompile(`^[234567abcdefghijklmnopqrstuvwxyz]{13}$`)
+var didPattern = regexp.MustCompile(`^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$`)
+var nsidPattern = regexp.MustCompile(`^[A-Za-z]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z]([A-Za-z0-9-]*[A-Za-z0-9])?)+$`)
+
+func validateStringFormat(format, value, path string) error {
+	switch format {
+	case "":
+		return nil
+	case lexicon.FormatDatetime:
+		if parsed := parseValidationTimestamp(value); parsed {
+			return nil
+		}
+		return fmt.Errorf("field %s expected datetime, got %q", path, value)
+	case lexicon.FormatURI, lexicon.FormatATURI:
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.Scheme == "" {
+			return fmt.Errorf("field %s expected %s, got %q", path, format, value)
+		}
+		if format == lexicon.FormatATURI && parsed.Scheme != "at" {
+			return fmt.Errorf("field %s expected at-uri, got %q", path, value)
+		}
+	case lexicon.FormatDID:
+		if !didPattern.MatchString(value) {
+			return fmt.Errorf("field %s expected did, got %q", path, value)
+		}
+	case lexicon.FormatNSID:
+		if !nsidPattern.MatchString(value) {
+			return fmt.Errorf("field %s expected nsid, got %q", path, value)
+		}
+	case lexicon.FormatRecordKey, lexicon.FormatTID:
+		return validateRecordKey(format, value)
+	}
+	return nil
+}
+
+func parseValidationTimestamp(value string) bool {
+	formats := []string{"2006-01-02T15:04:05.000Z", "2006-01-02T15:04:05Z07:00", "2006-01-02T15:04:05.000Z07:00"}
+	for _, format := range formats {
+		if _, err := time.Parse(format, value); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func refCollection(resolvedRef string) string {
+	collection, _, _ := strings.Cut(resolvedRef, "#")
+	return collection
+}
 
 func validateRecordKey(pattern, rkey string) error {
 	switch pattern {
@@ -312,9 +366,13 @@ func validateRecordKey(pattern, rkey string) error {
 		if rkey != "self" {
 			return fmt.Errorf("record key expected literal self, got %q", rkey)
 		}
-	case "tid":
+	case lexicon.FormatTID:
 		if !tidRecordKeyPattern.MatchString(rkey) {
 			return fmt.Errorf("record key expected tid, got %q", rkey)
+		}
+	case lexicon.FormatRecordKey:
+		if strings.ContainsAny(rkey, "/?#[]@") || rkey == "." || rkey == ".." || rkey == "" {
+			return fmt.Errorf("record key expected valid record-key, got %q", rkey)
 		}
 	default:
 		return nil

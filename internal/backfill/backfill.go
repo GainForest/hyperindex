@@ -531,8 +531,10 @@ func (b *Backfiller) processRepo(ctx context.Context, pdsURL string, data *Atpro
 				"error", err,
 			)
 			atomic.AddInt64(&b.stats.Errors, 1)
+		} else if err := b.updateValidationMetadata(ctx, filteredRecords); err != nil {
+			slog.Warn("[backfill] Failed to update validation metadata for batch", "did", data.DID, "error", err)
+			atomic.AddInt64(&b.stats.Errors, 1)
 		} else {
-			b.updateValidationMetadata(ctx, filteredRecords)
 			insertedCount = len(filteredRecords)
 			atomic.AddInt64(&b.stats.RecordsInserted, int64(insertedCount))
 
@@ -662,7 +664,11 @@ func (b *Backfiller) processRepoLegacy(ctx context.Context, pdsURL string, data 
 			}
 
 			if result == repositories.Inserted {
-				b.updateRecordValidationMetadata(ctx, rec.URI, collection, extractRKeyFromURI(rec.URI), []byte(rec.Value))
+				if err := b.updateRecordValidationMetadata(ctx, rec.URI, collection, extractRKeyFromURI(rec.URI), []byte(rec.Value)); err != nil {
+					slog.Warn("[backfill] Failed to update validation metadata", "uri", rec.URI, "error", err)
+					atomic.AddInt64(&b.stats.Errors, 1)
+					continue
+				}
 				totalInserted++
 				atomic.AddInt64(&b.stats.RecordsInserted, 1)
 				// Log activity for the inserted record
@@ -747,7 +753,9 @@ func (b *Backfiller) BackfillActor(ctx context.Context, did string) (int, error)
 		if err := b.recordsRepo.BatchInsert(ctx, filteredRecords); err != nil {
 			return 0, fmt.Errorf("batch insert failed: %w", err)
 		}
-		b.updateValidationMetadata(ctx, filteredRecords)
+		if err := b.updateValidationMetadata(ctx, filteredRecords); err != nil {
+			return 0, err
+		}
 
 		// Log activity for each inserted record
 		if b.activityRepo != nil {
@@ -793,7 +801,9 @@ func (b *Backfiller) backfillActorLegacy(ctx context.Context, data *AtprotoData)
 			}
 
 			if result == repositories.Inserted {
-				b.updateRecordValidationMetadata(ctx, rec.URI, collection, extractRKeyFromURI(rec.URI), []byte(rec.Value))
+				if err := b.updateRecordValidationMetadata(ctx, rec.URI, collection, extractRKeyFromURI(rec.URI), []byte(rec.Value)); err != nil {
+					return totalRecords, err
+				}
 				totalRecords++
 				// Log activity for the inserted record
 				if b.activityRepo != nil {
@@ -816,24 +826,27 @@ func (b *Backfiller) backfillActorLegacy(ctx context.Context, data *AtprotoData)
 	return totalRecords, nil
 }
 
-func (b *Backfiller) updateValidationMetadata(ctx context.Context, records []*repositories.Record) {
+func (b *Backfiller) updateValidationMetadata(ctx context.Context, records []*repositories.Record) error {
 	if b.validator == nil {
-		return
+		return nil
 	}
 	for _, rec := range records {
-		b.updateRecordValidationMetadata(ctx, rec.URI, rec.Collection, rec.RKey, []byte(rec.JSON))
+		if err := b.updateRecordValidationMetadata(ctx, rec.URI, rec.Collection, rec.RKey, []byte(rec.JSON)); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (b *Backfiller) updateRecordValidationMetadata(ctx context.Context, uri, collection, rkey string, rawJSON []byte) {
+func (b *Backfiller) updateRecordValidationMetadata(ctx context.Context, uri, collection, rkey string, rawJSON []byte) error {
 	if b.validator == nil {
-		return
+		return nil
 	}
 	result := b.validator.ValidateRecord(collection, rkey, rawJSON)
 	if err := b.recordsRepo.UpdateValidationStatus(ctx, uri, result.Status, result.Error, result.LexiconHash); err != nil {
-		slog.Warn("[backfill] Failed to update validation metadata", "uri", uri, "collection", collection, "rkey", rkey, "status", result.Status, "error", err)
-		atomic.AddInt64(&b.stats.Errors, 1)
+		return fmt.Errorf("update validation metadata for %s (%s/%s, status %s): %w", uri, collection, rkey, result.Status, err)
 	}
+	return nil
 }
 
 // extractRKeyFromURI extracts the rkey from an AT-URI (at://did/collection/rkey).

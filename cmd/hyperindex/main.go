@@ -744,7 +744,13 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 	}
 
 	lexiconHashes := make(map[string]string)
-	if _, err := os.Stat(lexiconDir); err == nil {
+	if info, err := os.Stat(lexiconDir); err != nil {
+		if cfg.LexiconDir != "" || !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to access lexicon directory %s: %w", lexiconDir, err)
+		}
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("lexicon path %s is not a directory", lexiconDir)
+	} else {
 		loadedHashes, err := loadLexiconsFromDir(lexiconDir, registry)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load lexicons from directory %s: %w", lexiconDir, err)
