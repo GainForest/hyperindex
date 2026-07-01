@@ -11,9 +11,10 @@ import (
 )
 
 const smokeRecordsQuery = `
-query SmokeRecords($collection: String!, $first: Int!) {
-  records(collection: $collection, first: $first) {
+query SmokeRecords($collection: String!, $first: Int!, $after: String) {
+  records(collection: $collection, first: $first, after: $after) {
     edges {
+      cursor
       node {
         uri
         cid
@@ -23,6 +24,10 @@ query SmokeRecords($collection: String!, $first: Int!) {
         value
       }
     }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
   }
 }`
 
@@ -30,12 +35,19 @@ type recordsQueryResponse struct {
 	Records recordConnection `json:"records"`
 }
 
+type pageInfo struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
+}
+
 type recordConnection struct {
-	Edges []recordEdge `json:"edges"`
+	Edges    []recordEdge `json:"edges"`
+	PageInfo pageInfo     `json:"pageInfo"`
 }
 
 type recordEdge struct {
-	Node Record `json:"node"`
+	Cursor string `json:"cursor"`
+	Node   Record `json:"node"`
 }
 
 type typedByURIRecord struct {
@@ -139,10 +151,38 @@ func TestTypedURIWhereFilterRoundTrip(t *testing.T) {
 
 func fetchGenericRecords(t testing.TB, config smokeConfig, collection string, first int) recordsQueryResponse {
 	t.Helper()
+	return fetchGenericRecordsPage(t, config, collection, first, "")
+}
 
+func fetchAllGenericRecords(t testing.TB, config smokeConfig, collection string) []recordEdge {
+	t.Helper()
+
+	var edges []recordEdge
+	after := ""
+	for {
+		page := fetchGenericRecordsPage(t, config, collection, 1000, after)
+		edges = append(edges, page.Records.Edges...)
+		if !page.Records.PageInfo.HasNextPage {
+			return edges
+		}
+		if page.Records.PageInfo.EndCursor == "" {
+			t.Fatalf("records(%q) has next page without an end cursor", collection)
+		}
+		after = page.Records.PageInfo.EndCursor
+	}
+}
+
+func fetchGenericRecordsPage(t testing.TB, config smokeConfig, collection string, first int, after string) recordsQueryResponse {
+	t.Helper()
+
+	var afterValue any
+	if after != "" {
+		afterValue = after
+	}
 	response := postGraphQL(t, context.Background(), config, "SmokeRecords", smokeRecordsQuery, map[string]any{
 		"collection": collection,
 		"first":      first,
+		"after":      afterValue,
 	})
 
 	var decoded recordsQueryResponse

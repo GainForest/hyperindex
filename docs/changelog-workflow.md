@@ -14,6 +14,7 @@ Skip fragments when the diff is only:
 - tests-only changes, including API smoke tests and smoke expectations
 - Docker-only or Docker Compose-only changes
 - CI-only changes that do not meaningfully affect operators or contributors
+- repository deployment-metadata-only changes, such as Railway healthcheck timeout tuning, that do not change application runtime behavior or require operators to take action
 - internal refactors with no meaningful external impact
 
 If skipped support files are changed alongside an externally meaningful product, API, config, migration, or runtime change, write the fragment for the externally meaningful change only.
@@ -24,7 +25,7 @@ If you are unsure after checking this policy, ask before creating a fragment for
 
 Before creating a fragment, check the changed files and answer these questions in order:
 
-1. Is the diff only docs, tests, API smoke checks or expectations, Docker or Docker Compose files, CI-only changes, or internal refactors with no external impact?
+1. Is the diff only docs, tests, API smoke checks or expectations, Docker or Docker Compose files, CI-only changes, repository deployment metadata with no required operator action, or internal refactors with no external impact?
    - Yes: do not create a fragment.
    - No: continue.
 2. Does the change affect public API behavior, GraphQL behavior, runtime behavior, configuration, migrations, deployment behavior, user workflows, or operator workflows?
@@ -47,6 +48,7 @@ These examples are guidelines, not replacements for the decision checklist:
 | `tests/api-smoke/**` only | No | API smoke checks and expectations are test coverage, not release behavior. |
 | `Dockerfile`, `docker-compose*.yml`, `docker-compose*.yaml`, or Docker-only support files only | No | Docker-only changes are intentionally excluded from release fragments. |
 | `.github/workflows/**` only | Usually no | CI-only changes are skipped unless they meaningfully change contributor or operator workflow. |
+| `railway.toml` healthcheck timeout tuning only | No | Deployment metadata tuning that requires no operator action does not need release notes. |
 | `internal/graphql/**` or lexicon changes that alter public GraphQL fields, filters, pagination, or errors | Yes | Public API behavior changed. |
 | `internal/database/migrations/**` or repository changes that alter persisted schema or migration behavior | Yes | Operators and downstream users may need to understand the runtime data change. |
 | `internal/config/**`, startup code, or deployment config that changes required environment variables or runtime defaults | Yes | Operators may need to update deployments. |

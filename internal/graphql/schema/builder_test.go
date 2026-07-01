@@ -1794,20 +1794,26 @@ func assertRawCIDLinkShape(t *testing.T, value map[string]interface{}, cid strin
 func buildAllTestdataSchema(t *testing.T) *graphql.Schema {
 	t.Helper()
 
+	builder := buildAllTestdataBuilder(t)
+	schema, err := builder.Build()
+	if err != nil {
+		t.Fatalf("buildAllTestdataSchema: failed to build schema: %v", err)
+	}
+	return schema
+}
+
+func buildAllTestdataBuilder(t *testing.T) *Builder {
+	t.Helper()
+
 	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
 	if err != nil {
-		t.Fatalf("buildAllTestdataSchema: failed to load lexicons: %v", err)
+		t.Fatalf("buildAllTestdataBuilder: failed to load lexicons: %v", err)
 	}
 	registry := lexicon.NewRegistry()
 	for _, lex := range lexicons {
 		registry.Register(lex)
 	}
-
-	schema, err := NewBuilder(registry).Build()
-	if err != nil {
-		t.Fatalf("buildAllTestdataSchema: failed to build schema: %v", err)
-	}
-	return schema
+	return NewBuilder(registry)
 }
 
 func buildActivitySchema(t *testing.T) *graphql.Schema {
@@ -2002,6 +2008,299 @@ func TestCollectionResolver_BadgeAwardBadgeTypeFilterFindsReferencedDefinitionTy
 	assertConnectionURIs(t, conn, []string{"at://did:plc:issuer/app.certified.badge.award/award-endorsement"})
 	if got := conn["totalCount"]; got != 1 {
 		t.Fatalf("totalCount = %v, want 1", got)
+	}
+}
+
+func TestEndorsementClosureWhereInputUsesExactDIDFilter(t *testing.T) {
+	fields := endorsementClosureWhereInput.Fields()
+	didField, ok := fields["did"]
+	if !ok {
+		t.Fatal("EndorsementClosureWhereInput missing did field")
+	}
+	if got := didField.Type.String(); got != "EndorsementClosureDIDFilterInput!" {
+		t.Fatalf("EndorsementClosureWhereInput.did type = %q, want EndorsementClosureDIDFilterInput!", got)
+	}
+
+	didFilterFields := endorsementClosureDIDFilterInput.Fields()
+	if _, ok := didFilterFields["eq"]; !ok {
+		t.Fatal("EndorsementClosureDIDFilterInput missing eq field")
+	}
+	if _, ok := didFilterFields["in"]; ok {
+		t.Fatal("EndorsementClosureDIDFilterInput exposes unsupported in field")
+	}
+
+	builder := buildAllTestdataBuilder(t)
+	if _, err := builder.Build(); err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+	accountFields := builder.endorsementAccountType.Fields()
+	if _, ok := accountFields["certifiedProfileData"]; !ok {
+		t.Fatal("EndorsementAccount missing certifiedProfileData field")
+	}
+	if _, ok := accountFields["viaAccounts"]; !ok {
+		t.Fatal("EndorsementAccount missing viaAccounts field")
+	}
+	if _, ok := accountFields["via"]; ok {
+		t.Fatal("EndorsementAccount exposes removed via field")
+	}
+	viaFields := builder.endorsementViaAccountType.Fields()
+	if _, ok := viaFields["certifiedProfileData"]; !ok {
+		t.Fatal("EndorsementViaAccount missing certifiedProfileData field")
+	}
+}
+
+func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:alice/app.certified.actor.profile/self",
+			CID:        "cid-profile-alice",
+			DID:        "did:plc:alice",
+			Collection: "app.certified.actor.profile",
+			JSON:       `{"displayName":"Alice Profile","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:carol/app.certified.actor.profile/self",
+			CID:        "cid-profile-carol",
+			DID:        "did:plc:carol",
+			Collection: "app.certified.actor.profile",
+			JSON:       `{"displayName":"Carol Profile","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        endorsementBadgeURI,
+			CID:        "cid-endorsement",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.definition",
+			JSON:       `{"title":"Endorsement","badgeType":"endorsement","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:viewer/app.certified.badge.award/alice",
+			CID:        "cid-award-alice",
+			DID:        "did:plc:viewer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"cid-endorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:alice"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:viewer/app.certified.badge.award/bob",
+			CID:        "cid-award-bob",
+			DID:        "did:plc:viewer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"cid-endorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bob"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:alice/app.certified.badge.award/carol",
+			CID:        "cid-award-carol",
+			DID:        "did:plc:alice",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"cid-endorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:carol"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:bob/app.certified.badge.award/carol",
+			CID:        "cid-award-carol-bob",
+			DID:        "did:plc:bob",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"cid-endorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:carol"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:carol/app.certified.badge.award/dana",
+			CID:        "cid-award-dana",
+			DID:        "did:plc:carol",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"cid-endorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:dana"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+	})
+
+	result := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `{
+			endorsementClosure(
+				where: { did: { eq: "did:plc:viewer" } }
+				first: 10
+			) {
+				truncated
+				totalCount
+				pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+				edges {
+					cursor
+					node {
+						did
+						degree
+						certifiedProfileData { displayName }
+						viaAccounts { did certifiedProfileData { displayName } }
+					}
+				}
+			}
+		}`,
+		Context: ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	closure := data["endorsementClosure"].(map[string]interface{})
+	if closure["truncated"] != false {
+		t.Fatalf("truncated = %v, want false", closure["truncated"])
+	}
+
+	if closure["totalCount"] != 4 {
+		t.Fatalf("totalCount = %v, want 4", closure["totalCount"])
+	}
+	pageInfo := closure["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false || pageInfo["hasPreviousPage"] != false {
+		t.Fatalf("pageInfo = %#v, want no previous or next page", pageInfo)
+	}
+	if pageInfo["startCursor"] == nil || pageInfo["endCursor"] == nil {
+		t.Fatalf("pageInfo cursors = %#v, want start and end cursors", pageInfo)
+	}
+
+	edges := closure["edges"].([]interface{})
+	got := make([]map[string]interface{}, 0, len(edges))
+	for _, edge := range edges {
+		edgeMap := edge.(map[string]interface{})
+		if edgeMap["cursor"] == "" {
+			t.Fatal("edge cursor is empty")
+		}
+		got = append(got, edgeMap["node"].(map[string]interface{}))
+	}
+
+	want := []map[string]interface{}{
+		{"did": "did:plc:alice", "degree": 1, "certifiedProfileData": map[string]interface{}{"displayName": "Alice Profile"}, "viaAccounts": []interface{}{}},
+		{"did": "did:plc:bob", "degree": 1, "certifiedProfileData": nil, "viaAccounts": []interface{}{}},
+		{"did": "did:plc:carol", "degree": 2, "certifiedProfileData": map[string]interface{}{"displayName": "Carol Profile"}, "viaAccounts": []interface{}{map[string]interface{}{"did": "did:plc:alice", "certifiedProfileData": map[string]interface{}{"displayName": "Alice Profile"}}, map[string]interface{}{"did": "did:plc:bob", "certifiedProfileData": nil}}},
+		{"did": "did:plc:dana", "degree": 3, "certifiedProfileData": nil, "viaAccounts": []interface{}{map[string]interface{}{"did": "did:plc:carol", "certifiedProfileData": map[string]interface{}{"displayName": "Carol Profile"}}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("accounts = %#v, want %#v", got, want)
+	}
+}
+
+func TestEndorsementClosureResolverPaginatesAndFiltersDegrees(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement-pagination"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{URI: endorsementBadgeURI, CID: "cid-endorsement", DID: "did:plc:issuer", Collection: "app.certified.badge.definition", JSON: `{"title":"Endorsement","badgeType":"endorsement","createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:viewer/app.certified.badge.award/alice-pagination", CID: "cid-award-alice", DID: "did:plc:viewer", Collection: "app.certified.badge.award", JSON: `{"badge":{"uri":"` + endorsementBadgeURI + `"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:alice"},"createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:viewer/app.certified.badge.award/bob-pagination", CID: "cid-award-bob", DID: "did:plc:viewer", Collection: "app.certified.badge.award", JSON: `{"badge":{"uri":"` + endorsementBadgeURI + `"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bob"},"createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:alice/app.certified.badge.award/carol-pagination", CID: "cid-award-carol", DID: "did:plc:alice", Collection: "app.certified.badge.award", JSON: `{"badge":{"uri":"` + endorsementBadgeURI + `"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:carol"},"createdAt":"2026-01-01T00:00:00Z"}`},
+	})
+
+	result := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `{
+			endorsementClosure(
+				where: { did: { eq: "did:plc:viewer" }, degree: { eq: 1 } }
+				first: 1
+			) {
+				totalCount
+				edges { cursor node { did degree } }
+				pageInfo { hasNextPage hasPreviousPage endCursor }
+			}
+		}`,
+		Context: ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected GraphQL errors: %v", result.Errors)
+	}
+	closure := result.Data.(map[string]interface{})["endorsementClosure"].(map[string]interface{})
+	if closure["totalCount"] != 2 {
+		t.Fatalf("totalCount = %v, want 2", closure["totalCount"])
+	}
+	edges := closure["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+	firstNode := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if firstNode["did"] != "did:plc:alice" || firstNode["degree"] != 1 {
+		t.Fatalf("first node = %#v, want alice degree 1", firstNode)
+	}
+	pageInfo := closure["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != true || pageInfo["hasPreviousPage"] != false {
+		t.Fatalf("pageInfo = %#v, want next page only", pageInfo)
+	}
+	after := pageInfo["endCursor"].(string)
+
+	result = graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `query($after: String!) {
+			endorsementClosure(
+				where: { did: { eq: "did:plc:viewer" }, degree: { eq: 1 } }
+				first: 1
+				after: $after
+			) {
+				edges { node { did degree } }
+				pageInfo { hasNextPage hasPreviousPage }
+			}
+		}`,
+		VariableValues: map[string]interface{}{"after": after},
+		Context:        ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected second-page GraphQL errors: %v", result.Errors)
+	}
+	closure = result.Data.(map[string]interface{})["endorsementClosure"].(map[string]interface{})
+	edges = closure["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("second page len(edges) = %d, want 1", len(edges))
+	}
+	secondNode := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if secondNode["did"] != "did:plc:bob" || secondNode["degree"] != 1 {
+		t.Fatalf("second node = %#v, want bob degree 1", secondNode)
+	}
+	pageInfo = closure["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false || pageInfo["hasPreviousPage"] != true {
+		t.Fatalf("second pageInfo = %#v, want previous page only", pageInfo)
+	}
+}
+
+func TestEndorsementClosureResolverRejectsInvalidArgs(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	ctx := setupSchemaRecordsTestDB(t, nil)
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ endorsementClosure(where: { did: { eq: "not-a-did" } }) { truncated } }`,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL error for invalid root DID")
+	}
+	if !strings.Contains(result.Errors[0].Message, "not a valid DID") {
+		t.Fatalf("error = %q, want invalid DID message", result.Errors[0].Message)
+	}
+
+	result = graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ endorsementClosure(where: { did: { in: ["did:plc:viewer"] } }) { truncated } }`,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL validation error for unsupported where.did.in")
+	}
+	if !strings.Contains(result.Errors[0].Message, "Unknown field") {
+		t.Fatalf("error = %q, want GraphQL unknown-field validation", result.Errors[0].Message)
+	}
+
+	result = graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ endorsementClosure(where: { did: { eq: "did:plc:viewer" }, degree: { eq: 4 } }) { truncated } }`,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL error for invalid degree")
+	}
+	if !strings.Contains(result.Errors[0].Message, "where.degree.eq must be between") {
+		t.Fatalf("error = %q, want invalid degree message", result.Errors[0].Message)
+	}
+
+	result = graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ endorsementClosure(where: { did: { eq: "did:plc:viewer" }, degree: { lte: 3 } }) { truncated } }`,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL error for unsupported degree operator")
 	}
 }
 

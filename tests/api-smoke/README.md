@@ -92,6 +92,7 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - Three-level nested filters for `org.hypercerts.collection`, including same-element `any` semantics for `where: { items: { any: { itemIdentifier: { uri: { eq: ... }, cid: { eq: ... } } } } }`
 - Positive and negative nested activity-claim filters for contributor identities, one-level refs/unions such as `rights.uri` and `image.uri`, depth-limited presence filters such as `description.facets.any.index.isNull`, and schema coverage that nested arrays inside an existing `any` expose presence checks but not another `any`
 - `app.certified.badge.award` exposes the derived `badgeType: StringFilterInput` where filter
+- `endorsementClosure` behavior for active Certified endorsement edges, closure pagination, and DID-subject validation when configured in the expectations file
 - `org.hypercerts.claim.activity` image presence filtering with `where: { image: { isNull: false } }`
 - Optional external record-label filtering and pagination for `org.hypercerts.claim.activity`
 - Author-account label filtering for likely-test, standard, high-quality, no-filter, `has`, `none`, multi-value `has`, and pagination on `org.hypercerts.claim.activity` when configured in the expectations file
@@ -110,6 +111,10 @@ HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID=did:plc:example \
 ```
 
 If `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` is unset, the external label smoke test is skipped. Environment-specific expectations can override `externalLabelActivityClaims` in the expectations JSON to change the source DID env var name, page size, label values, or minimum record counts.
+
+## Endorsement closure smoke check
+
+The default expectations file enables the `endorsementClosure` behavior check. It derives active Certified endorsement edges from indexed badge awards, definitions, and responses, finds a root DID with an indirect path, then verifies the API returns the expected bounded closure. Environment-specific expectations can override `endorsementClosure.minimumActiveEdges` or disable indirect-path requirements with `endorsementClosure.requireIndirect: false`.
 
 ## Author label smoke check
 

@@ -40,7 +40,7 @@ The current production indexer is ATProto-first. Do **not** explain it using old
 - Production: `https://api.indexer.hypercerts.dev/graphql`
 - Staging: `https://dev.api.indexer.hypercerts.dev/graphql`
 
-Use production by default for consumer examples. `api.indexer.hypercerts.dev` is the production endpoint and currently exposes presence filters and typed queries for the collections above. Staging may expose schema changes earlier; because ATProto data is network-wide, do not describe staging as a separate dataset unless you have verified an environment-specific indexing difference.
+Use production by default for consumer examples. `api.indexer.hypercerts.dev` is the production endpoint and currently exposes presence filters and typed queries for the collections above. Staging and production do not always run the same schema, and this skill usually reflects the default branch before every endpoint has caught up. Because ATProto data is network-wide, do not describe staging as a separate dataset unless you have verified an environment-specific indexing difference.
 
 ## Before answering
 
@@ -50,7 +50,7 @@ Use production by default for consumer examples. `api.indexer.hypercerts.dev` is
 4. Always include pagination (`first`, `after`, `pageInfo { hasNextPage endCursor }`) in list examples.
 5. Keep selection sets small. Add fields only when needed for the workflow.
 6. Use inline fragments for union fields such as descriptions, images, attachment content, proof fields, and strong references.
-7. Use generated nested `where` filters for exact matches inside arrays, refs, and unions when the endpoint exposes them. Fall back to `search(query: ..., collection: ...)` for substring discovery, unsupported nested shapes, or deployed endpoints that have not rolled out nested filters yet.
+7. Do not assume the target endpoint exposes every feature described in this skill. `main` may be ahead of staging, and staging may be ahead of production. When a query depends on newer schema features such as `recordTimeline`, nested filters, author labels, or collection-specific fields, introspect the target endpoint first. If the feature is missing, tell the user which endpoint lacks it and offer the closest fallback, such as `search(query: ..., collection: ...)` plus client-side filtering.
 
 Detailed schema reference: [references/schema-reference.md](references/schema-reference.md)
 
@@ -122,6 +122,35 @@ where: { badgeType: { eq: "endorsement" } }
 ```
 
 `badgeType` uses `StringFilterInput`, so it supports the same string operators exposed for badge definitions. Awards whose referenced badge definition is missing or has no `badgeType` do not match positive value filters.
+
+For DID-rooted Certified endorsement networks, use `endorsementClosure(where: ..., first: ..., after: ...)`:
+
+```graphql
+query EndorsementClosure($did: String!) {
+  endorsementClosure(
+    where: { did: { eq: $did } }
+    first: 100
+  ) {
+    truncated
+    totalCount
+    pageInfo { hasNextPage endCursor }
+    edges {
+      cursor
+      node {
+        did
+        degree
+        certifiedProfileData { did displayName avatar }
+        viaAccounts {
+          did
+          certifiedProfileData { did displayName avatar }
+        }
+      }
+    }
+  }
+}
+```
+
+`where.did.eq` is required and selects the root DID. The endorsement closure DID filter exposes only `eq`, not `in`, because each request is rooted at one DID. Optional `where.degree.eq` returns only one hop distance; the value must be `1`, `2`, or `3`. Omit `where.degree` to return all supported degrees. Results are sorted by degree then DID. `certifiedProfileData` resolves the reached account's Certified profile when one exists. `viaAccounts` lists up to 64 previous-ring accounts that led to the account, including each predecessor DID and optional Certified profile data; it is empty for direct degree-1 accounts. `truncated: true` means the server-side account cap was reached. The resolver computes active endorsement edges from current Certified badge award, definition, and response records at request time; it only counts badge awards whose subject is the `app.certified.defs#did` account DID union member, ignores record strongRef subjects, respects badge-definition `allowedIssuers` allowlists, and does not use a persisted edge table.
 
 If a workflow needs unsupported nested matching, use one of these patterns:
 
@@ -679,6 +708,5 @@ query HypercertCollectionStats {
 - Say “attachment” for `org.hypercerts.context.attachment` records.
 - Say “certified profile” for `app.certified.actor.profile` records.
 - Say “EVM link” or “wallet link” for `app.certified.link.evm` records.
-- Do not assume every deployed endpoint has nested filters. When nested filtering matters, introspect the target endpoint and then use generated exact nested filters for arrays/refs/unions if present; otherwise fall back to search or client-side filtering.
 - When giving user-facing parameterized examples, include both the query and variables.
 - When the schema has changed, prefer live introspection over this file and mention the endpoint used.

@@ -50,6 +50,32 @@ jobs:
 
           printf 'Found %s unreleased fragment(s).\n' "${#fragments[@]}"
 
+      - name: Verify release label exists
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          response_headers=$(mktemp)
+          trap 'rm -f "$response_headers"' EXIT
+
+          if gh api --include "repos/${GITHUB_REPOSITORY}/labels/release" >"$response_headers" 2>/dev/null; then
+            echo "Release label exists."
+            exit 0
+          fi
+
+          http_status=$(awk '/^HTTP\// { code = $2 } END { print code }' "$response_headers")
+          if [ "$http_status" = "404" ]; then
+            echo "::error::Required release label 'release' does not exist. Create it before running this workflow."
+            exit 1
+          fi
+
+          if [ -n "$http_status" ]; then
+            echo "::error::Could not verify whether the 'release' label exists. GitHub API returned HTTP ${http_status}."
+          else
+            echo "::error::Could not verify whether the 'release' label exists. Check GitHub API authentication and connectivity."
+          fi
+          exit 1
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:

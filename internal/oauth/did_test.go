@@ -97,6 +97,8 @@ func TestIsValidDID(t *testing.T) {
 	}{
 		{"did:plc:example123", true},
 		{"did:web:example.com", true},
+		{"did:web:", false},
+		{"did:plc:bad space", false},
 		{"did:key:example", false},
 		{"invalid", false},
 		{"", false},
