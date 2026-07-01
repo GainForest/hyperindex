@@ -94,5 +94,34 @@
   "search": {
     "query": "hypercert",
     "first": 1
+  },
+  "authorLabelActivityClaims": {
+    "sourceDID": "did:plc:pswneepkd5lesumj7ejmkbal",
+    "pageSize": 10,
+    "labels": [
+      {
+        "value": "likely-test",
+        "minimumRecords": 10
+      },
+      {
+        "value": "standard",
+        "minimumRecords": 10
+      },
+      {
+        "value": "high-quality",
+        "minimumRecords": 10
+      }
+    ],
+    "noneValue": "likely-test",
+    "noneMinimumRecords": 10,
+    "multipleHasValues": [
+      "standard",
+      "high-quality"
+    ],
+    "multipleHasMinimumRecords": 20
+  },
+  "endorsementClosure": {
+    "minimumActiveEdges": 5,
+    "requireIndirect": true
   }
 }

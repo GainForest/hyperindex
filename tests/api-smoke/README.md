@@ -40,13 +40,33 @@ HYPERINDEX_SMOKE_URL=https://api.example.com \
   go test -v -tags=api_smoke ./tests/api-smoke -count=1
 ```
 
+## Local isolated Tap smoke stack
+
+Use the repo-level Make target when you want a fresh local Docker stack instead of pointing smoke tests at an existing deployment:
+
+```bash
+make smoke-tap-local
+```
+
+This requires Docker with Compose v2. The target starts Tap and Hyperindex in an isolated Compose project, mounts `testdata/lexicons` so the local schema includes the Hypercerts, Certified, ATProto helper, and Leaflet helper lexicons used by local Tap checks, sets `TAP_SIGNAL_COLLECTION=app.certified.actor.profile`, sets `TAP_COLLECTION_FILTERS=app.certified.*,org.hypercerts.*`, waits 20 seconds for Tap discovery/backfill to warm up after Hyperindex is ready, and runs this smoke suite against `http://127.0.0.1:8080` with `tests/api-smoke/expectations/local-tap.json`. Failed smoke attempts retry every 15 seconds while Tap catches up. The filters use Tap's `.*` wildcard syntax for NSID prefixes. It ignores `tests/api-smoke/.env` by setting `HYPERINDEX_SMOKE_ENV_FILE=/dev/null`, so local staging credentials are not accidentally used.
+
+Useful overrides:
+
+```bash
+HYPERINDEX_LOCAL_TAP_KEEP=1 make smoke-tap-local       # leave containers running
+HYPERINDEX_LOCAL_TAP_HOST_PORT=18080 make smoke-tap-local
+HYPERINDEX_LOCAL_TAP_SETTLE_SECONDS=30 make smoke-tap-local
+HYPERINDEX_LOCAL_TAP_SMOKE_RETRY_SECONDS=20 make smoke-tap-local
+HYPERINDEX_LOCAL_TAP_SMOKE_TIMEOUT_SECONDS=1800 make smoke-tap-local
+```
+
 ## Optional smoke `.env` file
 
 By default, the suite loads `tests/api-smoke/.env` if the file exists. Copy `tests/api-smoke/.env.example` to `tests/api-smoke/.env` for local or staging smoke settings. Set `HYPERINDEX_SMOKE_ENV_FILE=/path/to/.env` to load a different file. Values already present in the process environment take precedence over values from the file.
 
 ## Optional expectations file
 
-By default, the suite loads `tests/api-smoke/expectations.json`. Set `HYPERINDEX_SMOKE_EXPECTATIONS=/path/to/expectations.json` to provide environment-specific expectations for the smoke run.
+By default, the suite loads `tests/api-smoke/expectations.json`. Set `HYPERINDEX_SMOKE_EXPECTATIONS=/path/to/expectations.json` to provide environment-specific expectations for the smoke run. Keep additional checked-in expectation files under `tests/api-smoke/expectations/`.
 
 The default expectations only assert `app.certified.*` and `org.hypercerts.*` lexicons. They assume the target API started with those lexicons, plus any loader-required helper lexicons, loaded. For local full-stack runs, set `LEXICON_DIR` to a directory containing that lexicon set or point `HYPERINDEX_SMOKE_EXPECTATIONS` at an environment-specific expectations file.
 
@@ -64,12 +84,18 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - `collectionStats`
 - Search
 - Strict pagination
+- `recordTimeline` schema, minimum record sanity check, pagination, author filtering, and Certified profile hydration
 - Activity claim external label querying, value filtering, and pagination
 - Typed `ByUri` roundtrip
 - `app.certified.graph.follow` typed pagination, filters, and sorting
-- `org.hypercerts.claim.activity` schema support for `image: PresenceFilterInput`
+- `org.hypercerts.claim.activity` image filters expose `isNull` for presence checks
+- Three-level nested filters for `org.hypercerts.collection`, including same-element `any` semantics for `where: { items: { any: { itemIdentifier: { uri: { eq: ... }, cid: { eq: ... } } } } }`
+- Positive and negative nested activity-claim filters for contributor identities, one-level refs/unions such as `rights.uri` and `image.uri`, depth-limited presence filters such as `description.facets.any.index.isNull`, and schema coverage that nested arrays inside an existing `any` expose presence checks but not another `any`
+- `app.certified.badge.award` exposes the derived `badgeType: StringFilterInput` where filter
+- `endorsementClosure` behavior for active Certified endorsement edges, closure pagination, and DID-subject validation when configured in the expectations file
 - `org.hypercerts.claim.activity` image presence filtering with `where: { image: { isNull: false } }`
-- Optional external label filtering and pagination for `org.hypercerts.claim.activity`
+- Optional external record-label filtering and pagination for `org.hypercerts.claim.activity`
+- Author-account label filtering for likely-test, standard, high-quality, no-filter, `has`, `none`, multi-value `has`, and pagination on `org.hypercerts.claim.activity` when configured in the expectations file
 - Optional ATProto write-through lifecycle for `app.certified.actor.profile` and `org.hypercerts.claim.activity`
 
 ## Optional external label smoke check
@@ -85,6 +111,18 @@ HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID=did:plc:example \
 ```
 
 If `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` is unset, the external label smoke test is skipped. Environment-specific expectations can override `externalLabelActivityClaims` in the expectations JSON to change the source DID env var name, page size, label values, or minimum record counts.
+
+## Endorsement closure smoke check
+
+The default expectations file enables the `endorsementClosure` behavior check. It derives active Certified endorsement edges from indexed badge awards, definitions, and responses, finds a root DID with an indirect path, then verifies the API returns the expected bounded closure. Environment-specific expectations can override `endorsementClosure.minimumActiveEdges` or disable indirect-path requirements with `endorsementClosure.requireIndirect: false`.
+
+## Author label smoke check
+
+The default expectations file requires active DID-subject labels from the orglabeler source DID `did:plc:pswneepkd5lesumj7ejmkbal`. The check queries `where.authorLabels` for `likely-test`, `standard`, and `high-quality`, verifies `none` and multi-value `has` filters, paginates the multi-value result, and uses the root `externalLabels(subjects: [did])` query to confirm returned author DIDs have the expected non-CID DID-subject labels.
+
+For the negative `none` filter, `authorLabelActivityClaims.noneValue` is the label to exclude from author DIDs and `authorLabelActivityClaims.noneMinimumRecords` is the minimum number of activity claims expected whose authors do not have that label. It is a dataset-size contract for the smoke target, not a label value named `none`.
+
+API smoke should validate indexed data as served by the target API; it does not seed author labels. The isolated local Tap expectations omit `authorLabelActivityClaims`, so local full-stack smoke skips this check unless you provide a custom expectations file for a target with real author-label data. Environment-specific expectations can override `authorLabelActivityClaims.sourceDID` directly or set `authorLabelActivityClaims.sourceDIDEnv` to read the source DID from an environment variable.
 
 ## Optional write-through smoke check
 
@@ -121,4 +159,4 @@ The target deployment must have enough public data for read-path checks. These c
 
 At least one `org.hypercerts.claim.activity` record must have a non-null top-level `image` field for the image presence smoke check.
 
-The label smoke checks also assume `org.hypercerts.claim.activity` has active external labels from the source DID configured by `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` or the expectation file's `externalLabelActivityClaims.sourceDIDEnv` setting.
+The record-label smoke checks also assume `org.hypercerts.claim.activity` has active external labels from the source DID configured by `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` or the expectation file's `externalLabelActivityClaims.sourceDIDEnv` setting. The author-label smoke checks assume activity authors have active non-CID DID-subject labels from the expectation file's `authorLabelActivityClaims.sourceDID` setting, or from `authorLabelActivityClaims.sourceDIDEnv` when an environment-specific expectations file opts into env-based configuration.

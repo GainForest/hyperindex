@@ -18,6 +18,22 @@ query SmokeSchema {
         name
         args {
           name
+          type {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType {
+                kind
+                name
+                ofType {
+                  kind
+                  name
+                }
+              }
+            }
+          }
         }
         type {
           kind
@@ -42,6 +58,25 @@ query SmokeSchema {
       name
       fields {
         name
+      }
+      inputFields {
+        name
+        type {
+          kind
+          name
+          ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType {
+                kind
+                name
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -70,9 +105,10 @@ type schemaObject struct {
 }
 
 type schemaType struct {
-	Kind   string        `json:"kind"`
-	Name   string        `json:"name"`
-	Fields []schemaField `json:"fields"`
+	Kind        string             `json:"kind"`
+	Name        string             `json:"name"`
+	Fields      []schemaField      `json:"fields"`
+	InputFields []schemaInputField `json:"inputFields"`
 }
 
 type schemaField struct {
@@ -82,7 +118,8 @@ type schemaField struct {
 }
 
 type schemaArgument struct {
-	Name string `json:"name"`
+	Name string        `json:"name"`
+	Type schemaTypeRef `json:"type"`
 }
 
 type schemaTypeRef struct {
@@ -130,6 +167,100 @@ func TestSchemaExposesExpectedTypedCollections(t *testing.T) {
 	}
 }
 
+func TestSchemaExposesURIWhereFilter(t *testing.T) {
+	config := loadSmokeConfig(t)
+	schema := fetchGraphQLSchema(t, config)
+	queryFields := fieldsByName(schema.QueryType.Fields)
+	types := typesByName(schema.Types)
+
+	uriFilter := requireSchemaType(t, types, "URIFilterInput")
+	if uriFilter.Kind != "INPUT_OBJECT" {
+		t.Fatalf("URIFilterInput kind = %q, want INPUT_OBJECT", uriFilter.Kind)
+	}
+	uriFilterFields := inputFieldsByName(uriFilter.InputFields)
+	requireSchemaInputField(t, uriFilterFields, "eq")
+	requireSchemaInputField(t, uriFilterFields, "in")
+	for _, absent := range []string{"contains", "startsWith", "neq", "isNull"} {
+		if _, exists := uriFilterFields[absent]; exists {
+			t.Fatalf("URIFilterInput exposes unsupported field %q", absent)
+		}
+	}
+
+	for nsid, queryFieldName := range config.expectations.TypedQueryFields {
+		nsid := nsid
+		queryFieldName := queryFieldName
+		t.Run(nsid, func(t *testing.T) {
+			collectionField := requireSchemaFieldForNSID(t, queryFields, queryFieldName, nsid)
+			whereArg := requireSchemaArgument(t, collectionField, "where")
+			whereInputName := namedTypeName(whereArg.Type)
+			whereInput := requireSchemaType(t, types, whereInputName)
+			uriField := requireSchemaInputField(t, inputFieldsByName(whereInput.InputFields), "uri")
+			if got := namedTypeName(uriField.Type); got != "URIFilterInput" {
+				t.Fatalf("%s.uri filter type = %q, want URIFilterInput", whereInputName, got)
+			}
+		})
+	}
+
+	smokeLog("✓ Typed collection schemas expose uri where filters")
+}
+
+func TestSchemaExposesAuthorLabelWhereFilter(t *testing.T) {
+	config := loadSmokeConfig(t)
+	schema := fetchGraphQLSchema(t, config)
+	queryFields := fieldsByName(schema.QueryType.Fields)
+	types := typesByName(schema.Types)
+
+	for nsid, queryFieldName := range config.expectations.TypedQueryFields {
+		nsid := nsid
+		queryFieldName := queryFieldName
+		t.Run(nsid, func(t *testing.T) {
+			collectionField := requireSchemaFieldForNSID(t, queryFields, queryFieldName, nsid)
+			whereArg := requireSchemaArgument(t, collectionField, "where")
+			whereInputName := namedTypeName(whereArg.Type)
+			whereInput := requireSchemaType(t, types, whereInputName)
+			whereFields := inputFieldsByName(whereInput.InputFields)
+
+			externalLabelsField := requireSchemaInputField(t, whereFields, "externalLabels")
+			if got := namedTypeName(externalLabelsField.Type); got != "ExternalLabelWhereInput" {
+				t.Fatalf("%s.externalLabels filter type = %q, want ExternalLabelWhereInput", whereInputName, got)
+			}
+			authorLabelsField := requireSchemaInputField(t, whereFields, "authorLabels")
+			if got := namedTypeName(authorLabelsField.Type); got != "ExternalLabelWhereInput" {
+				t.Fatalf("%s.authorLabels filter type = %q, want ExternalLabelWhereInput", whereInputName, got)
+			}
+
+			recordType := requireSchemaType(t, types, typeNameFromNSID(nsid))
+			recordFields := fieldsByName(recordType.Fields)
+			requireSchemaField(t, recordFields, "externalLabels")
+			if _, exists := recordFields["authorLabels"]; exists {
+				t.Fatalf("record type %s exposes authorLabels field; authorLabels should only be a where filter", recordType.Name)
+			}
+		})
+	}
+
+	smokeLog("✓ Typed collection schemas expose authorLabels where filters")
+}
+
+func TestSchemaExposesBadgeAwardBadgeTypeFilter(t *testing.T) {
+	config := loadSmokeConfig(t)
+	schema := fetchGraphQLSchema(t, config)
+	types := typesByName(schema.Types)
+
+	awardWhereInput := requireSchemaType(t, types, "AppCertifiedBadgeAwardWhereInput")
+	badgeTypeField := requireSchemaInputField(t, inputFieldsByName(awardWhereInput.InputFields), "badgeType")
+	if got := namedTypeName(badgeTypeField.Type); got != "StringFilterInput" {
+		t.Fatalf("AppCertifiedBadgeAwardWhereInput.badgeType filter type = %q, want StringFilterInput", got)
+	}
+
+	definitionWhereInput := requireSchemaType(t, types, "AppCertifiedBadgeDefinitionWhereInput")
+	definitionBadgeTypeField := requireSchemaInputField(t, inputFieldsByName(definitionWhereInput.InputFields), "badgeType")
+	if got := namedTypeName(definitionBadgeTypeField.Type); got != "StringFilterInput" {
+		t.Fatalf("AppCertifiedBadgeDefinitionWhereInput.badgeType filter type = %q, want StringFilterInput", got)
+	}
+
+	smokeLog("✓ Badge award schemas expose badgeType where filters")
+}
+
 func TestSchemaExcludesNonRecordLexiconsFromTypedCollectionQueries(t *testing.T) {
 	config := loadSmokeConfig(t)
 	schema := fetchGraphQLSchema(t, config)
@@ -163,6 +294,38 @@ func TestSchemaExposesPublicSmokeQueryFields(t *testing.T) {
 	requireSchemaArgument(t, searchField, "first")
 
 	requireSchemaField(t, queryFields, "collectionStats")
+
+	if config.expectations.EndorsementClosure.configured() {
+		endorsementClosureField := requireSchemaField(t, queryFields, "endorsementClosure")
+		whereArg := requireSchemaArgument(t, endorsementClosureField, "where")
+		requireSchemaArgument(t, endorsementClosureField, "first")
+		requireSchemaArgument(t, endorsementClosureField, "after")
+
+		whereInput := requireSchemaType(t, typesByName(schema.Types), namedTypeName(whereArg.Type))
+		didField := requireSchemaInputField(t, inputFieldsByName(whereInput.InputFields), "did")
+		if got := namedTypeName(didField.Type); got != "EndorsementClosureDIDFilterInput" {
+			t.Fatalf("EndorsementClosureWhereInput.did type = %q, want EndorsementClosureDIDFilterInput", got)
+		}
+		types := typesByName(schema.Types)
+		didFilter := requireSchemaType(t, types, "EndorsementClosureDIDFilterInput")
+		didFilterFields := inputFieldsByName(didFilter.InputFields)
+		requireSchemaInputField(t, didFilterFields, "eq")
+		if _, exists := didFilterFields["in"]; exists {
+			t.Fatal("EndorsementClosureDIDFilterInput exposes unsupported field in")
+		}
+
+		accountType := requireSchemaType(t, types, "EndorsementAccount")
+		accountFields := fieldsByName(accountType.Fields)
+		requireSchemaField(t, accountFields, "certifiedProfileData")
+		requireSchemaField(t, accountFields, "viaAccounts")
+		if _, exists := accountFields["via"]; exists {
+			t.Fatal("EndorsementAccount exposes removed field via")
+		}
+		viaAccountType := requireSchemaType(t, types, "EndorsementViaAccount")
+		viaAccountFields := fieldsByName(viaAccountType.Fields)
+		requireSchemaField(t, viaAccountFields, "did")
+		requireSchemaField(t, viaAccountFields, "certifiedProfileData")
+	}
 
 	smokeLog("✓ Public schema has expected GraphQL query fields")
 }
@@ -228,15 +391,26 @@ func requireSchemaType(t testing.TB, types map[string]schemaType, name string) s
 	return typ
 }
 
-func requireSchemaArgument(t testing.TB, field schemaField, name string) {
+func requireSchemaArgument(t testing.TB, field schemaField, name string) schemaArgument {
 	t.Helper()
 
 	for _, argument := range field.Args {
 		if argument.Name == name {
-			return
+			return argument
 		}
 	}
 	t.Fatalf("schema field %q is missing argument %q", field.Name, name)
+	return schemaArgument{}
+}
+
+func requireSchemaInputField(t testing.TB, fields map[string]schemaInputField, name string) schemaInputField {
+	t.Helper()
+
+	field, ok := fields[name]
+	if !ok {
+		t.Fatalf("schema input is missing field %q", name)
+	}
+	return field
 }
 
 func namedTypeName(typeRef schemaTypeRef) string {
@@ -249,6 +423,14 @@ func namedTypeName(typeRef schemaTypeRef) string {
 func queryFieldNameFromNSID(nsid string) string {
 	parts := strings.Split(nsid, ".")
 	for index := 1; index < len(parts); index++ {
+		parts[index] = upperFirstRune(parts[index])
+	}
+	return strings.Join(parts, "")
+}
+
+func typeNameFromNSID(nsid string) string {
+	parts := strings.Split(nsid, ".")
+	for index := range parts {
 		parts[index] = upperFirstRune(parts[index])
 	}
 	return strings.Join(parts, "")

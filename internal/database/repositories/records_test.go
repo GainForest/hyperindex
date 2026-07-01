@@ -52,10 +52,10 @@ func TestRecordsRepository_Insert(t *testing.T) {
 	}{
 		{
 			name:       "insert new record",
-			uri:        "at://did:plc:test1/app.bsky.feed.post/abc123",
+			uri:        "at://did:plc:test1/com.example.timeline.post/abc123",
 			cid:        "bafyreiabc123",
 			did:        "did:plc:test1",
-			collection: "app.bsky.feed.post",
+			collection: "com.example.timeline.post",
 			json:       `{"text":"hello","createdAt":"2026-01-15T10:00:00Z"}`,
 			wantResult: repositories.Inserted,
 		},
@@ -63,26 +63,26 @@ func TestRecordsRepository_Insert(t *testing.T) {
 			name: "insert same URI and same CID is skipped",
 			setup: func(repo *repositories.RecordsRepository) {
 				insertTestRecord(t, repo,
-					"at://did:plc:test1/app.bsky.feed.post/dup1",
+					"at://did:plc:test1/com.example.timeline.post/dup1",
 					"bafyreisame",
 					"did:plc:test1",
-					"app.bsky.feed.post",
+					"com.example.timeline.post",
 					`{"text":"original"}`,
 				)
 			},
-			uri:        "at://did:plc:test1/app.bsky.feed.post/dup1",
+			uri:        "at://did:plc:test1/com.example.timeline.post/dup1",
 			cid:        "bafyreisame",
 			did:        "did:plc:test1",
-			collection: "app.bsky.feed.post",
+			collection: "com.example.timeline.post",
 			json:       `{"text":"original"}`,
 			wantResult: repositories.Skipped,
 		},
 		{
 			name:       "insert new record with empty CID is inserted (not silently skipped)",
-			uri:        "at://did:plc:test1/app.bsky.feed.post/nocid",
+			uri:        "at://did:plc:test1/com.example.timeline.post/nocid",
 			cid:        "", // Tap omits CID on some events
 			did:        "did:plc:test1",
-			collection: "app.bsky.feed.post",
+			collection: "com.example.timeline.post",
 			json:       `{"text":"no cid"}`,
 			wantResult: repositories.Inserted,
 		},
@@ -90,17 +90,17 @@ func TestRecordsRepository_Insert(t *testing.T) {
 			name: "insert same URI with different CID is updated",
 			setup: func(repo *repositories.RecordsRepository) {
 				insertTestRecord(t, repo,
-					"at://did:plc:test1/app.bsky.feed.post/upd1",
+					"at://did:plc:test1/com.example.timeline.post/upd1",
 					"bafyreiold",
 					"did:plc:test1",
-					"app.bsky.feed.post",
+					"com.example.timeline.post",
 					`{"text":"old version"}`,
 				)
 			},
-			uri:        "at://did:plc:test1/app.bsky.feed.post/upd1",
+			uri:        "at://did:plc:test1/com.example.timeline.post/upd1",
 			cid:        "bafyreinew",
 			did:        "did:plc:test1",
-			collection: "app.bsky.feed.post",
+			collection: "com.example.timeline.post",
 			json:       `{"text":"new version"}`,
 			wantResult: repositories.Inserted,
 		},
@@ -141,6 +141,169 @@ func TestRecordsRepository_Insert(t *testing.T) {
 	}
 }
 
+func TestRecordsRepository_RecordCreatedAtInsertAndUpdate(t *testing.T) {
+	env := setupRecordsTestEnv(t)
+	ctx := context.Background()
+	uri := "at://did:plc:timeline/com.example.timeline.post/created-at"
+
+	result, err := env.repo.Insert(ctx, uri, "cid1", "did:plc:timeline", "com.example.timeline.post", `{"text":"first","createdAt":"2026-01-15T10:00:00.123456789+02:00"}`)
+	if err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+	if result != repositories.Inserted {
+		t.Fatalf("Insert() result = %v, want Inserted", result)
+	}
+	if got := recordCreatedAtForURI(t, env, uri); got != "2026-01-15T08:00:00.123Z" {
+		t.Fatalf("record_created_at after insert = %q, want normalized UTC milliseconds", got)
+	}
+
+	_, err = env.repo.Insert(ctx, uri, "cid2", "did:plc:timeline", "com.example.timeline.post", `{"text":"updated","createdAt":"2026-01-16T10:00:00Z"}`)
+	if err != nil {
+		t.Fatalf("Insert() update error = %v", err)
+	}
+	if got := recordCreatedAtForURI(t, env, uri); got != "2026-01-15T08:00:00.123Z" {
+		t.Fatalf("record_created_at after update = %q, want original timestamp preserved", got)
+	}
+
+	nullURI := "at://did:plc:timeline/com.example.timeline.post/fill-null"
+	_, err = env.repo.Insert(ctx, nullURI, "samecid", "did:plc:timeline", "com.example.timeline.post", `{"text":"missing createdAt"}`)
+	if err != nil {
+		t.Fatalf("Insert() missing createdAt error = %v", err)
+	}
+	if got := recordCreatedAtForURI(t, env, nullURI); got != "" {
+		t.Fatalf("record_created_at for missing createdAt = %q, want null", got)
+	}
+
+	result, err = env.repo.Insert(ctx, nullURI, "samecid", "did:plc:timeline", "com.example.timeline.post", `{"text":"missing createdAt","createdAt":"2026-01-17T00:00:00Z"}`)
+	if err != nil {
+		t.Fatalf("Insert() same CID fill error = %v", err)
+	}
+	if result != repositories.Skipped {
+		t.Fatalf("Insert() same CID fill result = %v, want Skipped content result", result)
+	}
+	if got := recordCreatedAtForURI(t, env, nullURI); got != "2026-01-17T00:00:00.000Z" {
+		t.Fatalf("record_created_at after same CID fill = %q, want filled timestamp", got)
+	}
+}
+
+func TestRecordsRepository_RecordCreatedAtBatchInsertConflict(t *testing.T) {
+	env := setupRecordsTestEnv(t)
+	ctx := context.Background()
+	preserveURI := "at://did:plc:timeline/com.example.timeline.post/batch-preserve"
+	fillURI := "at://did:plc:timeline/com.example.timeline.post/batch-fill"
+
+	if err := env.repo.BatchInsert(ctx, []*repositories.Record{
+		{URI: preserveURI, CID: "cid-preserve-1", DID: "did:plc:timeline", Collection: "com.example.timeline.post", JSON: `{"createdAt":"2026-01-15T10:00:00Z"}`},
+		{URI: fillURI, CID: "cid-fill-1", DID: "did:plc:timeline", Collection: "com.example.timeline.post", JSON: `{"text":"missing"}`},
+	}); err != nil {
+		t.Fatalf("initial BatchInsert() error = %v", err)
+	}
+
+	if err := env.repo.BatchInsert(ctx, []*repositories.Record{
+		{URI: preserveURI, CID: "cid-preserve-2", DID: "did:plc:timeline", Collection: "com.example.timeline.post", JSON: `{"createdAt":"2026-01-16T10:00:00Z"}`},
+		{URI: fillURI, CID: "cid-fill-2", DID: "did:plc:timeline", Collection: "com.example.timeline.post", JSON: `{"createdAt":"2026-01-17T00:00:00Z"}`},
+	}); err != nil {
+		t.Fatalf("conflicting BatchInsert() error = %v", err)
+	}
+
+	if got := recordCreatedAtForURI(t, env, preserveURI); got != "2026-01-15T10:00:00.000Z" {
+		t.Fatalf("preserved batch record_created_at = %q, want original timestamp", got)
+	}
+	if got := recordCreatedAtForURI(t, env, fillURI); got != "2026-01-17T00:00:00.000Z" {
+		t.Fatalf("filled batch record_created_at = %q, want incoming timestamp", got)
+	}
+}
+
+func TestRecordsRepository_GetRecordTimeline(t *testing.T) {
+	env := setupRecordsTestEnv(t)
+	ctx := context.Background()
+	records := []*repositories.Record{
+		{URI: "at://did:plc:alice/com.example.timeline.post/r1", CID: "cid1", DID: "did:plc:alice", Collection: "com.example.timeline.post", JSON: `{"text":"old","createdAt":"2026-01-15T10:00:00Z"}`},
+		{URI: "at://did:plc:bob/com.example.timeline.like/r2", CID: "cid2", DID: "did:plc:bob", Collection: "com.example.timeline.like", JSON: `{"subject":"x","createdAt":"2026-01-15T12:00:00Z"}`},
+		{URI: "at://did:plc:alice/com.example.timeline.post/r3", CID: "cid3", DID: "did:plc:alice", Collection: "com.example.timeline.post", JSON: `{"text":"tie a","createdAt":"2026-01-15T12:00:00Z"}`},
+		{URI: "at://did:plc:carol/com.example.timeline.like/r4", CID: "cid4", DID: "did:plc:carol", Collection: "com.example.timeline.like", JSON: `{"subject":"excluded author","createdAt":"2026-01-15T14:00:00Z"}`},
+		{URI: "at://did:plc:alice/com.example.timeline.repost/r5", CID: "cid5", DID: "did:plc:alice", Collection: "com.example.timeline.repost", JSON: `{"createdAt":"2026-01-15T13:00:00Z"}`},
+	}
+	if err := env.repo.BatchInsert(ctx, records); err != nil {
+		t.Fatalf("BatchInsert() error = %v", err)
+	}
+
+	page, err := env.repo.GetRecordTimeline(ctx, []string{"did:plc:alice", "did:plc:bob"}, []string{"com.example.timeline.post", "com.example.timeline.like"}, 10, nil)
+	if err != nil {
+		t.Fatalf("GetRecordTimeline() error = %v", err)
+	}
+	wantURIs := []string{
+		"at://did:plc:bob/com.example.timeline.like/r2",
+		"at://did:plc:alice/com.example.timeline.post/r3",
+		"at://did:plc:alice/com.example.timeline.post/r1",
+	}
+	assertTimelineURIs(t, page, wantURIs)
+
+	cursor := &repositories.RecordTimelineCursor{CreatedAt: page[0].RecordCreatedAt.UTC().Format("2006-01-02T15:04:05.000Z"), URI: page[0].URI}
+	nextPage, err := env.repo.GetRecordTimeline(ctx, []string{"did:plc:alice", "did:plc:bob"}, []string{"com.example.timeline.post", "com.example.timeline.like"}, 10, cursor)
+	if err != nil {
+		t.Fatalf("GetRecordTimeline(after) error = %v", err)
+	}
+	assertTimelineURIs(t, nextPage, wantURIs[1:])
+
+	globalPage, err := env.repo.GetRecordTimeline(ctx, nil, []string{"com.example.timeline.post"}, 10, nil)
+	if err != nil {
+		t.Fatalf("GetRecordTimeline(global) error = %v", err)
+	}
+	assertTimelineURIs(t, globalPage, []string{
+		"at://did:plc:alice/com.example.timeline.post/r3",
+		"at://did:plc:alice/com.example.timeline.post/r1",
+	})
+}
+
+func TestRecordsRepository_GetRecordTimelineSupportsThousandAuthorsSQLite(t *testing.T) {
+	env := setupRecordsTestEnv(t)
+	ctx := context.Background()
+	if _, err := env.repo.Insert(ctx,
+		"at://did:plc:author999/com.example.timeline.post/r1",
+		"cid-author999",
+		"did:plc:author999",
+		"com.example.timeline.post",
+		`{"text":"large author set","createdAt":"2026-01-15T10:00:00Z"}`,
+	); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+
+	authors := make([]string, repositories.MaxRecordTimelineAuthors)
+	for i := range authors {
+		authors[i] = fmt.Sprintf("did:plc:author%d", i)
+	}
+	page, err := env.repo.GetRecordTimeline(ctx, authors, []string{"com.example.timeline.post"}, 10, nil)
+	if err != nil {
+		t.Fatalf("GetRecordTimeline() with %d authors error = %v", len(authors), err)
+	}
+	assertTimelineURIs(t, page, []string{"at://did:plc:author999/com.example.timeline.post/r1"})
+}
+
+func recordCreatedAtForURI(t *testing.T, env *recordsTestEnv, uri string) string {
+	t.Helper()
+	var value sql.NullString
+	if err := env.db.Executor.DB().QueryRowContext(context.Background(), "SELECT record_created_at FROM record WHERE uri = ?", uri).Scan(&value); err != nil {
+		t.Fatalf("failed to query record_created_at for %s: %v", uri, err)
+	}
+	if !value.Valid {
+		return ""
+	}
+	return value.String
+}
+
+func assertTimelineURIs(t *testing.T, records []*repositories.RecordTimelineRecord, want []string) {
+	t.Helper()
+	if len(records) != len(want) {
+		t.Fatalf("timeline length = %d, want %d", len(records), len(want))
+	}
+	for i, rec := range records {
+		if rec.URI != want[i] {
+			t.Fatalf("timeline[%d].URI = %q, want %q", i, rec.URI, want[i])
+		}
+	}
+}
+
 func TestRecordsRepository_BatchInsert(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -155,10 +318,10 @@ func TestRecordsRepository_BatchInsert(t *testing.T) {
 			name: "single record",
 			records: []*repositories.Record{
 				{
-					URI:        "at://did:plc:test1/app.bsky.feed.post/batch1",
+					URI:        "at://did:plc:test1/com.example.timeline.post/batch1",
 					CID:        "bafyreibatch1",
 					DID:        "did:plc:test1",
-					Collection: "app.bsky.feed.post",
+					Collection: "com.example.timeline.post",
 					JSON:       `{"text":"batch 1","createdAt":"2026-01-15T10:00:00Z"}`,
 				},
 			},
@@ -166,11 +329,11 @@ func TestRecordsRepository_BatchInsert(t *testing.T) {
 		{
 			name: "five records",
 			records: []*repositories.Record{
-				{URI: "at://did:plc:test1/app.bsky.feed.post/b1", CID: "bafyreib1", DID: "did:plc:test1", Collection: "app.bsky.feed.post", JSON: `{"text":"b1"}`},
-				{URI: "at://did:plc:test1/app.bsky.feed.post/b2", CID: "bafyreib2", DID: "did:plc:test1", Collection: "app.bsky.feed.post", JSON: `{"text":"b2"}`},
-				{URI: "at://did:plc:test2/app.bsky.feed.post/b3", CID: "bafyreib3", DID: "did:plc:test2", Collection: "app.bsky.feed.post", JSON: `{"text":"b3"}`},
-				{URI: "at://did:plc:test2/app.bsky.feed.like/b4", CID: "bafyreib4", DID: "did:plc:test2", Collection: "app.bsky.feed.like", JSON: `{"subject":"at://x"}`},
-				{URI: "at://did:plc:test3/app.bsky.feed.post/b5", CID: "bafyreib5", DID: "did:plc:test3", Collection: "app.bsky.feed.post", JSON: `{"text":"b5"}`},
+				{URI: "at://did:plc:test1/com.example.timeline.post/b1", CID: "bafyreib1", DID: "did:plc:test1", Collection: "com.example.timeline.post", JSON: `{"text":"b1"}`},
+				{URI: "at://did:plc:test1/com.example.timeline.post/b2", CID: "bafyreib2", DID: "did:plc:test1", Collection: "com.example.timeline.post", JSON: `{"text":"b2"}`},
+				{URI: "at://did:plc:test2/com.example.timeline.post/b3", CID: "bafyreib3", DID: "did:plc:test2", Collection: "com.example.timeline.post", JSON: `{"text":"b3"}`},
+				{URI: "at://did:plc:test2/com.example.timeline.like/b4", CID: "bafyreib4", DID: "did:plc:test2", Collection: "com.example.timeline.like", JSON: `{"subject":"at://x"}`},
+				{URI: "at://did:plc:test3/com.example.timeline.post/b5", CID: "bafyreib5", DID: "did:plc:test3", Collection: "com.example.timeline.post", JSON: `{"text":"b5"}`},
 			},
 		},
 	}
@@ -219,16 +382,16 @@ func TestRecordsRepository_GetByURI(t *testing.T) {
 			name: "found",
 			setup: func(repo *repositories.RecordsRepository) {
 				insertTestRecord(t, repo,
-					"at://did:plc:test1/app.bsky.feed.post/found1",
+					"at://did:plc:test1/com.example.timeline.post/found1",
 					"bafyreifound1",
 					"did:plc:test1",
-					"app.bsky.feed.post",
+					"com.example.timeline.post",
 					`{"text":"found me","createdAt":"2026-01-15T10:00:00Z"}`,
 				)
 			},
-			uri: "at://did:plc:test1/app.bsky.feed.post/found1",
+			uri: "at://did:plc:test1/com.example.timeline.post/found1",
 			check: func(t *testing.T, rec *repositories.Record) {
-				if rec.URI != "at://did:plc:test1/app.bsky.feed.post/found1" {
+				if rec.URI != "at://did:plc:test1/com.example.timeline.post/found1" {
 					t.Errorf("URI = %q", rec.URI)
 				}
 				if rec.CID != "bafyreifound1" {
@@ -237,7 +400,7 @@ func TestRecordsRepository_GetByURI(t *testing.T) {
 				if rec.DID != "did:plc:test1" {
 					t.Errorf("DID = %q", rec.DID)
 				}
-				if rec.Collection != "app.bsky.feed.post" {
+				if rec.Collection != "com.example.timeline.post" {
 					t.Errorf("Collection = %q", rec.Collection)
 				}
 				if rec.JSON != `{"text":"found me","createdAt":"2026-01-15T10:00:00Z"}` {
@@ -247,7 +410,7 @@ func TestRecordsRepository_GetByURI(t *testing.T) {
 		},
 		{
 			name:    "not found",
-			uri:     "at://did:plc:nonexistent/app.bsky.feed.post/nope",
+			uri:     "at://did:plc:nonexistent/com.example.timeline.post/nope",
 			wantErr: sql.ErrNoRows,
 		},
 	}
@@ -293,15 +456,32 @@ func TestRecordsRepository_GetByURIs(t *testing.T) {
 		{
 			name: "multiple URIs",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/m1", "bafyreim1", "did:plc:test1", "app.bsky.feed.post", `{"text":"m1"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/m2", "bafyreim2", "did:plc:test1", "app.bsky.feed.post", `{"text":"m2"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/m3", "bafyreim3", "did:plc:test1", "app.bsky.feed.post", `{"text":"m3"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/m1", "bafyreim1", "did:plc:test1", "com.example.timeline.post", `{"text":"m1"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/m2", "bafyreim2", "did:plc:test1", "com.example.timeline.post", `{"text":"m2"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/m3", "bafyreim3", "did:plc:test1", "com.example.timeline.post", `{"text":"m3"}`)
 			},
 			uris: []string{
-				"at://did:plc:test1/app.bsky.feed.post/m1",
-				"at://did:plc:test1/app.bsky.feed.post/m3",
+				"at://did:plc:test1/com.example.timeline.post/m1",
+				"at://did:plc:test1/com.example.timeline.post/m3",
 			},
 			wantCount: 2,
+		},
+		{
+			name: "batches large URI lists",
+			setup: func(repo *repositories.RecordsRepository) {
+				for i := 0; i < repositories.SQLParamBatchSize+5; i++ {
+					uri := fmt.Sprintf("at://did:plc:test1/com.example.timeline.post/batch-%04d", i)
+					insertTestRecord(t, repo, uri, fmt.Sprintf("bafyreibatch%04d", i), "did:plc:test1", "com.example.timeline.post", fmt.Sprintf(`{"text":"batch %d"}`, i))
+				}
+			},
+			uris: func() []string {
+				uris := make([]string, 0, repositories.SQLParamBatchSize+5)
+				for i := 0; i < repositories.SQLParamBatchSize+5; i++ {
+					uris = append(uris, fmt.Sprintf("at://did:plc:test1/com.example.timeline.post/batch-%04d", i))
+				}
+				return uris
+			}(),
+			wantCount: repositories.SQLParamBatchSize + 5,
 		},
 	}
 
@@ -343,12 +523,12 @@ func TestRecordsRepository_GetByCollection(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert records across two collections
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/c1", "bafyreic1", "did:plc:test1", "app.bsky.feed.post", `{"text":"c1"}`)
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/c2", "bafyreic2", "did:plc:test1", "app.bsky.feed.post", `{"text":"c2"}`)
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.like/c3", "bafyreic3", "did:plc:test1", "app.bsky.feed.like", `{"subject":"at://x"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/c1", "bafyreic1", "did:plc:test1", "com.example.timeline.post", `{"text":"c1"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/c2", "bafyreic2", "did:plc:test1", "com.example.timeline.post", `{"text":"c2"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.like/c3", "bafyreic3", "did:plc:test1", "com.example.timeline.like", `{"subject":"at://x"}`)
 
 	t.Run("returns records for specific collection", func(t *testing.T) {
-		records, err := repo.GetByCollection(ctx, "app.bsky.feed.post", 100)
+		records, err := repo.GetByCollection(ctx, "com.example.timeline.post", 100)
 		if err != nil {
 			t.Fatalf("GetByCollection() error: %v", err)
 		}
@@ -356,21 +536,21 @@ func TestRecordsRepository_GetByCollection(t *testing.T) {
 			t.Errorf("got %d records, want 2", len(records))
 		}
 		for _, rec := range records {
-			if rec.Collection != "app.bsky.feed.post" {
+			if rec.Collection != "com.example.timeline.post" {
 				t.Errorf("unexpected collection %q", rec.Collection)
 			}
 		}
 	})
 
 	t.Run("does not return records from other collections", func(t *testing.T) {
-		records, err := repo.GetByCollection(ctx, "app.bsky.feed.like", 100)
+		records, err := repo.GetByCollection(ctx, "com.example.timeline.like", 100)
 		if err != nil {
 			t.Fatalf("GetByCollection() error: %v", err)
 		}
 		if len(records) != 1 {
 			t.Errorf("got %d records, want 1", len(records))
 		}
-		if len(records) > 0 && records[0].Collection != "app.bsky.feed.like" {
+		if len(records) > 0 && records[0].Collection != "com.example.timeline.like" {
 			t.Errorf("unexpected collection %q", records[0].Collection)
 		}
 	})
@@ -384,20 +564,20 @@ func TestRecordsRepository_GetByCollectionWithCursor(t *testing.T) {
 	// Use the executor's underlying DB to set indexed_at to distinct values
 	sqlDB := env.db.Executor.DB()
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/p1", "bafyreip1", "did:plc:test1", "app.bsky.feed.post", `{"text":"p1"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/p1'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/p1", "bafyreip1", "did:plc:test1", "com.example.timeline.post", `{"text":"p1"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/p1'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/p2", "bafyreip2", "did:plc:test1", "app.bsky.feed.post", `{"text":"p2"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/p2'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/p2", "bafyreip2", "did:plc:test1", "com.example.timeline.post", `{"text":"p2"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/p2'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/p3", "bafyreip3", "did:plc:test1", "app.bsky.feed.post", `{"text":"p3"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/p3'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/p3", "bafyreip3", "did:plc:test1", "com.example.timeline.post", `{"text":"p3"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/p3'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/p4", "bafyreip4", "did:plc:test1", "app.bsky.feed.post", `{"text":"p4"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/p4'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/p4", "bafyreip4", "did:plc:test1", "com.example.timeline.post", `{"text":"p4"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/p4'`)
 
 	t.Run("first page returns newest first", func(t *testing.T) {
-		records, err := repo.GetByCollectionWithCursor(ctx, "app.bsky.feed.post", 2, "")
+		records, err := repo.GetByCollectionWithCursor(ctx, "com.example.timeline.post", 2, "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -405,17 +585,17 @@ func TestRecordsRepository_GetByCollectionWithCursor(t *testing.T) {
 			t.Fatalf("got %d records, want 2", len(records))
 		}
 		// Newest first: p4, p3
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/p4" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/p4" {
 			t.Errorf("first record URI = %q, want p4", records[0].URI)
 		}
-		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/p3" {
+		if records[1].URI != "at://did:plc:test1/com.example.timeline.post/p3" {
 			t.Errorf("second record URI = %q, want p3", records[1].URI)
 		}
 	})
 
 	t.Run("second page with cursor returns older records", func(t *testing.T) {
 		// Use p3's indexed_at as cursor to get records older than p3
-		records, err := repo.GetByCollectionWithCursor(ctx, "app.bsky.feed.post", 2, "2026-01-15T12:00:00Z")
+		records, err := repo.GetByCollectionWithCursor(ctx, "com.example.timeline.post", 2, "2026-01-15T12:00:00Z")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -423,10 +603,10 @@ func TestRecordsRepository_GetByCollectionWithCursor(t *testing.T) {
 			t.Fatalf("got %d records, want 2", len(records))
 		}
 		// Older than p3: p2, p1
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/p2" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/p2" {
 			t.Errorf("first record URI = %q, want p2", records[0].URI)
 		}
-		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/p1" {
+		if records[1].URI != "at://did:plc:test1/com.example.timeline.post/p1" {
 			t.Errorf("second record URI = %q, want p1", records[1].URI)
 		}
 	})
@@ -440,24 +620,24 @@ func TestRecordsRepository_GetByCollectionWithKeysetCursor(t *testing.T) {
 	sqlDB := env.db.Executor.DB()
 
 	// Insert records with distinct indexed_at timestamps
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/k1", "bafyreik1", "did:plc:test1", "app.bsky.feed.post", `{"text":"k1"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/k1'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/k1", "bafyreik1", "did:plc:test1", "com.example.timeline.post", `{"text":"k1"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/k1'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/k2", "bafyreik2", "did:plc:test1", "app.bsky.feed.post", `{"text":"k2"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/k2'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/k2", "bafyreik2", "did:plc:test1", "com.example.timeline.post", `{"text":"k2"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/k2'`)
 
 	// k3a and k3b have the SAME indexed_at to test URI tiebreaking
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/k3a", "bafyreik3a", "did:plc:test1", "app.bsky.feed.post", `{"text":"k3a"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/k3a'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/k3a", "bafyreik3a", "did:plc:test1", "com.example.timeline.post", `{"text":"k3a"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/k3a'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/k3b", "bafyreik3b", "did:plc:test1", "app.bsky.feed.post", `{"text":"k3b"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/k3b'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/k3b", "bafyreik3b", "did:plc:test1", "com.example.timeline.post", `{"text":"k3b"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/k3b'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/k4", "bafyreik4", "did:plc:test1", "app.bsky.feed.post", `{"text":"k4"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/k4'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/k4", "bafyreik4", "did:plc:test1", "com.example.timeline.post", `{"text":"k4"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/k4'`)
 
 	t.Run("first page without cursor", func(t *testing.T) {
-		records, err := repo.GetByCollectionWithKeysetCursor(ctx, "app.bsky.feed.post", 3, "", "")
+		records, err := repo.GetByCollectionWithKeysetCursor(ctx, "com.example.timeline.post", 3, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -465,21 +645,21 @@ func TestRecordsRepository_GetByCollectionWithKeysetCursor(t *testing.T) {
 			t.Fatalf("got %d records, want 3", len(records))
 		}
 		// Newest first: k4, k3b, k3a (k3b > k3a by URI DESC)
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/k4" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/k4" {
 			t.Errorf("first record URI = %q, want k4", records[0].URI)
 		}
-		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/k3b" {
+		if records[1].URI != "at://did:plc:test1/com.example.timeline.post/k3b" {
 			t.Errorf("second record URI = %q, want k3b", records[1].URI)
 		}
-		if records[2].URI != "at://did:plc:test1/app.bsky.feed.post/k3a" {
+		if records[2].URI != "at://did:plc:test1/com.example.timeline.post/k3a" {
 			t.Errorf("third record URI = %q, want k3a", records[2].URI)
 		}
 	})
 
 	t.Run("keyset cursor skips to correct position", func(t *testing.T) {
 		// Cursor is after k3b (same timestamp as k3a, but k3b > k3a by URI)
-		records, err := repo.GetByCollectionWithKeysetCursor(ctx, "app.bsky.feed.post", 10,
-			"2026-01-15T12:00:00Z", "at://did:plc:test1/app.bsky.feed.post/k3b")
+		records, err := repo.GetByCollectionWithKeysetCursor(ctx, "com.example.timeline.post", 10,
+			"2026-01-15T12:00:00Z", "at://did:plc:test1/com.example.timeline.post/k3b")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -487,31 +667,31 @@ func TestRecordsRepository_GetByCollectionWithKeysetCursor(t *testing.T) {
 			t.Fatalf("got %d records, want 3", len(records))
 		}
 		// After k3b: k3a (same timestamp, smaller URI), then k2, k1
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/k3a" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/k3a" {
 			t.Errorf("first record URI = %q, want k3a", records[0].URI)
 		}
-		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/k2" {
+		if records[1].URI != "at://did:plc:test1/com.example.timeline.post/k2" {
 			t.Errorf("second record URI = %q, want k2", records[1].URI)
 		}
-		if records[2].URI != "at://did:plc:test1/app.bsky.feed.post/k1" {
+		if records[2].URI != "at://did:plc:test1/com.example.timeline.post/k1" {
 			t.Errorf("third record URI = %q, want k1", records[2].URI)
 		}
 	})
 
 	t.Run("cursor between timestamps", func(t *testing.T) {
 		// Cursor after k3a — should return k2, k1
-		records, err := repo.GetByCollectionWithKeysetCursor(ctx, "app.bsky.feed.post", 10,
-			"2026-01-15T12:00:00Z", "at://did:plc:test1/app.bsky.feed.post/k3a")
+		records, err := repo.GetByCollectionWithKeysetCursor(ctx, "com.example.timeline.post", 10,
+			"2026-01-15T12:00:00Z", "at://did:plc:test1/com.example.timeline.post/k3a")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
 		if len(records) != 2 {
 			t.Fatalf("got %d records, want 2", len(records))
 		}
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/k2" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/k2" {
 			t.Errorf("first record URI = %q, want k2", records[0].URI)
 		}
-		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/k1" {
+		if records[1].URI != "at://did:plc:test1/com.example.timeline.post/k1" {
 			t.Errorf("second record URI = %q, want k1", records[1].URI)
 		}
 	})
@@ -524,22 +704,22 @@ func TestRecordsRepository_KeysetPagination_NormalizesIndexedAtFormats(t *testin
 
 	sqlDB := env.db.Executor.DB()
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/n1", "bafyrein1", "did:plc:test1", "app.bsky.feed.post", `{"text":"n1"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 10:00:00' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/n1'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/n1", "bafyrein1", "did:plc:test1", "com.example.timeline.post", `{"text":"n1"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 10:00:00' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/n1'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/n2", "bafyrein2", "did:plc:test1", "app.bsky.feed.post", `{"text":"n2"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 11:00:00' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/n2'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/n2", "bafyrein2", "did:plc:test1", "com.example.timeline.post", `{"text":"n2"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 11:00:00' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/n2'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/n3", "bafyrein3", "did:plc:test1", "app.bsky.feed.post", `{"text":"n3"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 12:00:00' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/n3'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/n3", "bafyrein3", "did:plc:test1", "com.example.timeline.post", `{"text":"n3"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 12:00:00' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/n3'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/n4", "bafyrein4", "did:plc:test1", "app.bsky.feed.post", `{"text":"n4"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 13:00:00' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/n4'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/n4", "bafyrein4", "did:plc:test1", "com.example.timeline.post", `{"text":"n4"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15 13:00:00' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/n4'`)
 
 	t.Run("forward keyset cursor with RFC3339 timestamp skips newer rows", func(t *testing.T) {
 		page1, err := repo.GetByCollectionSortedWithKeysetCursor(
 			ctx,
-			"app.bsky.feed.post",
+			"com.example.timeline.post",
 			nil,
 			repositories.DIDFilter{},
 			nil,
@@ -552,18 +732,18 @@ func TestRecordsRepository_KeysetPagination_NormalizesIndexedAtFormats(t *testin
 		if len(page1) != 2 {
 			t.Fatalf("first page got %d records, want 2", len(page1))
 		}
-		if page1[0].URI != "at://did:plc:test1/app.bsky.feed.post/n4" || page1[1].URI != "at://did:plc:test1/app.bsky.feed.post/n3" {
+		if page1[0].URI != "at://did:plc:test1/com.example.timeline.post/n4" || page1[1].URI != "at://did:plc:test1/com.example.timeline.post/n3" {
 			t.Fatalf("first page URIs = [%s, %s], want [n4, n3]", page1[0].URI, page1[1].URI)
 		}
 
 		page2, err := repo.GetByCollectionSortedWithKeysetCursor(
 			ctx,
-			"app.bsky.feed.post",
+			"com.example.timeline.post",
 			nil,
 			repositories.DIDFilter{},
 			nil,
 			2,
-			[]string{"2026-01-15T12:00:00Z", "at://did:plc:test1/app.bsky.feed.post/n3"},
+			[]string{"2026-01-15T12:00:00Z", "at://did:plc:test1/com.example.timeline.post/n3"},
 		)
 		if err != nil {
 			t.Fatalf("second page query failed: %v", err)
@@ -571,10 +751,10 @@ func TestRecordsRepository_KeysetPagination_NormalizesIndexedAtFormats(t *testin
 		if len(page2) != 2 {
 			t.Fatalf("second page got %d records, want 2", len(page2))
 		}
-		if page2[0].URI != "at://did:plc:test1/app.bsky.feed.post/n2" {
+		if page2[0].URI != "at://did:plc:test1/com.example.timeline.post/n2" {
 			t.Errorf("second page first URI = %q, want n2", page2[0].URI)
 		}
-		if page2[1].URI != "at://did:plc:test1/app.bsky.feed.post/n1" {
+		if page2[1].URI != "at://did:plc:test1/com.example.timeline.post/n1" {
 			t.Errorf("second page second URI = %q, want n1", page2[1].URI)
 		}
 	})
@@ -582,12 +762,12 @@ func TestRecordsRepository_KeysetPagination_NormalizesIndexedAtFormats(t *testin
 	t.Run("backward keyset cursor with RFC3339 timestamp returns prior edges", func(t *testing.T) {
 		records, err := repo.GetByCollectionReversedWithKeysetCursor(
 			ctx,
-			"app.bsky.feed.post",
+			"com.example.timeline.post",
 			nil,
 			repositories.DIDFilter{},
 			nil,
 			2,
-			[]string{"2026-01-15T10:00:00Z", "at://did:plc:test1/app.bsky.feed.post/n1"},
+			[]string{"2026-01-15T10:00:00Z", "at://did:plc:test1/com.example.timeline.post/n1"},
 		)
 		if err != nil {
 			t.Fatalf("backward query failed: %v", err)
@@ -595,10 +775,10 @@ func TestRecordsRepository_KeysetPagination_NormalizesIndexedAtFormats(t *testin
 		if len(records) != 2 {
 			t.Fatalf("backward query got %d records, want 2", len(records))
 		}
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/n3" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/n3" {
 			t.Errorf("records[0].URI = %q, want n3", records[0].URI)
 		}
-		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/n2" {
+		if records[1].URI != "at://did:plc:test1/com.example.timeline.post/n2" {
 			t.Errorf("records[1].URI = %q, want n2", records[1].URI)
 		}
 	})
@@ -608,9 +788,9 @@ func TestRecordsRepository_GetByDID(t *testing.T) {
 	repo := setupRecordsTest(t)
 	ctx := context.Background()
 
-	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/a1", "bafyreia1", "did:plc:alice", "app.bsky.feed.post", `{"text":"a1"}`)
-	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.like/a2", "bafyreia2", "did:plc:alice", "app.bsky.feed.like", `{"subject":"at://x"}`)
-	insertTestRecord(t, repo, "at://did:plc:bob/app.bsky.feed.post/b1", "bafyreib1", "did:plc:bob", "app.bsky.feed.post", `{"text":"b1"}`)
+	insertTestRecord(t, repo, "at://did:plc:alice/com.example.timeline.post/a1", "bafyreia1", "did:plc:alice", "com.example.timeline.post", `{"text":"a1"}`)
+	insertTestRecord(t, repo, "at://did:plc:alice/com.example.timeline.like/a2", "bafyreia2", "did:plc:alice", "com.example.timeline.like", `{"subject":"at://x"}`)
+	insertTestRecord(t, repo, "at://did:plc:bob/com.example.timeline.post/b1", "bafyreib1", "did:plc:bob", "com.example.timeline.post", `{"text":"b1"}`)
 
 	records, err := repo.GetByDID(ctx, "did:plc:alice")
 	if err != nil {
@@ -631,11 +811,11 @@ func TestRecordsRepository_Delete(t *testing.T) {
 		repo := setupRecordsTest(t)
 		ctx := context.Background()
 
-		insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/del1", "bafyreidel1", "did:plc:test1", "app.bsky.feed.post", `{"text":"delete me"}`)
+		insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/del1", "bafyreidel1", "did:plc:test1", "com.example.timeline.post", `{"text":"delete me"}`)
 
 		countBefore, _ := repo.GetCount(ctx)
 
-		err := repo.Delete(ctx, "at://did:plc:test1/app.bsky.feed.post/del1")
+		err := repo.Delete(ctx, "at://did:plc:test1/com.example.timeline.post/del1")
 		if err != nil {
 			t.Fatalf("Delete() error: %v", err)
 		}
@@ -645,7 +825,7 @@ func TestRecordsRepository_Delete(t *testing.T) {
 			t.Errorf("count after delete = %d, want %d", countAfter, countBefore-1)
 		}
 
-		_, err = repo.GetByURI(ctx, "at://did:plc:test1/app.bsky.feed.post/del1")
+		_, err = repo.GetByURI(ctx, "at://did:plc:test1/com.example.timeline.post/del1")
 		if !errors.Is(err, sql.ErrNoRows) {
 			t.Errorf("expected sql.ErrNoRows after delete, got %v", err)
 		}
@@ -655,7 +835,7 @@ func TestRecordsRepository_Delete(t *testing.T) {
 		repo := setupRecordsTest(t)
 		ctx := context.Background()
 
-		err := repo.Delete(ctx, "at://did:plc:nonexistent/app.bsky.feed.post/nope")
+		err := repo.Delete(ctx, "at://did:plc:nonexistent/com.example.timeline.post/nope")
 		if err != nil {
 			t.Errorf("Delete() on non-existing record should not error, got: %v", err)
 		}
@@ -779,8 +959,8 @@ func TestRecordsRepository_DeleteAll(t *testing.T) {
 	repo := setupRecordsTest(t)
 	ctx := context.Background()
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/da1", "bafyreida1", "did:plc:test1", "app.bsky.feed.post", `{"text":"da1"}`)
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/da2", "bafyreida2", "did:plc:test1", "app.bsky.feed.post", `{"text":"da2"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/da1", "bafyreida1", "did:plc:test1", "com.example.timeline.post", `{"text":"da1"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/da2", "bafyreida2", "did:plc:test1", "com.example.timeline.post", `{"text":"da2"}`)
 
 	err := repo.DeleteAll(ctx)
 	if err != nil {
@@ -809,9 +989,9 @@ func TestRecordsRepository_GetCount(t *testing.T) {
 		{
 			name: "after inserts",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/gc1", "bafyreigc1", "did:plc:test1", "app.bsky.feed.post", `{"text":"gc1"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/gc2", "bafyreigc2", "did:plc:test1", "app.bsky.feed.post", `{"text":"gc2"}`)
-				insertTestRecord(t, repo, "at://did:plc:test2/app.bsky.feed.post/gc3", "bafyreigc3", "did:plc:test2", "app.bsky.feed.post", `{"text":"gc3"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/gc1", "bafyreigc1", "did:plc:test1", "com.example.timeline.post", `{"text":"gc1"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/gc2", "bafyreigc2", "did:plc:test1", "com.example.timeline.post", `{"text":"gc2"}`)
+				insertTestRecord(t, repo, "at://did:plc:test2/com.example.timeline.post/gc3", "bafyreigc3", "did:plc:test2", "com.example.timeline.post", `{"text":"gc3"}`)
 			},
 			wantCount: 3,
 		},
@@ -841,9 +1021,9 @@ func TestRecordsRepository_GetCountByDID(t *testing.T) {
 	repo := setupRecordsTest(t)
 	ctx := context.Background()
 
-	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/1", "cid1", "did:plc:alice", "app.bsky.feed.post", `{"text":"a1"}`)
-	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/2", "cid2", "did:plc:alice", "app.bsky.feed.post", `{"text":"a2"}`)
-	insertTestRecord(t, repo, "at://did:plc:bob/app.bsky.feed.post/1", "cid3", "did:plc:bob", "app.bsky.feed.post", `{"text":"b1"}`)
+	insertTestRecord(t, repo, "at://did:plc:alice/com.example.timeline.post/1", "cid1", "did:plc:alice", "com.example.timeline.post", `{"text":"a1"}`)
+	insertTestRecord(t, repo, "at://did:plc:alice/com.example.timeline.post/2", "cid2", "did:plc:alice", "com.example.timeline.post", `{"text":"a2"}`)
+	insertTestRecord(t, repo, "at://did:plc:bob/com.example.timeline.post/1", "cid3", "did:plc:bob", "com.example.timeline.post", `{"text":"b1"}`)
 
 	aliceCount, err := repo.GetCountByDID(ctx, "did:plc:alice")
 	if err != nil {
@@ -908,11 +1088,11 @@ func TestRecordsRepository_GetCollectionStats(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert records: 3 posts, 2 likes, 1 follow
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/s1", "bafyreis1", "did:plc:test1", "app.bsky.feed.post", `{"text":"s1"}`)
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/s2", "bafyreis2", "did:plc:test1", "app.bsky.feed.post", `{"text":"s2"}`)
-	insertTestRecord(t, repo, "at://did:plc:test2/app.bsky.feed.post/s3", "bafyreis3", "did:plc:test2", "app.bsky.feed.post", `{"text":"s3"}`)
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.like/s4", "bafyreis4", "did:plc:test1", "app.bsky.feed.like", `{"subject":"at://x"}`)
-	insertTestRecord(t, repo, "at://did:plc:test2/app.bsky.feed.like/s5", "bafyreis5", "did:plc:test2", "app.bsky.feed.like", `{"subject":"at://y"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/s1", "bafyreis1", "did:plc:test1", "com.example.timeline.post", `{"text":"s1"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/s2", "bafyreis2", "did:plc:test1", "com.example.timeline.post", `{"text":"s2"}`)
+	insertTestRecord(t, repo, "at://did:plc:test2/com.example.timeline.post/s3", "bafyreis3", "did:plc:test2", "com.example.timeline.post", `{"text":"s3"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.like/s4", "bafyreis4", "did:plc:test1", "com.example.timeline.like", `{"subject":"at://x"}`)
+	insertTestRecord(t, repo, "at://did:plc:test2/com.example.timeline.like/s5", "bafyreis5", "did:plc:test2", "com.example.timeline.like", `{"subject":"at://y"}`)
 	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.graph.follow/s6", "bafyreis6", "did:plc:test1", "app.bsky.graph.follow", `{"subject":"did:plc:test2"}`)
 
 	stats, err := repo.GetCollectionStats(ctx)
@@ -925,11 +1105,11 @@ func TestRecordsRepository_GetCollectionStats(t *testing.T) {
 	}
 
 	// Ordered by count DESC: posts(3), likes(2), follow(1)
-	if stats[0].Collection != "app.bsky.feed.post" || stats[0].Count != 3 {
-		t.Errorf("stats[0] = {%s, %d}, want {app.bsky.feed.post, 3}", stats[0].Collection, stats[0].Count)
+	if stats[0].Collection != "com.example.timeline.post" || stats[0].Count != 3 {
+		t.Errorf("stats[0] = {%s, %d}, want {com.example.timeline.post, 3}", stats[0].Collection, stats[0].Count)
 	}
-	if stats[1].Collection != "app.bsky.feed.like" || stats[1].Count != 2 {
-		t.Errorf("stats[1] = {%s, %d}, want {app.bsky.feed.like, 2}", stats[1].Collection, stats[1].Count)
+	if stats[1].Collection != "com.example.timeline.like" || stats[1].Count != 2 {
+		t.Errorf("stats[1] = {%s, %d}, want {com.example.timeline.like, 2}", stats[1].Collection, stats[1].Count)
 	}
 	if stats[2].Collection != "app.bsky.graph.follow" || stats[2].Count != 1 {
 		t.Errorf("stats[2] = {%s, %d}, want {app.bsky.graph.follow, 1}", stats[2].Collection, stats[2].Count)
@@ -940,13 +1120,13 @@ func TestRecordsRepository_GetCollectionStatsFiltered(t *testing.T) {
 	repo := setupRecordsTest(t)
 	ctx := context.Background()
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sf1", "bafyreisf1", "did:plc:test1", "app.bsky.feed.post", `{"text":"sf1"}`)
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sf2", "bafyreisf2", "did:plc:test1", "app.bsky.feed.post", `{"text":"sf2"}`)
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.like/sf3", "bafyreisf3", "did:plc:test1", "app.bsky.feed.like", `{"subject":"at://x"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sf1", "bafyreisf1", "did:plc:test1", "com.example.timeline.post", `{"text":"sf1"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sf2", "bafyreisf2", "did:plc:test1", "com.example.timeline.post", `{"text":"sf2"}`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.like/sf3", "bafyreisf3", "did:plc:test1", "com.example.timeline.like", `{"subject":"at://x"}`)
 	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.graph.follow/sf4", "bafyreisf4", "did:plc:test1", "app.bsky.graph.follow", `{"subject":"did:plc:test2"}`)
 
 	t.Run("with specific collections", func(t *testing.T) {
-		stats, err := repo.GetCollectionStatsFiltered(ctx, []string{"app.bsky.feed.post", "app.bsky.feed.like"})
+		stats, err := repo.GetCollectionStatsFiltered(ctx, []string{"com.example.timeline.post", "com.example.timeline.like"})
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -955,7 +1135,7 @@ func TestRecordsRepository_GetCollectionStatsFiltered(t *testing.T) {
 		}
 		// Verify only requested collections appear
 		for _, stat := range stats {
-			if stat.Collection != "app.bsky.feed.post" && stat.Collection != "app.bsky.feed.like" {
+			if stat.Collection != "com.example.timeline.post" && stat.Collection != "com.example.timeline.like" {
 				t.Errorf("unexpected collection %q in filtered results", stat.Collection)
 			}
 		}
@@ -977,16 +1157,16 @@ func TestRecordsRepository_GetCollectionTimeSeries(t *testing.T) {
 	ctx := context.Background()
 
 	// Insert records with createdAt in JSON on different dates, from different users
-	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/ts1", "bafyreits1", "did:plc:alice", "app.bsky.feed.post", `{"text":"ts1","createdAt":"2026-01-15T10:00:00Z"}`)
-	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/ts2", "bafyreits2", "did:plc:alice", "app.bsky.feed.post", `{"text":"ts2","createdAt":"2026-01-15T14:00:00Z"}`)
-	insertTestRecord(t, repo, "at://did:plc:bob/app.bsky.feed.post/ts3", "bafyreits3", "did:plc:bob", "app.bsky.feed.post", `{"text":"ts3","createdAt":"2026-01-16T09:00:00Z"}`)
+	insertTestRecord(t, repo, "at://did:plc:alice/com.example.timeline.post/ts1", "bafyreits1", "did:plc:alice", "com.example.timeline.post", `{"text":"ts1","createdAt":"2026-01-15T10:00:00Z"}`)
+	insertTestRecord(t, repo, "at://did:plc:alice/com.example.timeline.post/ts2", "bafyreits2", "did:plc:alice", "com.example.timeline.post", `{"text":"ts2","createdAt":"2026-01-15T14:00:00Z"}`)
+	insertTestRecord(t, repo, "at://did:plc:bob/com.example.timeline.post/ts3", "bafyreits3", "did:plc:bob", "com.example.timeline.post", `{"text":"ts3","createdAt":"2026-01-16T09:00:00Z"}`)
 
-	ts, err := repo.GetCollectionTimeSeries(ctx, "app.bsky.feed.post")
+	ts, err := repo.GetCollectionTimeSeries(ctx, "com.example.timeline.post")
 	if err != nil {
 		t.Fatalf("GetCollectionTimeSeries() error: %v", err)
 	}
 
-	if ts.Collection != "app.bsky.feed.post" {
+	if ts.Collection != "com.example.timeline.post" {
 		t.Errorf("Collection = %q", ts.Collection)
 	}
 	if ts.TotalRecords != 3 {
@@ -1039,17 +1219,17 @@ func TestRecordsRepository_GetCIDsByURIs(t *testing.T) {
 		{
 			name: "returns correct URI to CID mapping",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/cid1", "bafyreicid1", "did:plc:test1", "app.bsky.feed.post", `{"text":"cid1"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/cid2", "bafyreicid2", "did:plc:test1", "app.bsky.feed.post", `{"text":"cid2"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/cid3", "bafyreicid3", "did:plc:test1", "app.bsky.feed.post", `{"text":"cid3"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/cid1", "bafyreicid1", "did:plc:test1", "com.example.timeline.post", `{"text":"cid1"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/cid2", "bafyreicid2", "did:plc:test1", "com.example.timeline.post", `{"text":"cid2"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/cid3", "bafyreicid3", "did:plc:test1", "com.example.timeline.post", `{"text":"cid3"}`)
 			},
 			uris: []string{
-				"at://did:plc:test1/app.bsky.feed.post/cid1",
-				"at://did:plc:test1/app.bsky.feed.post/cid3",
+				"at://did:plc:test1/com.example.timeline.post/cid1",
+				"at://did:plc:test1/com.example.timeline.post/cid3",
 			},
 			want: map[string]string{
-				"at://did:plc:test1/app.bsky.feed.post/cid1": "bafyreicid1",
-				"at://did:plc:test1/app.bsky.feed.post/cid3": "bafyreicid3",
+				"at://did:plc:test1/com.example.timeline.post/cid1": "bafyreicid1",
+				"at://did:plc:test1/com.example.timeline.post/cid3": "bafyreicid3",
 			},
 		},
 	}
@@ -1097,8 +1277,8 @@ func TestRecordsRepository_GetExistingCIDs(t *testing.T) {
 		{
 			name: "returns correct existing CIDs",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/ec1", "bafyreiec1", "did:plc:test1", "app.bsky.feed.post", `{"text":"ec1"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/ec2", "bafyreiec2", "did:plc:test1", "app.bsky.feed.post", `{"text":"ec2"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/ec1", "bafyreiec1", "did:plc:test1", "com.example.timeline.post", `{"text":"ec1"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/ec2", "bafyreiec2", "did:plc:test1", "com.example.timeline.post", `{"text":"ec2"}`)
 			},
 			cids: []string{"bafyreiec1", "bafyreiec2", "bafyreinonexistent"},
 			want: map[string]bool{
@@ -1147,20 +1327,20 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 	sqlDB := env.db.Executor.DB()
 
 	// Insert records with distinct indexed_at timestamps and varied JSON fields
-	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/f1", "bafyreif1", "did:plc:alice", "app.bsky.feed.post", `{"text":"hello world","score":10}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:alice/app.bsky.feed.post/f1'`)
+	insertTestRecord(t, repo, "at://did:plc:alice/com.example.timeline.post/f1", "bafyreif1", "did:plc:alice", "com.example.timeline.post", `{"text":"hello world","score":10}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:alice/com.example.timeline.post/f1'`)
 
-	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/f2", "bafyreif2", "did:plc:alice", "app.bsky.feed.post", `{"text":"goodbye world","score":20}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:alice/app.bsky.feed.post/f2'`)
+	insertTestRecord(t, repo, "at://did:plc:alice/com.example.timeline.post/f2", "bafyreif2", "did:plc:alice", "com.example.timeline.post", `{"text":"goodbye world","score":20}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:alice/com.example.timeline.post/f2'`)
 
-	insertTestRecord(t, repo, "at://did:plc:bob/app.bsky.feed.post/f3", "bafyreif3", "did:plc:bob", "app.bsky.feed.post", `{"text":"hello again"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:bob/app.bsky.feed.post/f3'`)
+	insertTestRecord(t, repo, "at://did:plc:bob/com.example.timeline.post/f3", "bafyreif3", "did:plc:bob", "com.example.timeline.post", `{"text":"hello again"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:bob/com.example.timeline.post/f3'`)
 
-	insertTestRecord(t, repo, "at://did:plc:bob/app.bsky.feed.post/f4", "bafyreif4", "did:plc:bob", "app.bsky.feed.post", `{"text":"no greeting"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:bob/app.bsky.feed.post/f4'`)
+	insertTestRecord(t, repo, "at://did:plc:bob/com.example.timeline.post/f4", "bafyreif4", "did:plc:bob", "com.example.timeline.post", `{"text":"no greeting"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:bob/com.example.timeline.post/f4'`)
 
 	t.Run("no filters returns all records", func(t *testing.T) {
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "com.example.timeline.post", nil, repositories.DIDFilter{}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1173,14 +1353,14 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 		filters := []repositories.FieldFilter{
 			{Field: "text", Operator: "eq", Value: "hello world", FieldType: "string"},
 		}
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, repositories.DIDFilter{}, 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "com.example.timeline.post", filters, repositories.DIDFilter{}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
 		if len(records) != 1 {
 			t.Fatalf("got %d records, want 1", len(records))
 		}
-		if records[0].URI != "at://did:plc:alice/app.bsky.feed.post/f1" {
+		if records[0].URI != "at://did:plc:alice/com.example.timeline.post/f1" {
 			t.Errorf("unexpected URI %q", records[0].URI)
 		}
 	})
@@ -1189,7 +1369,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 		filters := []repositories.FieldFilter{
 			{Field: "score", Operator: "isNull", Value: true, FieldType: "integer"},
 		}
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, repositories.DIDFilter{}, 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "com.example.timeline.post", filters, repositories.DIDFilter{}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1200,7 +1380,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 	})
 
 	t.Run("filter with DID omits when empty", func(t *testing.T) {
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "com.example.timeline.post", nil, repositories.DIDFilter{}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1210,7 +1390,7 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 	})
 
 	t.Run("filter with DID adds AND did = ? when non-empty", func(t *testing.T) {
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{EQ: "did:plc:alice"}, 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "com.example.timeline.post", nil, repositories.DIDFilter{EQ: "did:plc:alice"}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1228,14 +1408,14 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 		filters := []repositories.FieldFilter{
 			{Field: "text", Operator: "contains", Value: "hello", FieldType: "string"},
 		}
-		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, repositories.DIDFilter{EQ: "did:plc:alice"}, 100, "", "")
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "com.example.timeline.post", filters, repositories.DIDFilter{EQ: "did:plc:alice"}, 100, "", "")
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
 		if len(records) != 1 {
 			t.Fatalf("got %d records, want 1", len(records))
 		}
-		if records[0].URI != "at://did:plc:alice/app.bsky.feed.post/f1" {
+		if records[0].URI != "at://did:plc:alice/com.example.timeline.post/f1" {
 			t.Errorf("unexpected URI %q", records[0].URI)
 		}
 	})
@@ -1246,27 +1426,27 @@ func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T)
 		}
 		// f3 (2026-01-15T12:00:00Z) and f1 (2026-01-15T10:00:00Z) contain "hello"
 		// First page: limit 1 → f3 (newest)
-		page1, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, repositories.DIDFilter{}, 1, "", "")
+		page1, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "com.example.timeline.post", filters, repositories.DIDFilter{}, 1, "", "")
 		if err != nil {
 			t.Fatalf("page1 error: %v", err)
 		}
 		if len(page1) != 1 {
 			t.Fatalf("page1: got %d records, want 1", len(page1))
 		}
-		if page1[0].URI != "at://did:plc:bob/app.bsky.feed.post/f3" {
+		if page1[0].URI != "at://did:plc:bob/com.example.timeline.post/f3" {
 			t.Errorf("page1[0] URI = %q, want f3", page1[0].URI)
 		}
 
 		// Second page using cursor from f3
 		afterTS := page1[0].IndexedAt.UTC().Format("2006-01-02T15:04:05Z")
-		page2, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, repositories.DIDFilter{}, 1, afterTS, page1[0].URI)
+		page2, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "com.example.timeline.post", filters, repositories.DIDFilter{}, 1, afterTS, page1[0].URI)
 		if err != nil {
 			t.Fatalf("page2 error: %v", err)
 		}
 		if len(page2) != 1 {
 			t.Fatalf("page2: got %d records, want 1", len(page2))
 		}
-		if page2[0].URI != "at://did:plc:alice/app.bsky.feed.post/f1" {
+		if page2[0].URI != "at://did:plc:alice/com.example.timeline.post/f1" {
 			t.Errorf("page2[0] URI = %q, want f1", page2[0].URI)
 		}
 	})
@@ -1295,10 +1475,10 @@ func TestRecordsRepository_IterateAll(t *testing.T) {
 
 		// Insert 5 records with URIs that sort alphabetically
 		for i := 1; i <= 5; i++ {
-			uri := fmt.Sprintf("at://did:plc:test1/app.bsky.feed.post/iter%d", i)
+			uri := fmt.Sprintf("at://did:plc:test1/com.example.timeline.post/iter%d", i)
 			cid := fmt.Sprintf("bafyreiiter%d", i)
 			jsonStr := fmt.Sprintf(`{"text":"iter%d","createdAt":"2026-01-15T10:00:00Z"}`, i)
-			insertTestRecord(t, repo, uri, cid, "did:plc:test1", "app.bsky.feed.post", jsonStr)
+			insertTestRecord(t, repo, uri, cid, "did:plc:test1", "com.example.timeline.post", jsonStr)
 		}
 
 		var visited []string
@@ -1328,9 +1508,9 @@ func TestRecordsRepository_IterateAll(t *testing.T) {
 		repo := setupRecordsTest(t)
 		ctx := context.Background()
 
-		insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/err1", "bafyreierr1", "did:plc:test1", "app.bsky.feed.post", `{"text":"err1"}`)
-		insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/err2", "bafyreierr2", "did:plc:test1", "app.bsky.feed.post", `{"text":"err2"}`)
-		insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/err3", "bafyreierr3", "did:plc:test1", "app.bsky.feed.post", `{"text":"err3"}`)
+		insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/err1", "bafyreierr1", "did:plc:test1", "com.example.timeline.post", `{"text":"err1"}`)
+		insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/err2", "bafyreierr2", "did:plc:test1", "com.example.timeline.post", `{"text":"err2"}`)
+		insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/err3", "bafyreierr3", "did:plc:test1", "com.example.timeline.post", `{"text":"err3"}`)
 
 		callbackErr := fmt.Errorf("stop processing")
 		callCount := 0
@@ -1357,8 +1537,8 @@ func TestRecordsRepository_IterateAll(t *testing.T) {
 		repo := setupRecordsTest(t)
 		ctx := context.Background()
 
-		insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/bs1", "bafyreibs1", "did:plc:test1", "app.bsky.feed.post", `{"text":"bs1"}`)
-		insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/bs2", "bafyreibs2", "did:plc:test1", "app.bsky.feed.post", `{"text":"bs2"}`)
+		insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/bs1", "bafyreibs1", "did:plc:test1", "com.example.timeline.post", `{"text":"bs1"}`)
+		insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/bs2", "bafyreibs2", "did:plc:test1", "com.example.timeline.post", `{"text":"bs2"}`)
 
 		count, err := repo.IterateAll(ctx, 0, func(r *repositories.Record) error {
 			return nil
@@ -1387,9 +1567,9 @@ func TestRecordsRepository_Search(t *testing.T) {
 		{
 			name: "returns records containing search term",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sr1", "bafyreisr1", "did:plc:test1", "app.bsky.feed.post", `{"text":"hello world"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sr2", "bafyreisr2", "did:plc:test1", "app.bsky.feed.post", `{"text":"goodbye world"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sr3", "bafyreisr3", "did:plc:test1", "app.bsky.feed.post", `{"text":"hello again"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sr1", "bafyreisr1", "did:plc:test1", "com.example.timeline.post", `{"text":"hello world"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sr2", "bafyreisr2", "did:plc:test1", "com.example.timeline.post", `{"text":"goodbye world"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sr3", "bafyreisr3", "did:plc:test1", "com.example.timeline.post", `{"text":"hello again"}`)
 			},
 			query:     "hello",
 			limit:     10,
@@ -1398,18 +1578,18 @@ func TestRecordsRepository_Search(t *testing.T) {
 		{
 			name: "search with collection filter narrows results",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sc1", "bafyreisc1", "did:plc:test1", "app.bsky.feed.post", `{"text":"hello post"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.like/sc2", "bafyreisc2", "did:plc:test1", "app.bsky.feed.like", `{"text":"hello like"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sc1", "bafyreisc1", "did:plc:test1", "com.example.timeline.post", `{"text":"hello post"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.like/sc2", "bafyreisc2", "did:plc:test1", "com.example.timeline.like", `{"text":"hello like"}`)
 			},
 			query:      "hello",
-			collection: "app.bsky.feed.post",
+			collection: "com.example.timeline.post",
 			limit:      10,
 			wantCount:  1,
 		},
 		{
 			name: "search returns no results when term not found",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sn1", "bafyreisn1", "did:plc:test1", "app.bsky.feed.post", `{"text":"nothing here"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sn1", "bafyreisn1", "did:plc:test1", "com.example.timeline.post", `{"text":"nothing here"}`)
 			},
 			query:     "xyzzy",
 			limit:     10,
@@ -1418,9 +1598,9 @@ func TestRecordsRepository_Search(t *testing.T) {
 		{
 			name: "search is case-insensitive",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/si1", "bafyreisi1", "did:plc:test1", "app.bsky.feed.post", `{"text":"Hello World"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/si2", "bafyreisi2", "did:plc:test1", "app.bsky.feed.post", `{"text":"HELLO WORLD"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/si3", "bafyreisi3", "did:plc:test1", "app.bsky.feed.post", `{"text":"hello world"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/si1", "bafyreisi1", "did:plc:test1", "com.example.timeline.post", `{"text":"Hello World"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/si2", "bafyreisi2", "did:plc:test1", "com.example.timeline.post", `{"text":"HELLO WORLD"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/si3", "bafyreisi3", "did:plc:test1", "com.example.timeline.post", `{"text":"hello world"}`)
 			},
 			query:     "hello",
 			limit:     10,
@@ -1429,9 +1609,9 @@ func TestRecordsRepository_Search(t *testing.T) {
 		{
 			name: "search with pagination limit",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sp1", "bafyreisp1", "did:plc:test1", "app.bsky.feed.post", `{"text":"paginate me one"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sp2", "bafyreisp2", "did:plc:test1", "app.bsky.feed.post", `{"text":"paginate me two"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sp3", "bafyreisp3", "did:plc:test1", "app.bsky.feed.post", `{"text":"paginate me three"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sp1", "bafyreisp1", "did:plc:test1", "com.example.timeline.post", `{"text":"paginate me one"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sp2", "bafyreisp2", "did:plc:test1", "com.example.timeline.post", `{"text":"paginate me two"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sp3", "bafyreisp3", "did:plc:test1", "com.example.timeline.post", `{"text":"paginate me three"}`)
 			},
 			query:     "paginate",
 			limit:     2,
@@ -1440,8 +1620,8 @@ func TestRecordsRepository_Search(t *testing.T) {
 		{
 			name: "search escapes percent wildcard in query",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sw1", "bafyreisw1", "did:plc:test1", "app.bsky.feed.post", `{"text":"100% complete"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sw2", "bafyreisw2", "did:plc:test1", "app.bsky.feed.post", `{"text":"anything else"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sw1", "bafyreisw1", "did:plc:test1", "com.example.timeline.post", `{"text":"100% complete"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/sw2", "bafyreisw2", "did:plc:test1", "com.example.timeline.post", `{"text":"anything else"}`)
 			},
 			query:     "100%",
 			limit:     10,
@@ -1450,8 +1630,8 @@ func TestRecordsRepository_Search(t *testing.T) {
 		{
 			name: "search escapes underscore wildcard in query",
 			setup: func(repo *repositories.RecordsRepository) {
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/su1", "bafyreisu1", "did:plc:test1", "app.bsky.feed.post", `{"text":"hello_world"}`)
-				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/su2", "bafyreisu2", "did:plc:test1", "app.bsky.feed.post", `{"text":"helloXworld"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/su1", "bafyreisu1", "did:plc:test1", "com.example.timeline.post", `{"text":"hello_world"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/su2", "bafyreisu2", "did:plc:test1", "com.example.timeline.post", `{"text":"helloXworld"}`)
 			},
 			query:     "hello_world",
 			limit:     10,
@@ -1500,14 +1680,14 @@ func TestRecordsRepository_Search_Pagination(t *testing.T) {
 	sqlDB := env.db.Executor.DB()
 
 	// Insert records with distinct indexed_at timestamps
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/pg1", "bafyreipg1", "did:plc:test1", "app.bsky.feed.post", `{"text":"search term alpha"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/pg1'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/pg1", "bafyreipg1", "did:plc:test1", "com.example.timeline.post", `{"text":"search term alpha"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/pg1'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/pg2", "bafyreipg2", "did:plc:test1", "app.bsky.feed.post", `{"text":"search term beta"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/pg2'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/pg2", "bafyreipg2", "did:plc:test1", "com.example.timeline.post", `{"text":"search term beta"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/pg2'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/pg3", "bafyreipg3", "did:plc:test1", "app.bsky.feed.post", `{"text":"search term gamma"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/pg3'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/pg3", "bafyreipg3", "did:plc:test1", "com.example.timeline.post", `{"text":"search term gamma"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/pg3'`)
 
 	t.Run("first page returns newest first", func(t *testing.T) {
 		records, err := repo.Search(ctx, "search term", "", 2, "", "")
@@ -1518,10 +1698,10 @@ func TestRecordsRepository_Search_Pagination(t *testing.T) {
 			t.Fatalf("got %d records, want 2", len(records))
 		}
 		// Newest first: pg3, pg2
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/pg3" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/pg3" {
 			t.Errorf("first record URI = %q, want pg3", records[0].URI)
 		}
-		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/pg2" {
+		if records[1].URI != "at://did:plc:test1/com.example.timeline.post/pg2" {
 			t.Errorf("second record URI = %q, want pg2", records[1].URI)
 		}
 	})
@@ -1529,14 +1709,14 @@ func TestRecordsRepository_Search_Pagination(t *testing.T) {
 	t.Run("second page with keyset cursor returns older records", func(t *testing.T) {
 		// Cursor after pg2 (indexed_at=2026-01-15T11:00:00Z)
 		records, err := repo.Search(ctx, "search term", "", 10,
-			"2026-01-15T11:00:00Z", "at://did:plc:test1/app.bsky.feed.post/pg2")
+			"2026-01-15T11:00:00Z", "at://did:plc:test1/com.example.timeline.post/pg2")
 		if err != nil {
 			t.Fatalf("Search() error: %v", err)
 		}
 		if len(records) != 1 {
 			t.Fatalf("got %d records, want 1", len(records))
 		}
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/pg1" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/pg1" {
 			t.Errorf("record URI = %q, want pg1", records[0].URI)
 		}
 	})
@@ -1554,26 +1734,26 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 	// Backward pagination (last N) returns the last N edges in the connection.
 	// "last 3" without cursor returns r3, r2, r1 (the 3 oldest in DESC order).
 	// "last 2, before r1" returns r3, r2 (the 2 edges just before r1 in the DESC connection).
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/r1", "bafyreir1", "did:plc:test1", "app.bsky.feed.post", `{"text":"r1"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/r1'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/r1", "bafyreir1", "did:plc:test1", "com.example.timeline.post", `{"text":"r1"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/r1'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/r2", "bafyreir2", "did:plc:test1", "app.bsky.feed.post", `{"text":"r2"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/r2'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/r2", "bafyreir2", "did:plc:test1", "com.example.timeline.post", `{"text":"r2"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/r2'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/r3", "bafyreir3", "did:plc:test1", "app.bsky.feed.post", `{"text":"r3"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/r3'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/r3", "bafyreir3", "did:plc:test1", "com.example.timeline.post", `{"text":"r3"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/r3'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/r4", "bafyreir4", "did:plc:test1", "app.bsky.feed.post", `{"text":"r4"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/r4'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/r4", "bafyreir4", "did:plc:test1", "com.example.timeline.post", `{"text":"r4"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/r4'`)
 
-	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/r5", "bafyreir5", "did:plc:test1", "app.bsky.feed.post", `{"text":"r5"}`)
-	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T14:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/r5'`)
+	insertTestRecord(t, repo, "at://did:plc:test1/com.example.timeline.post/r5", "bafyreir5", "did:plc:test1", "com.example.timeline.post", `{"text":"r5"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T14:00:00Z' WHERE uri = 'at://did:plc:test1/com.example.timeline.post/r5'`)
 
 	t.Run("last 3 without cursor returns oldest 3 in DESC order", func(t *testing.T) {
 		// Default DESC order: r5, r4, r3, r2, r1
 		// last 3 = r3, r2, r1 (the last 3 edges in the connection)
 		// Algorithm: reversed sort=ASC, LIMIT 3 → r1,r2,r3 → reverse → r3,r2,r1
-		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, nil, 3, nil)
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "com.example.timeline.post", nil, repositories.DIDFilter{}, nil, 3, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1581,13 +1761,13 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 			t.Fatalf("got %d records, want 3", len(records))
 		}
 		// Result in DESC order: r3, r2, r1
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/r3" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/r3" {
 			t.Errorf("records[0].URI = %q, want r3", records[0].URI)
 		}
-		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/r2" {
+		if records[1].URI != "at://did:plc:test1/com.example.timeline.post/r2" {
 			t.Errorf("records[1].URI = %q, want r2", records[1].URI)
 		}
-		if records[2].URI != "at://did:plc:test1/app.bsky.feed.post/r1" {
+		if records[2].URI != "at://did:plc:test1/com.example.timeline.post/r1" {
 			t.Errorf("records[2].URI = %q, want r1", records[2].URI)
 		}
 	})
@@ -1595,7 +1775,7 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 	t.Run("last N+1 allows hasPreviousPage detection", func(t *testing.T) {
 		// Fetch 4 (last 3 + 1 extra) — should return 4 records
 		// Algorithm: reversed sort=ASC, LIMIT 4 → r1,r2,r3,r4 → reverse → r4,r3,r2,r1
-		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, nil, 4, nil)
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "com.example.timeline.post", nil, repositories.DIDFilter{}, nil, 4, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1610,8 +1790,8 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 		// "before r1" = edges that come before r1 in the list = r5, r4, r3, r2
 		// Algorithm: reversed sort=ASC, comparison=>, WHERE indexed_at > 10:00
 		//   → r2,r3,r4,r5 → reverse → r5,r4,r3,r2
-		beforeCursor := []string{"2026-01-15T10:00:00Z", "at://did:plc:test1/app.bsky.feed.post/r1"}
-		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, nil, 10, beforeCursor)
+		beforeCursor := []string{"2026-01-15T10:00:00Z", "at://did:plc:test1/com.example.timeline.post/r1"}
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "com.example.timeline.post", nil, repositories.DIDFilter{}, nil, 10, beforeCursor)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1619,10 +1799,10 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 			t.Fatalf("got %d records, want 4", len(records))
 		}
 		// Result in DESC order: r5, r4, r3, r2
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/r5" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/r5" {
 			t.Errorf("records[0].URI = %q, want r5", records[0].URI)
 		}
-		if records[3].URI != "at://did:plc:test1/app.bsky.feed.post/r2" {
+		if records[3].URI != "at://did:plc:test1/com.example.timeline.post/r2" {
 			t.Errorf("records[3].URI = %q, want r2", records[3].URI)
 		}
 	})
@@ -1632,8 +1812,8 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 		// "before r1" = r5, r4, r3, r2; last 2 = r3, r2
 		// Algorithm: reversed sort=ASC, comparison=>, WHERE indexed_at > 10:00, LIMIT 2
 		//   → r2,r3 → reverse → r3,r2
-		beforeCursor := []string{"2026-01-15T10:00:00Z", "at://did:plc:test1/app.bsky.feed.post/r1"}
-		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, nil, 2, beforeCursor)
+		beforeCursor := []string{"2026-01-15T10:00:00Z", "at://did:plc:test1/com.example.timeline.post/r1"}
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "com.example.timeline.post", nil, repositories.DIDFilter{}, nil, 2, beforeCursor)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1641,17 +1821,17 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 			t.Fatalf("got %d records, want 2", len(records))
 		}
 		// Result in DESC order: r3, r2 (the 2 edges just before r1)
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/r3" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/r3" {
 			t.Errorf("records[0].URI = %q, want r3", records[0].URI)
 		}
-		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/r2" {
+		if records[1].URI != "at://did:plc:test1/com.example.timeline.post/r2" {
 			t.Errorf("records[1].URI = %q, want r2", records[1].URI)
 		}
 	})
 
 	t.Run("all records returned when limit exceeds total", func(t *testing.T) {
 		// Algorithm: reversed sort=ASC, LIMIT 100 → r1,r2,r3,r4,r5 → reverse → r5,r4,r3,r2,r1
-		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "app.bsky.feed.post", nil, repositories.DIDFilter{}, nil, 100, nil)
+		records, err := repo.GetByCollectionReversedWithKeysetCursor(ctx, "com.example.timeline.post", nil, repositories.DIDFilter{}, nil, 100, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1659,10 +1839,10 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 			t.Fatalf("got %d records, want 5", len(records))
 		}
 		// Should be in DESC order: r5, r4, r3, r2, r1
-		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/r5" {
+		if records[0].URI != "at://did:plc:test1/com.example.timeline.post/r5" {
 			t.Errorf("records[0].URI = %q, want r5", records[0].URI)
 		}
-		if records[4].URI != "at://did:plc:test1/app.bsky.feed.post/r1" {
+		if records[4].URI != "at://did:plc:test1/com.example.timeline.post/r1" {
 			t.Errorf("records[4].URI = %q, want r1", records[4].URI)
 		}
 	})

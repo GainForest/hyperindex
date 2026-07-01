@@ -1,0 +1,138 @@
+{
+  "requiredNSIDs": [
+    "app.bsky.richtext.facet",
+    "app.certified.actor.organization",
+    "app.certified.actor.profile",
+    "app.certified.badge.award",
+    "app.certified.badge.definition",
+    "app.certified.badge.response",
+    "app.certified.defs",
+    "app.certified.graph.follow",
+    "app.certified.location",
+    "com.atproto.repo.strongRef",
+    "org.hypercerts.claim.activity",
+    "org.hypercerts.claim.contribution",
+    "org.hypercerts.claim.contributorInformation",
+    "org.hypercerts.claim.rights",
+    "org.hypercerts.collection",
+    "org.hypercerts.context.acknowledgement",
+    "org.hypercerts.context.attachment",
+    "org.hypercerts.context.evaluation",
+    "org.hypercerts.context.measurement",
+    "org.hypercerts.defs",
+    "org.hypercerts.funding.receipt",
+    "org.hypercerts.workscope.cel",
+    "org.hypercerts.workscope.tag",
+    "pub.leaflet.blocks.blockquote",
+    "pub.leaflet.blocks.bskyPost",
+    "pub.leaflet.blocks.button",
+    "pub.leaflet.blocks.code",
+    "pub.leaflet.blocks.header",
+    "pub.leaflet.blocks.horizontalRule",
+    "pub.leaflet.blocks.iframe",
+    "pub.leaflet.blocks.image",
+    "pub.leaflet.blocks.math",
+    "pub.leaflet.blocks.orderedList",
+    "pub.leaflet.blocks.page",
+    "pub.leaflet.blocks.poll",
+    "pub.leaflet.blocks.text",
+    "pub.leaflet.blocks.unorderedList",
+    "pub.leaflet.blocks.website",
+    "pub.leaflet.pages.linearDocument",
+    "pub.leaflet.richtext.facet"
+  ],
+  "typedQueryFields": {
+    "app.certified.actor.organization": "appCertifiedActorOrganization",
+    "app.certified.actor.profile": "appCertifiedActorProfile",
+    "app.certified.badge.award": "appCertifiedBadgeAward",
+    "app.certified.badge.definition": "appCertifiedBadgeDefinition",
+    "app.certified.badge.response": "appCertifiedBadgeResponse",
+    "app.certified.graph.follow": "appCertifiedGraphFollow",
+    "app.certified.location": "appCertifiedLocation",
+    "org.hypercerts.claim.activity": "orgHypercertsClaimActivity",
+    "org.hypercerts.claim.contribution": "orgHypercertsClaimContribution",
+    "org.hypercerts.claim.contributorInformation": "orgHypercertsClaimContributorInformation",
+    "org.hypercerts.claim.rights": "orgHypercertsClaimRights",
+    "org.hypercerts.collection": "orgHypercertsCollection",
+    "org.hypercerts.context.acknowledgement": "orgHypercertsContextAcknowledgement",
+    "org.hypercerts.context.attachment": "orgHypercertsContextAttachment",
+    "org.hypercerts.context.evaluation": "orgHypercertsContextEvaluation",
+    "org.hypercerts.context.measurement": "orgHypercertsContextMeasurement",
+    "org.hypercerts.funding.receipt": "orgHypercertsFundingReceipt",
+    "org.hypercerts.workscope.tag": "orgHypercertsWorkscopeTag"
+  },
+  "nonRecordNSIDs": [
+    "app.bsky.richtext.facet",
+    "app.certified.defs",
+    "com.atproto.repo.strongRef",
+    "org.hypercerts.defs",
+    "org.hypercerts.workscope.cel",
+    "pub.leaflet.blocks.blockquote",
+    "pub.leaflet.blocks.bskyPost",
+    "pub.leaflet.blocks.button",
+    "pub.leaflet.blocks.code",
+    "pub.leaflet.blocks.header",
+    "pub.leaflet.blocks.horizontalRule",
+    "pub.leaflet.blocks.iframe",
+    "pub.leaflet.blocks.image",
+    "pub.leaflet.blocks.math",
+    "pub.leaflet.blocks.orderedList",
+    "pub.leaflet.blocks.page",
+    "pub.leaflet.blocks.poll",
+    "pub.leaflet.blocks.text",
+    "pub.leaflet.blocks.unorderedList",
+    "pub.leaflet.blocks.website",
+    "pub.leaflet.pages.linearDocument",
+    "pub.leaflet.richtext.facet"
+  ],
+  "dataBearingCollections": [
+    {
+      "nsid": "org.hypercerts.claim.activity",
+      "minimumRecords": 20
+    },
+    {
+      "nsid": "app.certified.actor.profile",
+      "minimumRecords": 20
+    },
+    {
+      "nsid": "app.certified.graph.follow",
+      "minimumRecords": 20
+    }
+  ],
+  "paginationCollections": [
+    {
+      "nsid": "org.hypercerts.claim.activity",
+      "pageSize": 10
+    },
+    {
+      "nsid": "app.certified.actor.profile",
+      "pageSize": 10
+    },
+    {
+      "nsid": "app.certified.graph.follow",
+      "pageSize": 10
+    }
+  ],
+  "externalLabelActivityClaims": {
+    "sourceDIDEnv": "HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID",
+    "pageSize": 10,
+    "labels": [
+      {
+        "value": "high-quality",
+        "minimumRecords": 20
+      },
+      {
+        "value": "standard",
+        "minimumRecords": 20
+      }
+    ]
+  },
+  "endorsementClosure": {
+    "minimumActiveEdges": 5,
+    "requireIndirect": true
+  },
+  "search": {
+    "query": "hypercert",
+    "first": 1
+  }
+}

@@ -57,6 +57,7 @@ func TestOAuthClientsRepository_CRUD(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("Get() returned nil, want client")
+		return
 	}
 	if got.ClientID != client.ClientID {
 		t.Errorf("ClientID = %q, want %q", got.ClientID, client.ClientID)
@@ -156,6 +157,7 @@ func TestOAuthClientsRepository_EnsureAdminClient(t *testing.T) {
 	}
 	if admin == nil {
 		t.Fatal("admin client not found after EnsureAdminClient")
+		return
 	}
 	if admin.ClientName != "Admin UI" {
 		t.Errorf("admin ClientName = %q, want %q", admin.ClientName, "Admin UI")
@@ -227,6 +229,7 @@ func TestOAuthAccessTokensRepository_CRUD(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("Get() returned nil, want token")
+		return
 	}
 	if got.Token != token.Token {
 		t.Errorf("Token = %q, want %q", got.Token, token.Token)
@@ -389,6 +392,7 @@ func TestOAuthRefreshTokensRepository_CRUD(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("Get() returned nil, want token")
+		return
 	}
 	if got.Token != refreshToken.Token {
 		t.Errorf("Token = %q, want %q", got.Token, refreshToken.Token)
@@ -410,6 +414,7 @@ func TestOAuthRefreshTokensRepository_CRUD(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("GetByAccessToken() returned nil")
+		return
 	}
 	if got.Token != "refresh-token-abc123" {
 		t.Errorf("GetByAccessToken().Token = %q, want %q", got.Token, "refresh-token-abc123")
@@ -528,6 +533,7 @@ func TestOAuthAuthorizationCodesRepository_CRUD(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("Get() returned nil, want code")
+		return
 	}
 	if got.Code != code.Code {
 		t.Errorf("Code = %q, want %q", got.Code, code.Code)
@@ -645,6 +651,7 @@ func TestOAuthDPoPJTIRepository_CRUD(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("Get() returned nil, want JTI")
+		return
 	}
 	if got.JTI != "unique-jti-abc123" {
 		t.Errorf("JTI = %q, want %q", got.JTI, "unique-jti-abc123")

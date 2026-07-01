@@ -7,15 +7,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/language/ast"
+	"github.com/graphql-go/graphql/language/parser"
 
-	"github.com/GainForest/hyperindex/internal/database/migrations"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
-	"github.com/GainForest/hyperindex/internal/database/sqlite"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/testutil"
@@ -484,6 +485,30 @@ func TestBuildRecordType_ReservedFieldCollision(t *testing.T) {
 	}
 }
 
+func TestBuildRecordType_DoesNotExposeAuthorLabelsVirtualField(t *testing.T) {
+	lexiconID := "com.example.reserved.authorLabels"
+	lex := buildReservedCollisionLexicon(lexiconID, []string{"authorLabels"})
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	recordType := builder.GetRecordType(lexiconID)
+	if recordType == nil {
+		t.Fatal("record type not found after Build()")
+	}
+	if _, ok := recordType.Fields()["authorLabels"]; ok {
+		t.Fatal("record type exposed authorLabels; this release only supports where.authorLabels filtering")
+	}
+	if _, ok := recordType.Fields()["title"]; !ok {
+		t.Fatal("non-colliding property 'title' is missing from the type")
+	}
+}
+
 func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -493,6 +518,7 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 		{name: "cid collision in WhereInput", colliding: "cid"},
 		{name: "rkey collision in WhereInput", colliding: "rkey"},
 		{name: "externalLabels collision in WhereInput", colliding: "externalLabels"},
+		{name: "authorLabels collision in WhereInput", colliding: "authorLabels"},
 	}
 
 	for _, tt := range tests {
@@ -517,16 +543,27 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 			inputFields := whereInput.Fields()
 
 			// The colliding lexicon property must not overwrite generated metadata filters.
-			if tt.colliding == "externalLabels" {
+			switch tt.colliding {
+			case "externalLabels", "authorLabels":
 				field, exists := inputFields[tt.colliding]
 				if !exists {
-					t.Fatalf("WhereInput missing generated externalLabels metadata filter")
+					t.Fatalf("WhereInput missing generated %s metadata filter", tt.colliding)
 				}
 				if field.Type.String() != "ExternalLabelWhereInput" {
-					t.Errorf("externalLabels filter type = %q, want ExternalLabelWhereInput", field.Type.String())
+					t.Errorf("%s filter type = %q, want ExternalLabelWhereInput", tt.colliding, field.Type.String())
 				}
-			} else if _, exists := inputFields[tt.colliding]; exists {
-				t.Errorf("WhereInput has field %q which should have been skipped (reserved name collision)", tt.colliding)
+			case "uri":
+				field, exists := inputFields[tt.colliding]
+				if !exists {
+					t.Fatalf("WhereInput missing generated uri metadata filter")
+				}
+				if field.Type.String() != "URIFilterInput" {
+					t.Errorf("uri filter type = %q, want URIFilterInput", field.Type.String())
+				}
+			default:
+				if _, exists := inputFields[tt.colliding]; exists {
+					t.Errorf("WhereInput has field %q which should have been skipped (reserved name collision)", tt.colliding)
+				}
 			}
 
 			// The normal non-colliding property must still appear as a filter.
@@ -534,6 +571,82 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 				t.Error("non-colliding property 'title' is missing from WhereInput")
 			}
 		})
+	}
+}
+
+func TestBuildWhereInput_CollectionFilterExtensions(t *testing.T) {
+	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
+	if err != nil {
+		t.Fatalf("load lexicons: %v", err)
+	}
+	registry := lexicon.NewRegistry()
+	for _, lex := range lexicons {
+		registry.Register(lex)
+	}
+
+	builder := NewBuilder(registry)
+	_, err = builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	activityWhereInput := builder.whereInputTypes["org.hypercerts.claim.activity"]
+	if activityWhereInput == nil {
+		t.Fatal("activity WhereInput type not found after Build()")
+	}
+	contributorDidField, ok := activityWhereInput.Fields()["contributorDid"]
+	if !ok {
+		t.Fatal("activity WhereInput missing contributorDid collection filter extension")
+	}
+	if got := contributorDidField.Type.String(); got != "DIDFilterInput" {
+		t.Fatalf("contributorDid filter type = %q, want DIDFilterInput", got)
+	}
+
+	awardWhereInput := builder.whereInputTypes["app.certified.badge.award"]
+	if awardWhereInput == nil {
+		t.Fatal("badge award WhereInput type not found after Build()")
+	}
+	badgeTypeField, ok := awardWhereInput.Fields()["badgeType"]
+	if !ok {
+		t.Fatal("badge award WhereInput missing badgeType collection filter extension")
+	}
+	if got := badgeTypeField.Type.String(); got != "StringFilterInput" {
+		t.Fatalf("badgeType filter type = %q, want StringFilterInput", got)
+	}
+
+	definitionWhereInput := builder.whereInputTypes["app.certified.badge.definition"]
+	if definitionWhereInput == nil {
+		t.Fatal("badge definition WhereInput type not found after Build()")
+	}
+	definitionBadgeTypeField, ok := definitionWhereInput.Fields()["badgeType"]
+	if !ok {
+		t.Fatal("badge definition WhereInput missing lexicon-defined badgeType filter")
+	}
+	if got := definitionBadgeTypeField.Type.String(); got != "StringFilterInput" {
+		t.Fatalf("definition badgeType filter type = %q, want StringFilterInput", got)
+	}
+}
+
+func TestBuildWhereInput_CollectionFilterExtensionCollisionFailsBuild(t *testing.T) {
+	lex := &lexicon.Lexicon{
+		ID: "app.certified.badge.award",
+		Defs: lexicon.Defs{Main: &lexicon.RecordDef{
+			Type: "record",
+			Key:  "tid",
+			Properties: []lexicon.PropertyEntry{
+				{Name: "badgeType", Property: lexicon.Property{Type: lexicon.TypeString}},
+			},
+		}},
+	}
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	_, err := NewBuilder(registry).Build()
+	if err == nil {
+		t.Fatal("Build() succeeded, want collection filter extension collision error")
+	}
+	if !strings.Contains(err.Error(), "collection filter extension app.certified.badge.award.badgeType conflicts") {
+		t.Fatalf("Build() error = %q, want badgeType collision message", err.Error())
 	}
 }
 
@@ -711,6 +824,61 @@ func TestBuildWhereInput_UsesDIDFilterInput(t *testing.T) {
 	}
 }
 
+func TestBuildWhereInput_UsesURIFilterInput(t *testing.T) {
+	lexiconID := "com.example.urifilter.post"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "title", Property: lexicon.Property{Type: "string"}},
+				},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput, ok := builder.whereInputTypes[lexiconID]
+	if !ok {
+		t.Fatal("WhereInput type not found after Build()")
+	}
+
+	uriField, ok := whereInput.Fields()["uri"]
+	if !ok {
+		t.Fatal("WhereInput is missing the 'uri' field")
+	}
+
+	inputObj, ok := uriField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("WhereInput 'uri' field type = %T, want *graphql.InputObject", uriField.Type)
+	}
+	if inputObj.Name() != "URIFilterInput" {
+		t.Errorf("WhereInput 'uri' field type name = %q, want %q", inputObj.Name(), "URIFilterInput")
+	}
+
+	uriFilterFields := inputObj.Fields()
+	for _, present := range []string{"eq", "in"} {
+		if _, ok := uriFilterFields[present]; !ok {
+			t.Errorf("URIFilterInput: missing %q field", present)
+		}
+	}
+	for _, absent := range []string{"contains", "startsWith", "neq", "isNull", "gt", "lt"} {
+		if _, ok := uriFilterFields[absent]; ok {
+			t.Errorf("URIFilterInput: field %q should be absent", absent)
+		}
+	}
+}
+
 func TestBuildWhereInput_DidHandledSeparately(t *testing.T) {
 	// A lexicon with a "did" property must not result in a duplicate "did" filter.
 	// The "did" metadata filter is always added; the lexicon property "did" must be skipped.
@@ -744,7 +912,427 @@ func TestBuildWhereInput_DidHandledSeparately(t *testing.T) {
 	}
 }
 
-func TestBuildWhereInput_ComplexPropertiesUsePresenceFilter(t *testing.T) {
+func TestExtractFilters_URIFilter(t *testing.T) {
+	registry := lexicon.NewRegistry()
+
+	tests := []struct {
+		name      string
+		whereArg  interface{}
+		wantOps   []string
+		wantValue []interface{}
+	}{
+		{
+			name: "uri eq filter",
+			whereArg: map[string]interface{}{
+				"uri": map[string]interface{}{
+					"eq": "at://did:plc:alice/com.example.post/1",
+				},
+			},
+			wantOps:   []string{"eq"},
+			wantValue: []interface{}{"at://did:plc:alice/com.example.post/1"},
+		},
+		{
+			name: "uri in filter",
+			whereArg: map[string]interface{}{
+				"uri": map[string]interface{}{
+					"in": []interface{}{
+						"at://did:plc:alice/com.example.post/1",
+						"at://did:plc:bob/com.example.post/2",
+					},
+				},
+			},
+			wantOps: []string{"in"},
+			wantValue: []interface{}{[]interface{}{
+				"at://did:plc:alice/com.example.post/1",
+				"at://did:plc:bob/com.example.post/2",
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filters, didFilter, err := extractFilters(tt.whereArg, "com.example.test", registry)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !didFilter.IsEmpty() {
+				t.Fatalf("didFilter = %#v, want empty", didFilter)
+			}
+			if len(filters) != len(tt.wantOps) {
+				t.Fatalf("len(filters) = %d, want %d (filters: %#v)", len(filters), len(tt.wantOps), filters)
+			}
+			for i, filter := range filters {
+				if filter.Field != "uri" {
+					t.Errorf("filters[%d].Field = %q, want uri", i, filter.Field)
+				}
+				if filter.Operator != tt.wantOps[i] {
+					t.Errorf("filters[%d].Operator = %q, want %q", i, filter.Operator, tt.wantOps[i])
+				}
+				if !reflect.DeepEqual(filter.Value, tt.wantValue[i]) {
+					t.Errorf("filters[%d].Value = %#v, want %#v", i, filter.Value, tt.wantValue[i])
+				}
+				if filter.Target != repositories.FieldFilterTargetColumn {
+					t.Errorf("filters[%d].Target = %q, want %q", i, filter.Target, repositories.FieldFilterTargetColumn)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractFilters_URIFilterKeepsMetadataStringType(t *testing.T) {
+	lexiconID := "com.example.urifilter.collision"
+	registry := lexicon.NewRegistry()
+	registry.Register(buildReservedCollisionLexicon(lexiconID, []string{"uri"}))
+
+	filters, didFilter, err := extractFilters(map[string]interface{}{
+		"uri": map[string]interface{}{
+			"eq": "at://did:plc:alice/com.example.urifilter.collision/1",
+		},
+	}, lexiconID, registry)
+	if err != nil {
+		t.Fatalf("extractFilters() error = %v", err)
+	}
+	if !didFilter.IsEmpty() {
+		t.Fatalf("didFilter = %#v, want empty", didFilter)
+	}
+	if len(filters) != 1 {
+		t.Fatalf("len(filters) = %d, want 1 (filters: %#v)", len(filters), filters)
+	}
+	if filters[0].FieldType != "string" {
+		t.Fatalf("uri FieldType = %q, want string; metadata uri must not inherit colliding lexicon property type", filters[0].FieldType)
+	}
+	if filters[0].Target != repositories.FieldFilterTargetColumn {
+		t.Fatalf("uri Target = %q, want %q", filters[0].Target, repositories.FieldFilterTargetColumn)
+	}
+}
+
+func TestBuildWhereInput_UnresolvedRefsUsePresenceOnlyFilter(t *testing.T) {
+	lexiconID := "com.example.unresolved.ref"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{Main: &lexicon.RecordDef{
+			Type: "record",
+			Key:  "tid",
+			Properties: []lexicon.PropertyEntry{
+				{Name: "target", Property: lexicon.Property{Type: lexicon.TypeRef, Ref: "com.example.missing#main"}},
+			},
+		}},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput := builder.whereInputTypes[lexiconID]
+	targetField := whereInput.Fields()["target"]
+	if targetField == nil {
+		t.Fatal("WhereInput missing target field")
+		return
+	}
+	inputObj, ok := targetField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("target type = %T, want *graphql.InputObject", targetField.Type)
+	}
+	fields := inputObj.Fields()
+	if _, ok := fields["isNull"]; !ok {
+		t.Fatalf("unresolved ref filter missing isNull")
+	}
+	if _, ok := fields["eq"]; ok {
+		t.Fatalf("unresolved ref filter exposes eq but extraction cannot apply it")
+	}
+}
+
+func TestBuildWhereInput_UnionConflictOmitAmbiguousNestedField(t *testing.T) {
+	lexiconID := "com.example.union.conflict"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "subject", Property: lexicon.Property{Type: lexicon.TypeUnion, Refs: []string{"#stringSubject", "#intSubject"}}},
+				},
+			},
+			Others: map[string]lexicon.Def{
+				"stringSubject": {Type: "object", Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{{Name: "value", Property: lexicon.Property{Type: lexicon.TypeString}}}}},
+				"intSubject":    {Type: "object", Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{{Name: "value", Property: lexicon.Property{Type: lexicon.TypeInteger}}}}},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	subjectField := builder.whereInputTypes[lexiconID].Fields()["subject"]
+	inputObj, ok := subjectField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("subject type = %T, want *graphql.InputObject", subjectField.Type)
+	}
+	if _, ok := inputObj.Fields()["value"]; ok {
+		t.Fatalf("ambiguous union field value should be omitted from generated filter input")
+	}
+}
+
+func TestBuildWhereInput_ThreeLevelNestedFilters(t *testing.T) {
+	lexiconID := "com.example.nested.depth"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "one", Property: lexicon.Property{Type: lexicon.TypeRef, Ref: "#one"}},
+				},
+			},
+			Others: map[string]lexicon.Def{
+				"one": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "two", Property: lexicon.Property{Type: lexicon.TypeRef, Ref: "#two"}},
+					}},
+				},
+				"two": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "three", Property: lexicon.Property{Type: lexicon.TypeString}},
+						{Name: "threeObject", Property: lexicon.Property{Type: lexicon.TypeRef, Ref: "#threeObject"}},
+					}},
+				},
+				"threeObject": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "four", Property: lexicon.Property{Type: lexicon.TypeString}},
+					}},
+				},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput := builder.whereInputTypes[lexiconID]
+	oneField := whereInput.Fields()["one"]
+	oneInput, ok := oneField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("one type = %T, want *graphql.InputObject", oneField.Type)
+	}
+	twoField := oneInput.Fields()["two"]
+	if twoField == nil {
+		t.Fatal("one filter missing second-level field two")
+		return
+	}
+	twoInput, ok := twoField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("two type = %T, want *graphql.InputObject", twoField.Type)
+	}
+	threeField := twoInput.Fields()["three"]
+	if threeField == nil {
+		t.Fatal("two filter missing third-level scalar field three")
+		return
+	}
+	if got := threeField.Type.String(); got != "ExactStringFilterInput" {
+		t.Fatalf("three filter type = %q, want ExactStringFilterInput", got)
+	}
+	threeObjectField := twoInput.Fields()["threeObject"]
+	if threeObjectField == nil {
+		t.Fatal("two filter missing third-level object field threeObject")
+		return
+	}
+	threeObjectInput, ok := threeObjectField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("threeObject type = %T, want *graphql.InputObject", threeObjectField.Type)
+	}
+	if _, ok := threeObjectInput.Fields()["four"]; ok {
+		t.Fatal("fourth-level scalar field four should not be generated")
+	}
+	if _, ok := threeObjectInput.Fields()["isNull"]; !ok {
+		t.Fatal("third-level object filter should still expose isNull")
+	}
+}
+
+func TestExtractFilters_ThreeLevelNestedArrayFilterPath(t *testing.T) {
+	const lexiconID = "org.hypercerts.collection"
+	const targetURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
+
+	registry := lexicon.NewRegistry()
+	registry.Register(&lexicon.Lexicon{
+		ID: "com.atproto.repo.strongRef",
+		Defs: lexicon.Defs{Main: &lexicon.RecordDef{
+			Type: lexicon.TypeObject,
+			Properties: []lexicon.PropertyEntry{
+				{Name: "uri", Property: lexicon.Property{Type: lexicon.TypeString, Format: lexicon.FormatATURI}},
+				{Name: "cid", Property: lexicon.Property{Type: lexicon.TypeString, Format: lexicon.FormatCID}},
+			},
+		}},
+	})
+	registry.Register(&lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "items", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#item"}}},
+				},
+			},
+			Others: map[string]lexicon.Def{
+				"item": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "itemIdentifier", Property: lexicon.Property{Type: lexicon.TypeRef, Ref: "com.atproto.repo.strongRef"}},
+					}},
+				},
+			},
+		},
+	})
+
+	filters, didFilter, err := extractFilters(map[string]interface{}{
+		"items": map[string]interface{}{
+			"any": map[string]interface{}{
+				"itemIdentifier": map[string]interface{}{
+					"uri": map[string]interface{}{
+						"eq": targetURI,
+					},
+				},
+			},
+		},
+	}, lexiconID, registry)
+	if err != nil {
+		t.Fatalf("extractFilters() error = %v", err)
+	}
+	if !didFilter.IsEmpty() {
+		t.Fatalf("didFilter = %#v, want empty", didFilter)
+	}
+	if len(filters) != 1 {
+		t.Fatalf("len(filters) = %d, want 1: %#v", len(filters), filters)
+	}
+
+	filter := filters[0]
+	if filter.Field != "items" {
+		t.Fatalf("filter.Field = %q, want items", filter.Field)
+	}
+	if !reflect.DeepEqual(filter.ArrayPath, []string{"items"}) {
+		t.Fatalf("filter.ArrayPath = %#v, want [items]", filter.ArrayPath)
+	}
+	if !reflect.DeepEqual(filter.Path, []string{"itemIdentifier", "uri"}) {
+		t.Fatalf("filter.Path = %#v, want [itemIdentifier uri]", filter.Path)
+	}
+	if filter.Operator != "eq" {
+		t.Fatalf("filter.Operator = %q, want eq", filter.Operator)
+	}
+	if filter.Value != targetURI {
+		t.Fatalf("filter.Value = %#v, want %q", filter.Value, targetURI)
+	}
+	if filter.FieldType != lexicon.TypeString {
+		t.Fatalf("filter.FieldType = %q, want string", filter.FieldType)
+	}
+	if filter.Target != "" {
+		t.Fatalf("filter.Target = %q, want zero-value JSON target", filter.Target)
+	}
+}
+
+func TestBuildWhereInput_HidesNestedArrayAnyInsideArrayAny(t *testing.T) {
+	lexiconID := "com.example.nested.arrays"
+	lex := &lexicon.Lexicon{
+		ID: lexiconID,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "facets", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#facet"}}},
+					{Name: "topFeatures", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#feature"}}},
+				},
+			},
+			Others: map[string]lexicon.Def{
+				"facet": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "features", Property: lexicon.Property{Type: lexicon.TypeArray, Items: &lexicon.ArrayItems{Type: lexicon.TypeRef, Ref: "#feature"}}},
+					}},
+				},
+				"feature": {
+					Type: "object",
+					Object: &lexicon.ObjectDef{Type: "object", Properties: []lexicon.PropertyEntry{
+						{Name: "tag", Property: lexicon.Property{Type: lexicon.TypeString}},
+					}},
+				},
+			},
+		},
+	}
+
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput := builder.whereInputTypes[lexiconID]
+	whereFields := whereInput.Fields()
+
+	facetsInput, ok := whereFields["facets"].Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("facets filter type = %T, want *graphql.InputObject", whereFields["facets"].Type)
+	}
+	facetsAny := facetsInput.Fields()["any"]
+	if facetsAny == nil {
+		t.Fatal("top-level facets array should expose any")
+		return
+	}
+	facetInput, ok := facetsAny.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("facets.any type = %T, want *graphql.InputObject", facetsAny.Type)
+	}
+
+	featuresField := facetInput.Fields()["features"]
+	if featuresField == nil {
+		t.Fatal("facets.any should expose nested features presence filter")
+		return
+	}
+	featuresInput, ok := featuresField.Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("facets.any.features type = %T, want *graphql.InputObject", featuresField.Type)
+	}
+	if _, ok := featuresInput.Fields()["isNull"]; !ok {
+		t.Fatal("facets.any.features should keep isNull presence filtering")
+	}
+	if _, ok := featuresInput.Fields()["any"]; ok {
+		t.Fatal("facets.any.features should not expose nested any because nested array any filters cannot execute")
+	}
+
+	topFeaturesInput, ok := whereFields["topFeatures"].Type.(*graphql.InputObject)
+	if !ok {
+		t.Fatalf("topFeatures filter type = %T, want *graphql.InputObject", whereFields["topFeatures"].Type)
+	}
+	if _, ok := topFeaturesInput.Fields()["any"]; !ok {
+		t.Fatal("top-level topFeatures array should still expose any")
+	}
+}
+
+func TestBuildWhereInput_ComplexPropertiesUseNestedOrPresenceFilters(t *testing.T) {
 	lexiconID := "com.example.whereinput.presence"
 	lex := &lexicon.Lexicon{
 		ID: lexiconID,
@@ -781,11 +1369,13 @@ func TestBuildWhereInput_ComplexPropertiesUsePresenceFilter(t *testing.T) {
 
 	inputFields := whereInput.Fields()
 	wantTypes := map[string]string{
+		"uri":            "URIFilterInput",
 		"did":            "DIDFilterInput",
 		"externalLabels": "ExternalLabelWhereInput",
+		"authorLabels":   "ExternalLabelWhereInput",
 		"title":          "StringFilterInput",
 		"createdAt":      "DateTimeFilterInput",
-		"contributors":   "PresenceFilterInput",
+		"contributors":   "ComExampleWhereinputPresenceContributorsArrayFilterInput",
 		"image":          "PresenceFilterInput",
 		"root":           "PresenceFilterInput",
 		"raw":            "PresenceFilterInput",
@@ -973,26 +1563,21 @@ func setupCoercionTestDB(t *testing.T, recordJSON string) context.Context {
 // inserts a single record, and returns a context that carries the repositories.
 func setupSchemaRecordTestDB(t *testing.T, rec *repositories.Record) context.Context {
 	t.Helper()
+	return setupSchemaRecordsTestDB(t, []*repositories.Record{rec})
+}
 
-	exec, err := sqlite.NewExecutor("sqlite::memory:")
-	if err != nil {
-		t.Fatalf("setupSchemaRecordTestDB: failed to create SQLite executor: %v", err)
-	}
-	t.Cleanup(func() { exec.Close() })
+func setupSchemaRecordsTestDB(t *testing.T, recordsToInsert []*repositories.Record) context.Context {
+	t.Helper()
 
 	ctx := context.Background()
-	if err := migrations.Run(ctx, exec); err != nil {
-		t.Fatalf("setupSchemaRecordTestDB: failed to run migrations: %v", err)
-	}
-
-	records := repositories.NewRecordsRepository(exec)
-	if err := records.BatchInsert(ctx, []*repositories.Record{rec}); err != nil {
-		t.Fatalf("setupSchemaRecordTestDB: failed to insert record: %v", err)
+	db := testutil.SetupTestDB(t)
+	if err := db.Records.BatchInsert(ctx, recordsToInsert); err != nil {
+		t.Fatalf("setupSchemaRecordsTestDB: failed to insert records: %v", err)
 	}
 
 	repos := &resolver.Repositories{
-		Records:        records,
-		ExternalLabels: repositories.NewExternalLabelsRepository(exec),
+		Records:        db.Records,
+		ExternalLabels: db.ExternalLabels,
 	}
 	return resolver.WithRepositories(ctx, repos)
 }
@@ -1087,6 +1672,63 @@ func TestCIDLinkSerializationInBuiltSchema(t *testing.T) {
 	assertRawCIDLinkShape(t, value, cid)
 }
 
+func executeConnectionQuery(ctx context.Context, t *testing.T, schema *graphql.Schema, query, fieldName string) map[string]interface{} {
+	t.Helper()
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected GraphQL errors: %v", result.Errors)
+	}
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+	conn, ok := data[fieldName].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s is %T, want map[string]interface{}", fieldName, data[fieldName])
+	}
+	return conn
+}
+
+func assertConnectionURIs(t *testing.T, conn map[string]interface{}, wantURIs []string) {
+	t.Helper()
+
+	edges, ok := conn["edges"].([]interface{})
+	if !ok {
+		t.Fatalf("edges is %T, want []interface{}", conn["edges"])
+	}
+	if len(edges) != len(wantURIs) {
+		t.Fatalf("len(edges) = %d, want %d: %v", len(edges), len(wantURIs), edges)
+	}
+
+	got := map[string]bool{}
+	for _, edgeValue := range edges {
+		edge, ok := edgeValue.(map[string]interface{})
+		if !ok {
+			t.Fatalf("edge is %T, want map[string]interface{}", edgeValue)
+		}
+		node, ok := edge["node"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("node is %T, want map[string]interface{}", edge["node"])
+		}
+		uri, ok := node["uri"].(string)
+		if !ok {
+			t.Fatalf("node.uri is %T, want string", node["uri"])
+		}
+		got[uri] = true
+	}
+
+	for _, wantURI := range wantURIs {
+		if !got[wantURI] {
+			t.Fatalf("missing URI %q in result set %v", wantURI, got)
+		}
+	}
+}
+
 func firstConnectionNode(t *testing.T, connectionValue interface{}, fieldName string) map[string]interface{} {
 	t.Helper()
 
@@ -1149,6 +1791,31 @@ func assertRawCIDLinkShape(t *testing.T, value map[string]interface{}, cid strin
 }
 
 // buildActivitySchema builds a GraphQL schema from the org.hypercerts.claim.activity lexicon.
+func buildAllTestdataSchema(t *testing.T) *graphql.Schema {
+	t.Helper()
+
+	builder := buildAllTestdataBuilder(t)
+	schema, err := builder.Build()
+	if err != nil {
+		t.Fatalf("buildAllTestdataSchema: failed to build schema: %v", err)
+	}
+	return schema
+}
+
+func buildAllTestdataBuilder(t *testing.T) *Builder {
+	t.Helper()
+
+	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
+	if err != nil {
+		t.Fatalf("buildAllTestdataBuilder: failed to load lexicons: %v", err)
+	}
+	registry := lexicon.NewRegistry()
+	for _, lex := range lexicons {
+		registry.Register(lex)
+	}
+	return NewBuilder(registry)
+}
+
 func buildActivitySchema(t *testing.T) *graphql.Schema {
 	t.Helper()
 
@@ -1169,6 +1836,658 @@ func buildActivitySchema(t *testing.T) *graphql.Schema {
 		t.Fatalf("buildActivitySchema: failed to build schema: %v", err)
 	}
 	return schema
+}
+
+func TestCollectionResolver_URIWhereFilterUsesRecordMetadata(t *testing.T) {
+	ctx := setupCoercionTestDB(t, `{"title":"My Title","shortDescription":"My Desc","createdAt":"2025-01-01T00:00:00Z","uri":"json-shadow"}`)
+	schema := buildActivitySchema(t)
+
+	query := `{
+		orgHypercertsClaimActivity(
+			first: 10
+			where: { uri: { eq: "at://did:plc:test/org.hypercerts.claim.activity/rkey1" } }
+		) {
+			edges {
+				node { uri title }
+			}
+			totalCount
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected GraphQL errors: %v", result.Errors)
+	}
+
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+	conn, ok := data["orgHypercertsClaimActivity"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("orgHypercertsClaimActivity is %T", data["orgHypercertsClaimActivity"])
+	}
+	edges, ok := conn["edges"].([]interface{})
+	if !ok {
+		t.Fatalf("edges is %T, want []interface{}", conn["edges"])
+	}
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+	edge := edges[0].(map[string]interface{})
+	node := edge["node"].(map[string]interface{})
+	if got := node["uri"]; got != "at://did:plc:test/org.hypercerts.claim.activity/rkey1" {
+		t.Errorf("node.uri = %v, want record metadata URI", got)
+	}
+	if got := conn["totalCount"]; got != 1 {
+		t.Errorf("totalCount = %v, want 1", got)
+	}
+}
+
+func TestCollectionResolver_URIWhereFilterRejectsSubstringOperators(t *testing.T) {
+	ctx := setupCoercionTestDB(t, `{"title":"My Title","shortDescription":"My Desc","createdAt":"2025-01-01T00:00:00Z"}`)
+	schema := buildActivitySchema(t)
+
+	query := `{
+		orgHypercertsClaimActivity(
+			first: 10
+			where: { uri: { contains: "org.hypercerts.claim.activity" } }
+		) {
+			edges { node { uri } }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL validation error for unsupported uri.contains filter")
+	}
+	if !strings.Contains(result.Errors[0].Message, "Unknown field") {
+		t.Fatalf("error = %q, want unknown field validation", result.Errors[0].Message)
+	}
+}
+
+func TestCollectionResolver_NestedUnionFilterFindsBadgeAwardRecipientDID(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:issuer/app.certified.badge.award/award-alice",
+			CID:        "bafyawardalice",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"at://did:plc:issuer/app.certified.badge.definition/1","cid":"bafybadge"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:alice"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:issuer/app.certified.badge.award/award-bob",
+			CID:        "bafyawardbob",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"at://did:plc:issuer/app.certified.badge.definition/1","cid":"bafybadge"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bob"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+	})
+
+	query := `{
+		appCertifiedBadgeAward(
+			first: 10
+			where: { subject: { did: { eq: "did:plc:alice" } } }
+		) {
+			totalCount
+			edges { node { uri } }
+		}
+	}`
+
+	conn := executeConnectionQuery(ctx, t, schema, query, "appCertifiedBadgeAward")
+	assertConnectionURIs(t, conn, []string{"at://did:plc:issuer/app.certified.badge.award/award-alice"})
+	if got := conn["totalCount"]; got != 1 {
+		t.Fatalf("totalCount = %v, want 1", got)
+	}
+}
+
+func TestCollectionResolver_BadgeAwardBadgeTypeFilterFindsReferencedDefinitionType(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement"
+	const otherBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/other"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        endorsementBadgeURI,
+			CID:        "bafybadgeendorsement",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.definition",
+			JSON:       `{"title":"Endorsement","badgeType":"endorsement","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        otherBadgeURI,
+			CID:        "bafybadgeother",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.definition",
+			JSON:       `{"title":"Other","badgeType":"credential","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:issuer/app.certified.badge.award/award-endorsement",
+			CID:        "bafyawardendorsement",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"bafybadgeendorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:alice"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:issuer/app.certified.badge.award/award-other",
+			CID:        "bafyawardother",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + otherBadgeURI + `","cid":"bafybadgeother"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bob"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:issuer/app.certified.badge.award/award-missing-definition",
+			CID:        "bafyawardmissing",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"at://did:plc:issuer/app.certified.badge.definition/missing","cid":"bafymissing"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:carol"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+	})
+
+	query := `{
+		appCertifiedBadgeAward(
+			first: 10
+			where: { badgeType: { eq: "endorsement" } }
+		) {
+			totalCount
+			edges { node { uri } }
+		}
+	}`
+
+	conn := executeConnectionQuery(ctx, t, schema, query, "appCertifiedBadgeAward")
+	assertConnectionURIs(t, conn, []string{"at://did:plc:issuer/app.certified.badge.award/award-endorsement"})
+	if got := conn["totalCount"]; got != 1 {
+		t.Fatalf("totalCount = %v, want 1", got)
+	}
+}
+
+func TestEndorsementClosureWhereInputUsesExactDIDFilter(t *testing.T) {
+	fields := endorsementClosureWhereInput.Fields()
+	didField, ok := fields["did"]
+	if !ok {
+		t.Fatal("EndorsementClosureWhereInput missing did field")
+	}
+	if got := didField.Type.String(); got != "EndorsementClosureDIDFilterInput!" {
+		t.Fatalf("EndorsementClosureWhereInput.did type = %q, want EndorsementClosureDIDFilterInput!", got)
+	}
+
+	didFilterFields := endorsementClosureDIDFilterInput.Fields()
+	if _, ok := didFilterFields["eq"]; !ok {
+		t.Fatal("EndorsementClosureDIDFilterInput missing eq field")
+	}
+	if _, ok := didFilterFields["in"]; ok {
+		t.Fatal("EndorsementClosureDIDFilterInput exposes unsupported in field")
+	}
+
+	builder := buildAllTestdataBuilder(t)
+	if _, err := builder.Build(); err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+	accountFields := builder.endorsementAccountType.Fields()
+	if _, ok := accountFields["certifiedProfileData"]; !ok {
+		t.Fatal("EndorsementAccount missing certifiedProfileData field")
+	}
+	if _, ok := accountFields["viaAccounts"]; !ok {
+		t.Fatal("EndorsementAccount missing viaAccounts field")
+	}
+	if _, ok := accountFields["via"]; ok {
+		t.Fatal("EndorsementAccount exposes removed via field")
+	}
+	viaFields := builder.endorsementViaAccountType.Fields()
+	if _, ok := viaFields["certifiedProfileData"]; !ok {
+		t.Fatal("EndorsementViaAccount missing certifiedProfileData field")
+	}
+}
+
+func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:alice/app.certified.actor.profile/self",
+			CID:        "cid-profile-alice",
+			DID:        "did:plc:alice",
+			Collection: "app.certified.actor.profile",
+			JSON:       `{"displayName":"Alice Profile","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:carol/app.certified.actor.profile/self",
+			CID:        "cid-profile-carol",
+			DID:        "did:plc:carol",
+			Collection: "app.certified.actor.profile",
+			JSON:       `{"displayName":"Carol Profile","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        endorsementBadgeURI,
+			CID:        "cid-endorsement",
+			DID:        "did:plc:issuer",
+			Collection: "app.certified.badge.definition",
+			JSON:       `{"title":"Endorsement","badgeType":"endorsement","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:viewer/app.certified.badge.award/alice",
+			CID:        "cid-award-alice",
+			DID:        "did:plc:viewer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"cid-endorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:alice"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:viewer/app.certified.badge.award/bob",
+			CID:        "cid-award-bob",
+			DID:        "did:plc:viewer",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"cid-endorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bob"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:alice/app.certified.badge.award/carol",
+			CID:        "cid-award-carol",
+			DID:        "did:plc:alice",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"cid-endorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:carol"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:bob/app.certified.badge.award/carol",
+			CID:        "cid-award-carol-bob",
+			DID:        "did:plc:bob",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"cid-endorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:carol"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:carol/app.certified.badge.award/dana",
+			CID:        "cid-award-dana",
+			DID:        "did:plc:carol",
+			Collection: "app.certified.badge.award",
+			JSON:       `{"badge":{"uri":"` + endorsementBadgeURI + `","cid":"cid-endorsement"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:dana"},"createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+	})
+
+	result := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `{
+			endorsementClosure(
+				where: { did: { eq: "did:plc:viewer" } }
+				first: 10
+			) {
+				truncated
+				totalCount
+				pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+				edges {
+					cursor
+					node {
+						did
+						degree
+						certifiedProfileData { displayName }
+						viaAccounts { did certifiedProfileData { displayName } }
+					}
+				}
+			}
+		}`,
+		Context: ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	closure := data["endorsementClosure"].(map[string]interface{})
+	if closure["truncated"] != false {
+		t.Fatalf("truncated = %v, want false", closure["truncated"])
+	}
+
+	if closure["totalCount"] != 4 {
+		t.Fatalf("totalCount = %v, want 4", closure["totalCount"])
+	}
+	pageInfo := closure["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false || pageInfo["hasPreviousPage"] != false {
+		t.Fatalf("pageInfo = %#v, want no previous or next page", pageInfo)
+	}
+	if pageInfo["startCursor"] == nil || pageInfo["endCursor"] == nil {
+		t.Fatalf("pageInfo cursors = %#v, want start and end cursors", pageInfo)
+	}
+
+	edges := closure["edges"].([]interface{})
+	got := make([]map[string]interface{}, 0, len(edges))
+	for _, edge := range edges {
+		edgeMap := edge.(map[string]interface{})
+		if edgeMap["cursor"] == "" {
+			t.Fatal("edge cursor is empty")
+		}
+		got = append(got, edgeMap["node"].(map[string]interface{}))
+	}
+
+	want := []map[string]interface{}{
+		{"did": "did:plc:alice", "degree": 1, "certifiedProfileData": map[string]interface{}{"displayName": "Alice Profile"}, "viaAccounts": []interface{}{}},
+		{"did": "did:plc:bob", "degree": 1, "certifiedProfileData": nil, "viaAccounts": []interface{}{}},
+		{"did": "did:plc:carol", "degree": 2, "certifiedProfileData": map[string]interface{}{"displayName": "Carol Profile"}, "viaAccounts": []interface{}{map[string]interface{}{"did": "did:plc:alice", "certifiedProfileData": map[string]interface{}{"displayName": "Alice Profile"}}, map[string]interface{}{"did": "did:plc:bob", "certifiedProfileData": nil}}},
+		{"did": "did:plc:dana", "degree": 3, "certifiedProfileData": nil, "viaAccounts": []interface{}{map[string]interface{}{"did": "did:plc:carol", "certifiedProfileData": map[string]interface{}{"displayName": "Carol Profile"}}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("accounts = %#v, want %#v", got, want)
+	}
+}
+
+func TestEndorsementClosureResolverPaginatesAndFiltersDegrees(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement-pagination"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{URI: endorsementBadgeURI, CID: "cid-endorsement", DID: "did:plc:issuer", Collection: "app.certified.badge.definition", JSON: `{"title":"Endorsement","badgeType":"endorsement","createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:viewer/app.certified.badge.award/alice-pagination", CID: "cid-award-alice", DID: "did:plc:viewer", Collection: "app.certified.badge.award", JSON: `{"badge":{"uri":"` + endorsementBadgeURI + `"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:alice"},"createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:viewer/app.certified.badge.award/bob-pagination", CID: "cid-award-bob", DID: "did:plc:viewer", Collection: "app.certified.badge.award", JSON: `{"badge":{"uri":"` + endorsementBadgeURI + `"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bob"},"createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:alice/app.certified.badge.award/carol-pagination", CID: "cid-award-carol", DID: "did:plc:alice", Collection: "app.certified.badge.award", JSON: `{"badge":{"uri":"` + endorsementBadgeURI + `"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:carol"},"createdAt":"2026-01-01T00:00:00Z"}`},
+	})
+
+	result := graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `{
+			endorsementClosure(
+				where: { did: { eq: "did:plc:viewer" }, degree: { eq: 1 } }
+				first: 1
+			) {
+				totalCount
+				edges { cursor node { did degree } }
+				pageInfo { hasNextPage hasPreviousPage endCursor }
+			}
+		}`,
+		Context: ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected GraphQL errors: %v", result.Errors)
+	}
+	closure := result.Data.(map[string]interface{})["endorsementClosure"].(map[string]interface{})
+	if closure["totalCount"] != 2 {
+		t.Fatalf("totalCount = %v, want 2", closure["totalCount"])
+	}
+	edges := closure["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("len(edges) = %d, want 1", len(edges))
+	}
+	firstNode := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if firstNode["did"] != "did:plc:alice" || firstNode["degree"] != 1 {
+		t.Fatalf("first node = %#v, want alice degree 1", firstNode)
+	}
+	pageInfo := closure["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != true || pageInfo["hasPreviousPage"] != false {
+		t.Fatalf("pageInfo = %#v, want next page only", pageInfo)
+	}
+	after := pageInfo["endCursor"].(string)
+
+	result = graphql.Do(graphql.Params{
+		Schema: *schema,
+		RequestString: `query($after: String!) {
+			endorsementClosure(
+				where: { did: { eq: "did:plc:viewer" }, degree: { eq: 1 } }
+				first: 1
+				after: $after
+			) {
+				edges { node { did degree } }
+				pageInfo { hasNextPage hasPreviousPage }
+			}
+		}`,
+		VariableValues: map[string]interface{}{"after": after},
+		Context:        ctx,
+	})
+	if len(result.Errors) > 0 {
+		t.Fatalf("unexpected second-page GraphQL errors: %v", result.Errors)
+	}
+	closure = result.Data.(map[string]interface{})["endorsementClosure"].(map[string]interface{})
+	edges = closure["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("second page len(edges) = %d, want 1", len(edges))
+	}
+	secondNode := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if secondNode["did"] != "did:plc:bob" || secondNode["degree"] != 1 {
+		t.Fatalf("second node = %#v, want bob degree 1", secondNode)
+	}
+	pageInfo = closure["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false || pageInfo["hasPreviousPage"] != true {
+		t.Fatalf("second pageInfo = %#v, want previous page only", pageInfo)
+	}
+}
+
+func TestEndorsementClosureResolverRejectsInvalidArgs(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	ctx := setupSchemaRecordsTestDB(t, nil)
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ endorsementClosure(where: { did: { eq: "not-a-did" } }) { truncated } }`,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL error for invalid root DID")
+	}
+	if !strings.Contains(result.Errors[0].Message, "not a valid DID") {
+		t.Fatalf("error = %q, want invalid DID message", result.Errors[0].Message)
+	}
+
+	result = graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ endorsementClosure(where: { did: { in: ["did:plc:viewer"] } }) { truncated } }`,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL validation error for unsupported where.did.in")
+	}
+	if !strings.Contains(result.Errors[0].Message, "Unknown field") {
+		t.Fatalf("error = %q, want GraphQL unknown-field validation", result.Errors[0].Message)
+	}
+
+	result = graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ endorsementClosure(where: { did: { eq: "did:plc:viewer" }, degree: { eq: 4 } }) { truncated } }`,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL error for invalid degree")
+	}
+	if !strings.Contains(result.Errors[0].Message, "where.degree.eq must be between") {
+		t.Fatalf("error = %q, want invalid degree message", result.Errors[0].Message)
+	}
+
+	result = graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ endorsementClosure(where: { did: { eq: "did:plc:viewer" }, degree: { lte: 3 } }) { truncated } }`,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL error for unsupported degree operator")
+	}
+}
+
+func TestCollectionResolver_NestedArrayFilterFindsCollectionContainingItemURI(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const activityURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:alice/org.hypercerts.collection/contains-activity",
+			CID:        "bafycollection1",
+			DID:        "did:plc:alice",
+			Collection: "org.hypercerts.collection",
+			JSON:       `{"title":"Project","createdAt":"2026-01-01T00:00:00Z","items":[{"itemIdentifier":{"uri":"` + activityURI + `","cid":"bafyactivity"},"itemWeight":"1"}]}`,
+		},
+		{
+			URI:        "at://did:plc:alice/org.hypercerts.collection/other",
+			CID:        "bafycollection2",
+			DID:        "did:plc:alice",
+			Collection: "org.hypercerts.collection",
+			JSON:       `{"title":"Other","createdAt":"2026-01-01T00:00:00Z","items":[{"itemIdentifier":{"uri":"at://did:plc:maker/org.hypercerts.claim.activity/other","cid":"bafyother"}}]}`,
+		},
+	})
+
+	query := `{
+		orgHypercertsCollection(
+			first: 10
+			where: { items: { any: { itemIdentifier: { uri: { eq: "` + activityURI + `" } } } } }
+		) {
+			totalCount
+			edges { node { uri } }
+		}
+	}`
+
+	conn := executeConnectionQuery(ctx, t, schema, query, "orgHypercertsCollection")
+	assertConnectionURIs(t, conn, []string{"at://did:plc:alice/org.hypercerts.collection/contains-activity"})
+	if got := conn["totalCount"]; got != 1 {
+		t.Fatalf("totalCount = %v, want 1", got)
+	}
+}
+
+func TestCollectionResolver_NestedArrayAnyFilterKeepsPredicatesOnSameElement(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const targetURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
+	const targetCID = "bafyactivity"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:alice/org.hypercerts.collection/exact-activity",
+			CID:        "bafycollection1",
+			DID:        "did:plc:alice",
+			Collection: "org.hypercerts.collection",
+			JSON:       `{"title":"Exact","createdAt":"2026-01-01T00:00:00Z","items":[{"itemIdentifier":{"uri":"` + targetURI + `","cid":"` + targetCID + `"},"itemWeight":"1"}]}`,
+		},
+		{
+			URI:        "at://did:plc:alice/org.hypercerts.collection/split-activity",
+			CID:        "bafycollection2",
+			DID:        "did:plc:alice",
+			Collection: "org.hypercerts.collection",
+			JSON:       `{"title":"Split","createdAt":"2026-01-01T00:00:00Z","items":[{"itemIdentifier":{"uri":"` + targetURI + `","cid":"wrong-cid"}},{"itemIdentifier":{"uri":"at://did:plc:maker/org.hypercerts.claim.activity/other","cid":"` + targetCID + `"}}]}`,
+		},
+	})
+
+	query := `{
+		orgHypercertsCollection(
+			first: 10
+			where: { items: { any: { itemIdentifier: { uri: { eq: "` + targetURI + `" }, cid: { eq: "` + targetCID + `" } } } } }
+		) {
+			totalCount
+			edges { node { uri } }
+		}
+	}`
+
+	conn := executeConnectionQuery(ctx, t, schema, query, "orgHypercertsCollection")
+	assertConnectionURIs(t, conn, []string{"at://did:plc:alice/org.hypercerts.collection/exact-activity"})
+	if got := conn["totalCount"]; got != 1 {
+		t.Fatalf("totalCount = %v, want 1", got)
+	}
+}
+
+func TestCollectionResolver_ContributorDidCompatibilityFilter(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	const contributorURI = "at://did:plc:contributor/org.hypercerts.claim.contributorInformation/info-1"
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        contributorURI,
+			CID:        "bafycontributorinfo",
+			DID:        "did:plc:contributor",
+			Collection: "org.hypercerts.claim.contributorInformation",
+			JSON:       `{"identifier":"did:plc:alice","displayName":"Alice","createdAt":"2026-01-01T00:00:00Z"}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/inline",
+			CID:        "bafyactivityinline",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Inline","shortDescription":"Inline contributor","createdAt":"2026-01-01T00:00:00Z","contributors":[{"contributorIdentity":{"identity":"did:plc:alice"}}]}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/strongref",
+			CID:        "bafyactivityref",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"StrongRef","shortDescription":"Strong ref contributor","createdAt":"2026-01-01T00:00:00Z","contributors":[{"contributorIdentity":{"uri":"` + contributorURI + `","cid":"bafycontributorinfo"}}]}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/direct",
+			CID:        "bafyactivitydirect",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Direct","shortDescription":"Direct contributor identity","createdAt":"2026-01-01T00:00:00Z","contributors":[{"identity":"did:plc:alice"}]}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/bare",
+			CID:        "bafyactivitybare",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Bare","shortDescription":"Bare contributor","createdAt":"2026-01-01T00:00:00Z","contributors":["did:plc:alice"]}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/bob",
+			CID:        "bafyactivitybob",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Bob","shortDescription":"Other contributor","createdAt":"2026-01-01T00:00:00Z","contributors":[{"contributorIdentity":{"identity":"did:plc:bob"}}]}`,
+		},
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/bare-bob",
+			CID:        "bafyactivitybarebob",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Bare Bob","shortDescription":"Other bare contributor","createdAt":"2026-01-01T00:00:00Z","contributors":["did:plc:bob"]}`,
+		},
+	})
+
+	query := `{
+		orgHypercertsClaimActivity(
+			first: 10
+			where: { contributorDid: { eq: "did:plc:alice" } }
+		) {
+			totalCount
+			edges { node { uri } }
+		}
+	}`
+
+	conn := executeConnectionQuery(ctx, t, schema, query, "orgHypercertsClaimActivity")
+	assertConnectionURIs(t, conn, []string{
+		"at://did:plc:author/org.hypercerts.claim.activity/inline",
+		"at://did:plc:author/org.hypercerts.claim.activity/strongref",
+		"at://did:plc:author/org.hypercerts.claim.activity/direct",
+		"at://did:plc:author/org.hypercerts.claim.activity/bare",
+	})
+	if got := conn["totalCount"]; got != 4 {
+		t.Fatalf("totalCount = %v, want 4", got)
+	}
+}
+
+func TestCollectionResolver_NestedFiltersRejectSubstringOperators(t *testing.T) {
+	schema := buildAllTestdataSchema(t)
+	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
+		{
+			URI:        "at://did:plc:author/org.hypercerts.claim.activity/inline",
+			CID:        "bafyactivityinline",
+			DID:        "did:plc:author",
+			Collection: "org.hypercerts.claim.activity",
+			JSON:       `{"title":"Inline","shortDescription":"Inline contributor","createdAt":"2026-01-01T00:00:00Z","contributors":[{"contributorIdentity":{"identity":"did:plc:alice"}}]}`,
+		},
+	})
+
+	query := `{
+		orgHypercertsClaimActivity(
+			first: 10
+			where: { contributors: { any: { contributorIdentity: { identity: { contains: "did:plc" } } } } }
+		) {
+			edges { node { uri } }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: query,
+		Context:       ctx,
+	})
+	if len(result.Errors) == 0 {
+		t.Fatal("expected GraphQL validation error for unsupported nested contains filter")
+	}
+	if !strings.Contains(result.Errors[0].Message, "Unknown field") {
+		t.Fatalf("error = %q, want unknown field validation", result.Errors[0].Message)
+	}
 }
 
 // TestCoerceRequiredFields_MissingFields verifies that required string fields that are
@@ -1567,6 +2886,187 @@ func TestExternalLabelsGraphQLRootAndRecordHydration(t *testing.T) {
 	}
 }
 
+func TestExternalLabelsGraphQLHydratesLargePages(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx, wantLabelsByURI := setupExternalLabelsLargePageGraphQLTestDB(t)
+
+	query := `{
+		comExampleLabelRecord(first: 1000) {
+			edges {
+				node {
+					uri
+					externalLabels { val }
+				}
+			}
+			pageInfo { hasNextPage }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	conn := data["comExampleLabelRecord"].(map[string]interface{})
+	edges := conn["edges"].([]interface{})
+	if len(edges) != 1000 {
+		t.Fatalf("edges length = %d, want 1000", len(edges))
+	}
+	pageInfo := conn["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false {
+		t.Fatalf("hasNextPage = %v, want false", pageInfo["hasNextPage"])
+	}
+
+	gotLabelsByURI := make(map[string]string)
+	for _, edge := range edges {
+		node := edge.(map[string]interface{})["node"].(map[string]interface{})
+		labels := node["externalLabels"].([]interface{})
+		if len(labels) == 0 {
+			continue
+		}
+		if len(labels) > 1 {
+			t.Fatalf("externalLabels for %s length = %d, want at most 1", node["uri"], len(labels))
+		}
+		gotLabelsByURI[node["uri"].(string)] = labels[0].(map[string]interface{})["val"].(string)
+	}
+
+	if len(gotLabelsByURI) != len(wantLabelsByURI) {
+		t.Fatalf("labeled URI count = %d, want %d; got labels %v", len(gotLabelsByURI), len(wantLabelsByURI), gotLabelsByURI)
+	}
+	for uri, wantVal := range wantLabelsByURI {
+		if gotLabelsByURI[uri] != wantVal {
+			t.Fatalf("label for %s = %q, want %q; got labels %v", uri, gotLabelsByURI[uri], wantVal, gotLabelsByURI)
+		}
+	}
+}
+
+func TestExternalLabelsGraphQLHydratesHistoryOnly(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx := setupExternalLabelsGraphQLTestDB(t)
+
+	query := `{
+		comExampleLabelRecord(first: 1) {
+			edges {
+				node {
+					history: externalLabels(activeOnly: false, values: ["draft"]) { val neg }
+				}
+			}
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	node := firstConnectionNode(t, data["comExampleLabelRecord"], "comExampleLabelRecord")
+	historyLabels := node["history"].([]interface{})
+	if len(historyLabels) != 2 {
+		t.Fatalf("history length = %d, want 2: %v", len(historyLabels), historyLabels)
+	}
+	if got := historyLabels[0].(map[string]interface{})["neg"]; got != true {
+		t.Fatalf("history[0].neg = %v, want latest negation first", got)
+	}
+	if got := historyLabels[1].(map[string]interface{})["neg"]; got != false {
+		t.Fatalf("history[1].neg = %v, want older positive second", got)
+	}
+}
+
+func TestExternalLabelHydrationRequirementsForSelection(t *testing.T) {
+	tests := []struct {
+		name      string
+		query     string
+		variables map[string]interface{}
+		want      externalLabelHydrationRequirements
+	}{
+		{
+			name:  "default active labels",
+			query: `{ records(collection: "x", first: 1) { edges { node { externalLabels { val } } } } }`,
+			want:  externalLabelHydrationRequirements{active: true},
+		},
+		{
+			name:  "history labels",
+			query: `{ records(collection: "x", first: 1) { edges { node { externalLabels(activeOnly: false) { val } } } } }`,
+			want:  externalLabelHydrationRequirements{history: true},
+		},
+		{
+			name:  "active and history aliases",
+			query: `{ records(collection: "x", first: 1) { edges { node { active: externalLabels { val } history: externalLabels(activeOnly: false) { val } } } } }`,
+			want:  externalLabelHydrationRequirements{active: true, history: true},
+		},
+		{
+			name:      "activeOnly variable false",
+			query:     `query Labels($activeOnly: Boolean) { records(collection: "x", first: 1) { edges { node { externalLabels(activeOnly: $activeOnly) { val } } } } }`,
+			variables: map[string]interface{}{"activeOnly": false},
+			want:      externalLabelHydrationRequirements{history: true},
+		},
+		{
+			name:      "unknown variable hydrates both to preserve correctness",
+			query:     `query Labels($activeOnly: Boolean) { records(collection: "x", first: 1) { edges { node { externalLabels(activeOnly: $activeOnly) { val } } } } }`,
+			variables: map[string]interface{}{},
+			want:      externalLabelHydrationRequirements{active: true, history: true},
+		},
+		{
+			name: "fragment selection",
+			query: `{
+				records(collection: "x", first: 1) {
+					edges { node { ...RecordLabels } }
+				}
+			}
+			fragment RecordLabels on GenericRecord {
+				externalLabels(activeOnly: false) { val }
+			}`,
+			want: externalLabelHydrationRequirements{history: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := resolveParamsForQueryField(t, tt.query, tt.variables)
+			got := externalLabelHydrationRequirementsForPath(params, "edges", "node", "externalLabels")
+			if got != tt.want {
+				t.Fatalf("requirements = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func resolveParamsForQueryField(t testing.TB, query string, variables map[string]interface{}) graphql.ResolveParams {
+	t.Helper()
+
+	document, err := parser.Parse(parser.ParseParams{Source: query})
+	if err != nil {
+		t.Fatalf("parse query: %v", err)
+	}
+
+	fragments := make(map[string]ast.Definition)
+	var fieldASTs []*ast.Field
+	for _, definition := range document.Definitions {
+		switch typedDefinition := definition.(type) {
+		case *ast.OperationDefinition:
+			for _, selection := range typedDefinition.SelectionSet.Selections {
+				field, ok := selection.(*ast.Field)
+				if ok {
+					fieldASTs = append(fieldASTs, field)
+				}
+			}
+		case *ast.FragmentDefinition:
+			fragments[typedDefinition.Name.Value] = typedDefinition
+		}
+	}
+	if len(fieldASTs) == 0 {
+		t.Fatal("parsed query has no root field selections")
+	}
+
+	return graphql.ResolveParams{Info: graphql.ResolveInfo{
+		FieldASTs:      fieldASTs,
+		Fragments:      fragments,
+		VariableValues: variables,
+	}}
+}
+
 func TestExternalLabelsGraphQLByURIHydration(t *testing.T) {
 	schema := buildExternalLabelsTestSchema(t)
 	ctx := setupExternalLabelsGraphQLTestDB(t)
@@ -1595,6 +3095,220 @@ func TestExternalLabelsGraphQLByURIHydration(t *testing.T) {
 	}
 }
 
+func TestCertifiedProfileDataGraphQLHydration(t *testing.T) {
+	schema := buildCertifiedProfileTestSchema(t)
+	ctx := setupCertifiedProfileGraphQLTestDB(t)
+
+	query := `{
+		comExampleCertifiedConsumer(first: 10) {
+			edges {
+				node {
+					did
+					certifiedProfileData {
+						uri
+						cid
+						did
+						rkey
+						displayName
+						description
+						externalLabels(values: ["test-account"]) { src val neg }
+					}
+				}
+			}
+		}
+		records(collection: "com.example.certified.consumer", first: 10) {
+			edges {
+				node {
+					did
+					certifiedProfileData {
+						displayName
+						externalLabels(values: ["test-account"]) { val }
+					}
+				}
+			}
+		}
+		comExampleCertifiedConsumerByUri(uri: "at://did:plc:author/com.example.certified.consumer/rkey1") {
+			did
+			certifiedProfileData { displayName externalLabels(values: ["test-account"]) { val } }
+		}
+		search(query: "hello", collection: "com.example.certified.consumer", first: 10) {
+			edges {
+				node {
+					did
+					certifiedProfileData {
+						displayName
+						externalLabels(values: ["test-account"]) { val }
+					}
+				}
+			}
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data, ok := result.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("result.Data is %T, want map[string]interface{}", result.Data)
+	}
+
+	typedNode := firstConnectionNode(t, data["comExampleCertifiedConsumer"], "comExampleCertifiedConsumer")
+	assertCertifiedProfileData(t, typedNode, "typed collection")
+
+	genericNode := firstConnectionNode(t, data["records"], "records")
+	assertCertifiedProfileData(t, genericNode, "generic records")
+
+	byURI, ok := data["comExampleCertifiedConsumerByUri"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("ByUri result is %T, want map[string]interface{}", data["comExampleCertifiedConsumerByUri"])
+	}
+	assertCertifiedProfileData(t, byURI, "ByUri")
+
+	searchNode := firstConnectionNode(t, data["search"], "search")
+	assertCertifiedProfileData(t, searchNode, "search")
+}
+
+func TestCertifiedProfileDataMissingProfileReturnsNull(t *testing.T) {
+	schema := buildCertifiedProfileTestSchema(t)
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	_, err := db.Records.Insert(ctx,
+		"at://did:plc:missing/com.example.certified.consumer/rkey1",
+		"cid-consumer-missing",
+		"did:plc:missing",
+		"com.example.certified.consumer",
+		`{"text":"hello missing"}`,
+	)
+	if err != nil {
+		t.Fatalf("insert record: %v", err)
+	}
+	repos := &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels}
+	ctx = resolver.WithRepositories(ctx, repos)
+
+	query := `{
+		comExampleCertifiedConsumer(first: 10) {
+			edges { node { certifiedProfileData { displayName } } }
+		}
+	}`
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	node := firstConnectionNode(t, data["comExampleCertifiedConsumer"], "comExampleCertifiedConsumer")
+	if got := node["certifiedProfileData"]; got != nil {
+		t.Fatalf("certifiedProfileData = %#v, want nil", got)
+	}
+}
+
+func buildCertifiedProfileTestSchema(t *testing.T) *graphql.Schema {
+	t.Helper()
+
+	registry := lexicon.NewRegistry()
+	registerCertifiedProfileTestLexicon(registry)
+	registry.Register(&lexicon.Lexicon{
+		ID: "com.example.certified.consumer",
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "text", Property: lexicon.Property{Type: lexicon.TypeString}},
+				},
+			},
+		},
+	})
+
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("buildCertifiedProfileTestSchema: failed to build schema: %v", err)
+	}
+	return schema
+}
+
+func registerCertifiedProfileTestLexicon(registry *lexicon.Registry) {
+	registry.Register(&lexicon.Lexicon{
+		ID: "app.certified.actor.profile",
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "literal:self",
+				Properties: []lexicon.PropertyEntry{
+					{Name: "displayName", Property: lexicon.Property{Type: lexicon.TypeString}},
+					{Name: "description", Property: lexicon.Property{Type: lexicon.TypeString}},
+					{Name: "createdAt", Property: lexicon.Property{Type: lexicon.TypeString, Format: "datetime", Required: true}},
+				},
+			},
+		},
+	})
+}
+
+func setupCertifiedProfileGraphQLTestDB(t *testing.T) context.Context {
+	t.Helper()
+
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+
+	consumerURI := "at://did:plc:author/com.example.certified.consumer/rkey1"
+	profileURI := "at://did:plc:author/app.certified.actor.profile/self"
+	profileCID := "cid-profile"
+	if err := db.Records.BatchInsert(ctx, []*repositories.Record{
+		{
+			URI:        consumerURI,
+			CID:        "cid-consumer",
+			DID:        "did:plc:author",
+			Collection: "com.example.certified.consumer",
+			JSON:       `{"text":"hello from author"}`,
+			RKey:       "rkey1",
+		},
+		{
+			URI:        profileURI,
+			CID:        profileCID,
+			DID:        "did:plc:author",
+			Collection: "app.certified.actor.profile",
+			JSON:       `{"displayName":"Certified Author","description":"Profile record","createdAt":"2025-01-02T03:04:05Z"}`,
+			RKey:       "self",
+		},
+	}); err != nil {
+		t.Fatalf("setupCertifiedProfileGraphQLTestDB: insert records: %v", err)
+	}
+
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := db.ExternalLabels.PersistEvent(ctx, url, 1, []repositories.ExternalLabelInput{
+		{LabelIndex: 0, Src: "did:plc:labeler", URI: profileURI, CID: &profileCID, Val: "test-account", Cts: "2025-01-02T03:05:05Z", RawJSON: `{}`},
+	}); err != nil {
+		t.Fatalf("setupCertifiedProfileGraphQLTestDB: persist profile label: %v", err)
+	}
+
+	repos := &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels}
+	return resolver.WithRepositories(ctx, repos)
+}
+
+func assertCertifiedProfileData(t *testing.T, record map[string]interface{}, path string) {
+	t.Helper()
+
+	profile, ok := record["certifiedProfileData"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s certifiedProfileData is %T, want map[string]interface{}", path, record["certifiedProfileData"])
+	}
+	if got := profile["displayName"]; got != "Certified Author" {
+		t.Fatalf("%s profile displayName = %v, want Certified Author", path, got)
+	}
+	labels, ok := profile["externalLabels"].([]interface{})
+	if !ok || len(labels) != 1 {
+		t.Fatalf("%s profile externalLabels = %#v, want one label", path, profile["externalLabels"])
+	}
+	label, ok := labels[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s profile label is %T, want map[string]interface{}", path, labels[0])
+	}
+	if got := label["val"]; got != "test-account" {
+		t.Fatalf("%s profile label val = %v, want test-account", path, got)
+	}
+}
+
 func buildExternalLabelsTestSchema(t *testing.T) *graphql.Schema {
 	t.Helper()
 
@@ -1617,6 +3331,63 @@ func buildExternalLabelsTestSchema(t *testing.T) *graphql.Schema {
 		t.Fatalf("buildExternalLabelsTestSchema: failed to build schema: %v", err)
 	}
 	return schema
+}
+
+func setupExternalLabelsLargePageGraphQLTestDB(t *testing.T) (context.Context, map[string]string) {
+	t.Helper()
+
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	records := db.Records
+	externalLabels := db.ExternalLabels
+
+	const recordCount = 1000
+	allRecords := make([]*repositories.Record, 0, recordCount)
+	labelInputs := []repositories.ExternalLabelInput{}
+	wantLabelsByURI := make(map[string]string)
+	labeledIndexes := map[int]string{
+		0:   "first-record",
+		250: "second-batch-record",
+		999: "last-record",
+	}
+
+	for i := range recordCount {
+		rkey := fmt.Sprintf("rkey%04d", i)
+		uri := "at://did:plc:test/com.example.label.record/" + rkey
+		cid := fmt.Sprintf("bafyrecord%04d", i)
+		allRecords = append(allRecords, &repositories.Record{
+			URI:        uri,
+			CID:        cid,
+			DID:        "did:plc:test",
+			Collection: "com.example.label.record",
+			JSON:       fmt.Sprintf(`{"text":"hello %04d"}`, i),
+			RKey:       rkey,
+		})
+		if val, ok := labeledIndexes[i]; ok {
+			wantLabelsByURI[uri] = val
+			labelInputs = append(labelInputs, repositories.ExternalLabelInput{
+				LabelIndex: int64(len(labelInputs)),
+				Src:        "did:plc:labeler",
+				URI:        uri,
+				CID:        stringPtr(cid),
+				Val:        val,
+				Cts:        fmt.Sprintf("2025-01-02T03:04:%02dZ", len(labelInputs)),
+				RawJSON:    `{}`,
+			})
+		}
+	}
+
+	if err := records.BatchInsert(ctx, allRecords); err != nil {
+		t.Fatalf("setupExternalLabelsLargePageGraphQLTestDB: failed to insert records: %v", err)
+	}
+
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := externalLabels.PersistEvent(ctx, url, 1, labelInputs); err != nil {
+		t.Fatalf("setupExternalLabelsLargePageGraphQLTestDB: failed to persist labels: %v", err)
+	}
+
+	repos := &resolver.Repositories{Records: records, ExternalLabels: externalLabels}
+	return resolver.WithRepositories(ctx, repos), wantLabelsByURI
 }
 
 func setupExternalLabelsGraphQLTestDB(t *testing.T) context.Context {
@@ -1784,6 +3555,182 @@ func TestExternalLabelsGraphQLWhereNoneAndSourceFilter(t *testing.T) {
 	}
 }
 
+func TestAuthorLabelsGraphQLWhereFilterPaginationAndCount(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx, uris := setupAuthorLabelsWhereTestDB(t)
+
+	query := `{
+		comExampleLabelRecord(
+			first: 2
+			where: { authorLabels: { has: { val: { eq: "high-quality" } } } }
+		) {
+			totalCount
+			edges { cursor node { uri did } }
+			pageInfo { hasNextPage endCursor }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	conn := data["comExampleLabelRecord"].(map[string]interface{})
+	if conn["totalCount"] != float64(3) && conn["totalCount"] != 3 {
+		t.Fatalf("totalCount = %v, want 3", conn["totalCount"])
+	}
+	edges := conn["edges"].([]interface{})
+	if len(edges) != 2 {
+		t.Fatalf("first page edges = %d, want 2: %v", len(edges), edges)
+	}
+	firstNode := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	secondNode := edges[1].(map[string]interface{})["node"].(map[string]interface{})
+	if firstNode["uri"] != uris["five"] || secondNode["uri"] != uris["three"] {
+		t.Fatalf("first page URIs = [%v, %v], want [%s, %s]", firstNode["uri"], secondNode["uri"], uris["five"], uris["three"])
+	}
+	pageInfo := conn["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != true {
+		t.Fatalf("hasNextPage = %v, want true", pageInfo["hasNextPage"])
+	}
+	endCursor, ok := pageInfo["endCursor"].(string)
+	if !ok || endCursor == "" {
+		t.Fatalf("endCursor = %v, want non-empty string", pageInfo["endCursor"])
+	}
+
+	query = fmt.Sprintf(`{
+		comExampleLabelRecord(
+			first: 2
+			after: %q
+			where: { authorLabels: { has: { val: { eq: "high-quality" } } } }
+		) {
+			edges { node { uri } }
+			pageInfo { hasNextPage }
+		}
+	}`, endCursor)
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("second page GraphQL returned errors: %v", result.Errors)
+	}
+
+	data = result.Data.(map[string]interface{})
+	conn = data["comExampleLabelRecord"].(map[string]interface{})
+	edges = conn["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("second page edges = %d, want 1: %v", len(edges), edges)
+	}
+	node := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if node["uri"] != uris["one"] {
+		t.Fatalf("second page URI = %v, want %s", node["uri"], uris["one"])
+	}
+	pageInfo = conn["pageInfo"].(map[string]interface{})
+	if pageInfo["hasNextPage"] != false {
+		t.Fatalf("second page hasNextPage = %v, want false", pageInfo["hasNextPage"])
+	}
+}
+
+func TestAuthorLabelsGraphQLWhereNoneAndCombinedRecordFilter(t *testing.T) {
+	schema := buildExternalLabelsTestSchema(t)
+	ctx, uris := setupAuthorLabelsWhereTestDB(t)
+
+	query := `{
+		comExampleLabelRecord(
+			first: 10
+			where: { authorLabels: { none: { val: { eq: "likely-test" } } } }
+		) {
+			totalCount
+			edges { node { uri did } }
+		}
+	}`
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	conn := data["comExampleLabelRecord"].(map[string]interface{})
+	if conn["totalCount"] != float64(4) && conn["totalCount"] != 4 {
+		t.Fatalf("authorLabels none totalCount = %v, want 4", conn["totalCount"])
+	}
+	edges := conn["edges"].([]interface{})
+	if len(edges) != 4 {
+		t.Fatalf("authorLabels none edges = %d, want 4", len(edges))
+	}
+	for _, edge := range edges {
+		node := edge.(map[string]interface{})["node"].(map[string]interface{})
+		if node["uri"] == uris["four"] {
+			t.Fatalf("likely-test author URI %s should have been excluded", uris["four"])
+		}
+	}
+
+	query = `{
+		comExampleLabelRecord(
+			first: 10
+			where: {
+				externalLabels: { has: { val: { eq: "verified-impact" } } }
+				authorLabels: { none: { val: { eq: "likely-test" } } }
+			}
+		) {
+			edges { node { uri } }
+		}
+	}`
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("combined GraphQL returned errors: %v", result.Errors)
+	}
+	data = result.Data.(map[string]interface{})
+	conn = data["comExampleLabelRecord"].(map[string]interface{})
+	edges = conn["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("combined edges = %d, want 1: %v", len(edges), edges)
+	}
+	node := edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if node["uri"] != uris["one"] {
+		t.Fatalf("combined URI = %v, want %s", node["uri"], uris["one"])
+	}
+}
+
+func setupAuthorLabelsWhereTestDB(t *testing.T) (context.Context, map[string]string) {
+	t.Helper()
+
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	records := db.Records
+	externalLabels := db.ExternalLabels
+	uris := map[string]string{}
+	for i, rkey := range []string{"one", "two", "three", "four", "five"} {
+		did := "did:plc:author-" + rkey
+		uri := "at://" + did + "/com.example.label.record/" + rkey
+		uris[rkey] = uri
+		_, err := records.Insert(ctx, uri, "cid-"+rkey, did, "com.example.label.record", `{"text":"hello `+rkey+`"}`)
+		if err != nil {
+			t.Fatalf("setupAuthorLabelsWhereTestDB: insert %s: %v", rkey, err)
+		}
+		indexedAt := fmt.Sprintf("2025-01-02T03:04:%02dZ", i+1)
+		if _, err := db.Executor.DB().ExecContext(ctx, "UPDATE record SET indexed_at = ? WHERE uri = ?", indexedAt, uri); err != nil {
+			t.Fatalf("setupAuthorLabelsWhereTestDB: set indexed_at %s: %v", rkey, err)
+		}
+	}
+
+	cidSpecificAccountLabel := "account-label-cid"
+	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
+	if err := externalLabels.PersistEvent(ctx, url, 1, []repositories.ExternalLabelInput{
+		{LabelIndex: 0, Src: "did:plc:labeler", URI: "did:plc:author-one", Val: "high-quality", Cts: "2025-01-02T03:05:01Z", RawJSON: `{}`},
+		{LabelIndex: 1, Src: "did:plc:labeler", URI: "did:plc:author-three", Val: "high-quality", Cts: "2025-01-02T03:05:03Z", RawJSON: `{}`},
+		{LabelIndex: 2, Src: "did:plc:labeler", URI: "did:plc:author-four", Val: "likely-test", Cts: "2025-01-02T03:05:04Z", RawJSON: `{}`},
+		{LabelIndex: 3, Src: "did:plc:labeler", URI: "did:plc:author-five", Val: "high-quality", Cts: "2025-01-02T03:05:05Z", RawJSON: `{}`},
+		{LabelIndex: 4, Src: "did:plc:labeler", URI: uris["two"], Val: "high-quality", Cts: "2025-01-02T03:05:06Z", RawJSON: `{}`},
+		{LabelIndex: 5, Src: "did:plc:labeler", URI: uris["one"], Val: "verified-impact", Cts: "2025-01-02T03:05:07Z", RawJSON: `{}`},
+		{LabelIndex: 6, Src: "did:plc:labeler", URI: uris["four"], Val: "verified-impact", Cts: "2025-01-02T03:05:08Z", RawJSON: `{}`},
+		{LabelIndex: 7, Src: "did:plc:labeler", URI: "did:plc:author-two", CID: &cidSpecificAccountLabel, Val: "high-quality", Cts: "2025-01-02T03:05:09Z", RawJSON: `{}`},
+	}); err != nil {
+		t.Fatalf("setupAuthorLabelsWhereTestDB: persist labels: %v", err)
+	}
+
+	repos := &resolver.Repositories{Records: records, ExternalLabels: externalLabels}
+	return resolver.WithRepositories(ctx, repos), uris
+}
+
 func setupExternalLabelsWhereTestDB(t *testing.T) (context.Context, map[string]string) {
 	t.Helper()
 
@@ -1818,4 +3765,195 @@ func setupExternalLabelsWhereTestDB(t *testing.T) (context.Context, map[string]s
 
 	repos := &resolver.Repositories{Records: records, ExternalLabels: externalLabels}
 	return resolver.WithRepositories(ctx, repos), uris
+}
+
+func buildRecordTimelineTestSchema(t *testing.T) *graphql.Schema {
+	t.Helper()
+	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
+	if err != nil {
+		t.Fatalf("failed to load test lexicons: %v", err)
+	}
+	registry := lexicon.NewRegistry()
+	for _, lex := range lexicons {
+		registry.Register(lex)
+	}
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("failed to build record timeline schema: %v", err)
+	}
+	return schema
+}
+
+func setupRecordTimelineGraphQLTest(t *testing.T) (*graphql.Schema, context.Context) {
+	t.Helper()
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	records := []*repositories.Record{
+		{URI: "at://did:plc:alice/org.hypercerts.collection/alice-old", CID: "cid-alice-old", DID: "did:plc:alice", Collection: "org.hypercerts.collection", JSON: `{"title":"Alice old","createdAt":"2026-01-15T10:00:00Z"}`},
+		{URI: "at://did:plc:bob/org.hypercerts.collection/bob-new", CID: "cid-bob-new", DID: "did:plc:bob", Collection: "org.hypercerts.collection", JSON: `{"title":"Bob new","createdAt":"2026-01-15T12:00:00Z"}`},
+		{URI: "at://did:plc:alice/app.certified.actor.profile/self", CID: "cid-alice-profile", DID: "did:plc:alice", Collection: "app.certified.actor.profile", JSON: `{"displayName":"Alice Profile","createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: "at://did:plc:bob/app.certified.actor.profile/self", CID: "cid-bob-profile", DID: "did:plc:bob", Collection: "app.certified.actor.profile", JSON: `{"displayName":"Bob Profile","createdAt":"2026-01-01T00:00:00Z"}`},
+	}
+	if err := db.Records.BatchInsert(ctx, records); err != nil {
+		t.Fatalf("failed to insert timeline test records: %v", err)
+	}
+	if _, err := db.Executor.DB().ExecContext(ctx, `
+		INSERT INTO record (uri, cid, did, collection, json, record_created_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`,
+		"at://did:plc:bob/org.hypercerts.collection/bob-malformed-newest",
+		"cid-bob-malformed-newest",
+		"did:plc:bob",
+		"org.hypercerts.collection",
+		`{"createdAt":`,
+		"2026-01-15T13:00:00.000Z",
+	); err != nil {
+		t.Fatalf("failed to insert malformed timeline row: %v", err)
+	}
+	repos := &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels}
+	return buildRecordTimelineTestSchema(t), resolver.WithRepositories(ctx, repos)
+}
+
+func TestRecordTimelineGraphQL(t *testing.T) {
+	schema, ctx := setupRecordTimelineGraphQLTest(t)
+
+	query := `{
+		recordTimeline(where: { did: { in: ["did:plc:alice", "did:plc:bob"] }, collection: { in: ["org.hypercerts.collection"] } }, first: 1) {
+			edges {
+				cursor
+				node {
+					uri
+					cid
+					did
+					collection
+					rkey
+					createdAt
+					indexedAt
+					value
+					certifiedProfileData { displayName }
+				}
+			}
+			pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+		}
+	}`
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("recordTimeline query errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	conn := data["recordTimeline"].(map[string]interface{})
+	edges := conn["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("edges length = %d, want 1", len(edges))
+	}
+	edge := edges[0].(map[string]interface{})
+	node := edge["node"].(map[string]interface{})
+	if got := node["uri"]; got != "at://did:plc:bob/org.hypercerts.collection/bob-new" {
+		t.Fatalf("first timeline uri = %v, want bob newest", got)
+	}
+	if got := node["createdAt"]; got != "2026-01-15T12:00:00.000Z" {
+		t.Fatalf("createdAt = %v, want normalized timestamp", got)
+	}
+	value := node["value"].(map[string]interface{})
+	if got := value["title"]; got != "Bob new" {
+		t.Fatalf("value.title = %v, want Bob new", got)
+	}
+	profile := node["certifiedProfileData"].(map[string]interface{})
+	if got := profile["displayName"]; got != "Bob Profile" {
+		t.Fatalf("certifiedProfileData.displayName = %v, want Bob Profile", got)
+	}
+	pageInfo := conn["pageInfo"].(map[string]interface{})
+	if got := pageInfo["hasNextPage"]; got != true {
+		t.Fatalf("hasNextPage = %v, want true", got)
+	}
+	if got := pageInfo["hasPreviousPage"]; got != false {
+		t.Fatalf("hasPreviousPage = %v, want false", got)
+	}
+
+	after := edge["cursor"].(string)
+	page2Query := fmt.Sprintf(`{
+		recordTimeline(where: { did: { in: ["did:plc:alice", "did:plc:bob"] }, collection: { in: ["org.hypercerts.collection"] } }, first: 1, after: %q) {
+			edges { node { uri createdAt certifiedProfileData { displayName } } }
+			pageInfo { hasNextPage hasPreviousPage }
+		}
+	}`, after)
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: page2Query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("recordTimeline page 2 query errors: %v", result.Errors)
+	}
+	conn = result.Data.(map[string]interface{})["recordTimeline"].(map[string]interface{})
+	edges = conn["edges"].([]interface{})
+	if len(edges) != 1 {
+		t.Fatalf("page 2 edges length = %d, want 1", len(edges))
+	}
+	node = edges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if got := node["uri"]; got != "at://did:plc:alice/org.hypercerts.collection/alice-old" {
+		t.Fatalf("page 2 uri = %v, want alice older", got)
+	}
+	pageInfo = conn["pageInfo"].(map[string]interface{})
+	if got := pageInfo["hasNextPage"]; got != false {
+		t.Fatalf("page 2 hasNextPage = %v, want false", got)
+	}
+	if got := pageInfo["hasPreviousPage"]; got != true {
+		t.Fatalf("page 2 hasPreviousPage = %v, want true", got)
+	}
+}
+
+func TestRecordTimelineGraphQLValidationAndShape(t *testing.T) {
+	schema, ctx := setupRecordTimelineGraphQLTest(t)
+
+	timelineType, ok := schema.Type("RecordTimelineNode").(*graphql.Object)
+	if !ok {
+		t.Fatalf("RecordTimelineNode type is %T, want *graphql.Object", schema.Type("RecordTimelineNode"))
+	}
+	timelineFields := timelineType.Fields()
+	if _, exists := timelineFields["record"]; exists {
+		t.Fatal("RecordTimelineNode exposes record, want generic payload field named value")
+	}
+	valueField, ok := timelineFields["value"]
+	if !ok {
+		t.Fatal("RecordTimelineNode missing value field")
+	}
+	if got := valueField.Type.String(); got != "JSON!" {
+		t.Fatalf("RecordTimelineNode.value type = %q, want JSON!", got)
+	}
+	for _, name := range []string{"createdAt", "indexedAt"} {
+		if got := timelineFields[name].Type.String(); got != "DateTime!" {
+			t.Fatalf("RecordTimelineNode.%s type = %q, want DateTime!", name, got)
+		}
+	}
+
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: [] } }, first: 1) { edges { cursor } } }`, Context: ctx})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "where.collection.in must include at least one") {
+		t.Fatalf("empty collections errors = %v, want clear validation error", result.Errors)
+	}
+
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { did: { in: [] }, collection: { in: ["org.hypercerts.collection"] } }, first: 1) { edges { cursor } pageInfo { hasNextPage startCursor endCursor } } }`, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("empty authors query errors: %v", result.Errors)
+	}
+	conn := result.Data.(map[string]interface{})["recordTimeline"].(map[string]interface{})
+	if edges := conn["edges"].([]interface{}); len(edges) != 0 {
+		t.Fatalf("where.did.in: [] edges length = %d, want 0", len(edges))
+	}
+
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { did: { in: [] }, collection: { in: ["org.hypercerts.collection"] } }, first: 1, after: "not-a-cursor") { edges { cursor } } }`, Context: ctx})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "invalid recordTimeline cursor") {
+		t.Fatalf("empty where.did.in malformed cursor errors = %v, want cursor validation error", result.Errors)
+	}
+
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: ["org.hypercerts.collection"] } }, first: 1001) { edges { cursor } } }`, Context: ctx})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "first must be between 1 and 1000") {
+		t.Fatalf("invalid first errors = %v, want range error", result.Errors)
+	}
+
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: ["org.hypercerts.collection"] } }) { totalCount } }`, Context: ctx})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "totalCount") {
+		t.Fatalf("totalCount query errors = %v, want unknown field error", result.Errors)
+	}
+
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: [] } }, first: 1) { edges { cursor } } }`, Context: context.Background()})
+	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "where.collection.in must include at least one") {
+		t.Fatalf("no-repository validation errors = %v, want validation before empty connection", result.Errors)
+	}
 }

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/bluesky-social/indigo/repo"
-	"github.com/fxamacker/cbor/v2"
 	"github.com/hashicorp/go-retryablehttp"
 	"github.com/ipfs/go-cid"
 )
@@ -475,41 +475,17 @@ func (c *Client) GetRepo(ctx context.Context, pdsURL, did string, collections []
 	return records, nil
 }
 
-// CBORToJSON converts CBOR bytes to JSON string.
+// CBORToJSON converts AT Protocol DAG-CBOR record bytes to their canonical JSON shape.
 func CBORToJSON(data []byte) (string, error) {
-	// Decode CBOR to generic interface
-	var v interface{}
-	if err := cbor.Unmarshal(data, &v); err != nil {
-		return "", fmt.Errorf("failed to decode CBOR: %w", err)
+	record, err := atdata.UnmarshalCBOR(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode AT Protocol CBOR: %w", err)
 	}
 
-	// Convert to JSON
-	jsonBytes, err := json.Marshal(convertCBORTypes(v))
+	jsonBytes, err := json.Marshal(record)
 	if err != nil {
 		return "", fmt.Errorf("failed to encode JSON: %w", err)
 	}
 
 	return string(jsonBytes), nil
-}
-
-// convertCBORTypes converts CBOR-specific types to JSON-compatible types.
-func convertCBORTypes(v interface{}) interface{} {
-	switch val := v.(type) {
-	case map[interface{}]interface{}:
-		// Convert to map[string]interface{}
-		result := make(map[string]interface{})
-		for k, v := range val {
-			keyStr := fmt.Sprintf("%v", k)
-			result[keyStr] = convertCBORTypes(v)
-		}
-		return result
-	case []interface{}:
-		result := make([]interface{}, len(val))
-		for i, v := range val {
-			result[i] = convertCBORTypes(v)
-		}
-		return result
-	default:
-		return val
-	}
 }

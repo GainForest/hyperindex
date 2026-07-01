@@ -107,7 +107,7 @@ type Backfiller struct {
 	client       *Client
 	recordsRepo  *repositories.RecordsRepository
 	actorsRepo   *repositories.ActorsRepository
-	activityRepo *repositories.JetstreamActivityRepository
+	activityRepo *repositories.IndexingActivityRepository
 
 	// httpSem is a global semaphore limiting concurrent HTTP requests.
 	// This prevents overwhelming the network and running out of file descriptors.
@@ -125,7 +125,7 @@ func NewBackfiller(
 	cfg Config,
 	recordsRepo *repositories.RecordsRepository,
 	actorsRepo *repositories.ActorsRepository,
-	activityRepo *repositories.JetstreamActivityRepository,
+	activityRepo *repositories.IndexingActivityRepository,
 ) *Backfiller {
 	// Create DID resolver with custom PLC URL
 	didResolver := oauth.NewDIDResolver(

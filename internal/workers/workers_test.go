@@ -235,7 +235,7 @@ func TestActivityCleanupWorker_StartStop(t *testing.T) {
 	// we exercise only the goroutine lifecycle by cancelling the context
 	// before Start can do meaningful work.
 
-	// We cannot easily construct a JetstreamActivityRepository without
+	// We cannot easily construct an IndexingActivityRepository without
 	// a database.Executor, so we test the goroutine lifecycle by using
 	// a context that is immediately cancelled, preventing cleanup from
 	// executing against a nil repo.

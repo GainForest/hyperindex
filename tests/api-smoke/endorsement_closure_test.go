@@ -1,0 +1,370 @@
+//go:build api_smoke
+
+package apismoke
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/GainForest/hyperindex/internal/graphclosure"
+	"github.com/GainForest/hyperindex/internal/oauth"
+)
+
+const (
+	endorsementSmokeBadgeAwardCollection      = "app.certified.badge.award"
+	endorsementSmokeBadgeDefinitionCollection = "app.certified.badge.definition"
+	endorsementSmokeBadgeResponseCollection   = "app.certified.badge.response"
+	endorsementSmokeSubjectType               = "app.certified.defs#did"
+)
+
+type endorsementSmokeEdge struct {
+	Issuer  string
+	Subject string
+}
+
+type endorsementSmokeAccount struct {
+	DID    string   `json:"did"`
+	Degree int      `json:"degree"`
+	Via    []string `json:"via"`
+}
+
+type endorsementClosureResponseViaAccount struct {
+	DID string `json:"did"`
+}
+
+type endorsementClosureResponseAccount struct {
+	DID         string                                 `json:"did"`
+	Degree      int                                    `json:"degree"`
+	ViaAccounts []endorsementClosureResponseViaAccount `json:"viaAccounts"`
+}
+
+type endorsementClosureQueryResponse struct {
+	EndorsementClosure struct {
+		Truncated bool     `json:"truncated"`
+		PageInfo  pageInfo `json:"pageInfo"`
+		Edges     []struct {
+			Cursor string                            `json:"cursor"`
+			Node   endorsementClosureResponseAccount `json:"node"`
+		} `json:"edges"`
+	} `json:"endorsementClosure"`
+}
+
+func TestEndorsementClosureBehaviorSmoke(t *testing.T) {
+	config := loadSmokeConfig(t)
+	if !config.expectations.EndorsementClosure.configured() {
+		t.Skip("endorsementClosure is not configured in the smoke expectations file")
+	}
+
+	edges := fetchActiveEndorsementSmokeEdges(t, config)
+	if len(edges) < config.expectations.EndorsementClosure.MinimumActiveEdges {
+		t.Fatalf("endorsementClosure smoke found %d active account endorsement edges, want at least %d", len(edges), config.expectations.EndorsementClosure.MinimumActiveEdges)
+	}
+
+	rootDID, expectedAccounts, ok, err := selectEndorsementSmokeRoot(edges, config.expectations.EndorsementClosure.RequireIndirect)
+	if err != nil {
+		t.Fatalf("endorsementClosure smoke failed to compute expected closure: %v", err)
+	}
+	if !ok {
+		t.Fatalf("endorsementClosure smoke found %d active edges but no root DID with an indirect closure path; edges: %s", len(edges), formatEndorsementSmokeEdges(edges))
+	}
+
+	got := queryEndorsementClosure(t, config, rootDID)
+	if got.EndorsementClosure.Truncated {
+		t.Fatalf("endorsementClosure(%q) truncated = true, want false for smoke fixture", rootDID)
+	}
+	gotAccounts := got.accounts()
+	if !reflect.DeepEqual(gotAccounts, expectedAccounts) {
+		expectedJSON, _ := json.Marshal(expectedAccounts)
+		gotJSON, _ := json.Marshal(gotAccounts)
+		t.Fatalf("endorsementClosure(%q) accounts = %s, want %s", rootDID, gotJSON, expectedJSON)
+	}
+
+	smokeLog("✓ endorsementClosure returns active account endorsement closure for %s (%d accounts)", rootDID, len(expectedAccounts))
+}
+
+func fetchActiveEndorsementSmokeEdges(t testing.TB, config smokeConfig) []endorsementSmokeEdge {
+	t.Helper()
+
+	definitionRecords := fetchAllGenericRecords(t, config, endorsementSmokeBadgeDefinitionCollection)
+	awardRecords := fetchAllGenericRecords(t, config, endorsementSmokeBadgeAwardCollection)
+	responseRecords := fetchAllGenericRecords(t, config, endorsementSmokeBadgeResponseCollection)
+
+	endorsementDefinitions := make(map[string]Record, len(definitionRecords))
+	for _, edge := range definitionRecords {
+		if endorsementSmokeStringValue(edge.Node.Value, "badgeType") == "endorsement" {
+			endorsementDefinitions[edge.Node.URI] = edge.Node
+		}
+	}
+
+	rejectedAwards := make(map[string]bool, len(responseRecords))
+	for _, edge := range responseRecords {
+		if endorsementSmokeStringValue(edge.Node.Value, "response") != "rejected" {
+			continue
+		}
+		awardURI := nestedStringValue(edge.Node.Value, "badgeAward", "uri")
+		if awardURI == "" {
+			continue
+		}
+		rejectedAwards[endorsementSmokeRejectionKey(edge.Node.DID, awardURI)] = true
+	}
+
+	edgeSet := make(map[endorsementSmokeEdge]bool)
+	for _, edge := range awardRecords {
+		award := edge.Node
+		badgeURI := nestedStringValue(award.Value, "badge", "uri")
+		definition, ok := endorsementDefinitions[badgeURI]
+		if !ok || !endorsementDefinitionAllowsIssuer(definition, award.DID) {
+			continue
+		}
+
+		subjectDID, ok := endorsementAwardAccountSubjectDID(award.Value)
+		if !ok || subjectDID == award.DID {
+			continue
+		}
+		if rejectedAwards[endorsementSmokeRejectionKey(subjectDID, award.URI)] {
+			continue
+		}
+		edgeSet[endorsementSmokeEdge{Issuer: award.DID, Subject: subjectDID}] = true
+	}
+
+	edges := make([]endorsementSmokeEdge, 0, len(edgeSet))
+	for edge := range edgeSet {
+		edges = append(edges, edge)
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].Issuer != edges[j].Issuer {
+			return edges[i].Issuer < edges[j].Issuer
+		}
+		return edges[i].Subject < edges[j].Subject
+	})
+	return edges
+}
+
+func selectEndorsementSmokeRoot(edges []endorsementSmokeEdge, requireIndirect bool) (string, []endorsementSmokeAccount, bool, error) {
+	roots := make(map[string]bool)
+	for _, edge := range edges {
+		roots[edge.Issuer] = true
+	}
+
+	rootList := make([]string, 0, len(roots))
+	for rootDID := range roots {
+		rootList = append(rootList, rootDID)
+	}
+	sort.Strings(rootList)
+
+	for _, rootDID := range rootList {
+		accounts, err := computeEndorsementSmokeClosure(edges, rootDID, 3)
+		if err != nil {
+			return "", nil, false, err
+		}
+		if len(accounts) == 0 {
+			continue
+		}
+		if requireIndirect && !endorsementSmokeHasIndirect(accounts) {
+			continue
+		}
+		return rootDID, accounts, true, nil
+	}
+
+	return "", nil, false, nil
+}
+
+type endorsementSmokeAdjacency map[string][]string
+
+func (a endorsementSmokeAdjacency) AdjacentForLimit(_ context.Context, sources []string, limit int) (map[string][]string, bool, error) {
+	out := make(map[string][]string, len(sources))
+	count := 0
+	truncated := false
+	for _, source := range sources {
+		for _, subject := range a[source] {
+			count++
+			if count > limit {
+				truncated = true
+				continue
+			}
+			out[source] = append(out[source], subject)
+		}
+	}
+	return out, truncated, nil
+}
+
+func computeEndorsementSmokeClosure(edges []endorsementSmokeEdge, rootDID string, maxDegree int) ([]endorsementSmokeAccount, error) {
+	adjacency := make(endorsementSmokeAdjacency)
+	for _, edge := range edges {
+		adjacency[edge.Issuer] = append(adjacency[edge.Issuer], edge.Subject)
+	}
+	for issuer := range adjacency {
+		sort.Strings(adjacency[issuer])
+	}
+
+	result, err := graphclosure.Compute(context.Background(), adjacency, rootDID, maxDegree, graphclosure.DefaultClosureCap)
+	if err != nil {
+		return nil, err
+	}
+
+	accounts := make([]endorsementSmokeAccount, 0, len(result.Accounts))
+	for _, account := range result.Accounts {
+		accounts = append(accounts, endorsementSmokeAccount{DID: account.DID, Degree: account.Degree, Via: account.Via})
+	}
+	return accounts, nil
+}
+
+func endorsementSmokeHasIndirect(accounts []endorsementSmokeAccount) bool {
+	for _, account := range accounts {
+		if account.Degree > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func (r endorsementClosureQueryResponse) accounts() []endorsementSmokeAccount {
+	accounts := make([]endorsementSmokeAccount, 0, len(r.EndorsementClosure.Edges))
+	for _, edge := range r.EndorsementClosure.Edges {
+		via := make([]string, 0, len(edge.Node.ViaAccounts))
+		for _, account := range edge.Node.ViaAccounts {
+			via = append(via, account.DID)
+		}
+		accounts = append(accounts, endorsementSmokeAccount{DID: edge.Node.DID, Degree: edge.Node.Degree, Via: via})
+	}
+	return accounts
+}
+
+func queryEndorsementClosure(t testing.TB, config smokeConfig, rootDID string) endorsementClosureQueryResponse {
+	t.Helper()
+
+	var merged endorsementClosureQueryResponse
+	after := ""
+	for {
+		page := queryEndorsementClosurePage(t, config, rootDID, after)
+		merged.EndorsementClosure.Truncated = page.EndorsementClosure.Truncated
+		merged.EndorsementClosure.Edges = append(merged.EndorsementClosure.Edges, page.EndorsementClosure.Edges...)
+		if !page.EndorsementClosure.PageInfo.HasNextPage {
+			break
+		}
+		if page.EndorsementClosure.PageInfo.EndCursor == "" {
+			t.Fatalf("SmokeEndorsementClosure: root DID %q has next page without an end cursor", rootDID)
+		}
+		after = page.EndorsementClosure.PageInfo.EndCursor
+	}
+
+	for index, account := range merged.accounts() {
+		if account.DID == "" {
+			t.Fatalf("SmokeEndorsementClosure: account[%d].did is empty", index)
+		}
+		if account.Degree < 1 || account.Degree > 3 {
+			t.Fatalf("SmokeEndorsementClosure: account[%d].degree = %d, want 1..3", index, account.Degree)
+		}
+		if account.Degree == 1 && len(account.Via) != 0 {
+			t.Fatalf("SmokeEndorsementClosure: account[%d].via = %#v, want empty for degree 1", index, account.Via)
+		}
+	}
+	return merged
+}
+
+func queryEndorsementClosurePage(t testing.TB, config smokeConfig, rootDID string, after string) endorsementClosureQueryResponse {
+	t.Helper()
+
+	var afterValue any
+	if after != "" {
+		afterValue = after
+	}
+	response := postGraphQL(t, context.Background(), config, "SmokeEndorsementClosure", `
+		query SmokeEndorsementClosure($did: String!, $after: String) {
+			endorsementClosure(where: { did: { eq: $did } }, first: 1000, after: $after) {
+				truncated
+				pageInfo {
+					hasNextPage
+					endCursor
+				}
+				edges {
+					cursor
+					node {
+						did
+						degree
+						viaAccounts { did }
+					}
+				}
+			}
+		}
+	`, map[string]any{
+		"did":   rootDID,
+		"after": afterValue,
+	})
+
+	var decoded endorsementClosureQueryResponse
+	if err := json.Unmarshal(response.Data, &decoded); err != nil {
+		t.Fatalf("SmokeEndorsementClosure: decode response data for root DID %q: %v", rootDID, err)
+	}
+	return decoded
+}
+
+func endorsementDefinitionAllowsIssuer(definition Record, issuer string) bool {
+	rawAllowed, exists := definition.Value["allowedIssuers"]
+	if !exists {
+		return true
+	}
+	allowedIssuers, ok := rawAllowed.([]any)
+	if !ok {
+		return false
+	}
+	for _, rawIssuer := range allowedIssuers {
+		issuerMap, ok := rawIssuer.(map[string]any)
+		if !ok {
+			continue
+		}
+		if endorsementSmokeStringValue(issuerMap, "did") == issuer {
+			return true
+		}
+	}
+	return false
+}
+
+func endorsementAwardAccountSubjectDID(value map[string]any) (string, bool) {
+	subject, ok := value["subject"].(map[string]any)
+	if !ok || endorsementSmokeStringValue(subject, "$type") != endorsementSmokeSubjectType {
+		return "", false
+	}
+	did := endorsementSmokeStringValue(subject, "did")
+	if !isSmokeDID(did) {
+		return "", false
+	}
+	return did, true
+}
+
+func endorsementSmokeRejectionKey(subjectDID string, awardURI string) string {
+	return subjectDID + "\x00" + awardURI
+}
+
+func nestedStringValue(value map[string]any, objectKey string, stringKey string) string {
+	nested, ok := value[objectKey].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return endorsementSmokeStringValue(nested, stringKey)
+}
+
+func endorsementSmokeStringValue(value map[string]any, key string) string {
+	raw, ok := value[key].(string)
+	if !ok {
+		return ""
+	}
+	return raw
+}
+
+func isSmokeDID(value string) bool {
+	return oauth.IsValidDID(value)
+}
+
+func formatEndorsementSmokeEdges(edges []endorsementSmokeEdge) string {
+	items := make([]string, 0, len(edges))
+	for _, edge := range edges {
+		items = append(items, fmt.Sprintf("%s -> %s", edge.Issuer, edge.Subject))
+	}
+	return strings.Join(items, ", ")
+}

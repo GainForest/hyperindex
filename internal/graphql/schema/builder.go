@@ -16,6 +16,7 @@ import (
 	"github.com/graphql-go/graphql/language/ast"
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/certifiedprofiles"
 	"github.com/GainForest/hyperindex/internal/graphql/externallabels"
 	"github.com/GainForest/hyperindex/internal/graphql/query"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
@@ -31,23 +32,36 @@ type Builder struct {
 	objectBuilder *types.ObjectBuilder
 
 	// Built types
-	recordTypes     map[string]*graphql.Object      // lexiconID -> record type
-	connectionTypes map[string]*graphql.Object      // lexiconID -> connection type
-	sortFieldEnums  map[string]*graphql.Enum        // lexiconID -> sort field enum
-	whereInputTypes map[string]*graphql.InputObject // lexiconID -> where input type
+	recordTypes           map[string]*graphql.Object      // lexiconID -> record type
+	connectionTypes       map[string]*graphql.Object      // lexiconID -> connection type
+	sortFieldEnums        map[string]*graphql.Enum        // lexiconID -> sort field enum
+	whereInputTypes       map[string]*graphql.InputObject // lexiconID -> where input type
+	nestedWhereInputTypes map[string]*graphql.InputObject // generated nested-filter input cache
+
+	genericRecordType       *graphql.Object
+	genericRecordConnection *graphql.Object
+
+	recordTimelineNode       *graphql.Object
+	recordTimelineConnection *graphql.Object
+
+	endorsementAccountType     *graphql.Object
+	endorsementViaAccountType  *graphql.Object
+	endorsementClosureEdgeType *graphql.Object
+	endorsementClosureConnType *graphql.Object
 }
 
 // NewBuilder creates a new schema builder.
 func NewBuilder(registry *lexicon.Registry) *Builder {
 	mapper := types.NewMapper()
 	return &Builder{
-		registry:        registry,
-		mapper:          mapper,
-		objectBuilder:   types.NewObjectBuilder(mapper, registry),
-		recordTypes:     make(map[string]*graphql.Object),
-		connectionTypes: make(map[string]*graphql.Object),
-		sortFieldEnums:  make(map[string]*graphql.Enum),
-		whereInputTypes: make(map[string]*graphql.InputObject),
+		registry:              registry,
+		mapper:                mapper,
+		objectBuilder:         types.NewObjectBuilder(mapper, registry),
+		recordTypes:           make(map[string]*graphql.Object),
+		connectionTypes:       make(map[string]*graphql.Object),
+		sortFieldEnums:        make(map[string]*graphql.Enum),
+		whereInputTypes:       make(map[string]*graphql.InputObject),
+		nestedWhereInputTypes: make(map[string]*graphql.InputObject),
 	}
 }
 
@@ -59,8 +73,19 @@ func (b *Builder) Build() (*graphql.Schema, error) {
 	// Phase 2: Build all record types
 	b.buildRecordTypes()
 
-	// Phase 2b: Build per-collection WhereInput types
-	b.buildWhereInputTypes()
+	// Phase 2b: Build GenericRecord types now that generated record types are available.
+	b.buildGenericRecordTypes()
+
+	// Phase 2c: Build record timeline types now that generated profile types are available.
+	b.buildRecordTimelineTypes()
+
+	// Phase 2d: Build endorsement closure types now that generated profile types are available.
+	b.buildEndorsementClosureTypes()
+
+	// Phase 2e: Build per-collection WhereInput types
+	if err := b.buildWhereInputTypes(); err != nil {
+		return nil, err
+	}
 
 	// Phase 3: Build connection types
 	b.buildConnectionTypes()
@@ -156,7 +181,7 @@ func (b *Builder) buildSortFieldEnums() {
 
 var externalLabelPredicateInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	Name:        "ExternalLabelPredicateInput",
-	Description: "Filter conditions for matching external labels on records.",
+	Description: "Filter conditions for matching external labels on the subject selected by the containing filter field.",
 	Fields: graphql.InputObjectConfigFieldMap{
 		"src": &graphql.InputObjectFieldConfig{
 			Type:        types.StringFilterInput,
@@ -169,22 +194,53 @@ var externalLabelPredicateInput = graphql.NewInputObject(graphql.InputObjectConf
 		"activeOnly": &graphql.InputObjectFieldConfig{
 			Type:         graphql.Boolean,
 			DefaultValue: true,
-			Description:  "When true, only active external labels can match records.",
+			Description:  "When true, only active external labels can match.",
+		},
+	},
+})
+
+const (
+	recordTimelineDefaultPageSize = 50
+	recordTimelineMaxPageSize     = query.MaxPageSize
+)
+
+var recordTimelineCollectionFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "RecordTimelineCollectionFilterInput",
+	Description: "Collection filter for recordTimeline. Callers must provide at least one collection in the in list.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"in": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(graphql.String))),
+			Description: "Collection NSIDs to include.",
+		},
+	},
+})
+
+var recordTimelineWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "RecordTimelineWhereInput",
+	Description: "Filter conditions for recordTimeline queries.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"collection": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewNonNull(recordTimelineCollectionFilterInput),
+			Description: "Required collection filter. Use collection: { in: [...] } to keep timeline scope explicit.",
+		},
+		"did": &graphql.InputObjectFieldConfig{
+			Type:        types.DIDFilterInput,
+			Description: "Optional author DID filter. Use did: { in: [...] } for followed-author timelines.",
 		},
 	},
 })
 
 var externalLabelWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	Name:        "ExternalLabelWhereInput",
-	Description: "Record-level external label predicates.",
+	Description: "External label predicates bound by the containing filter field.",
 	Fields: graphql.InputObjectConfigFieldMap{
 		"has": &graphql.InputObjectFieldConfig{
 			Type:        externalLabelPredicateInput,
-			Description: "Keep records that have a matching external label.",
+			Description: "Keep records whose bound label subject has a matching external label.",
 		},
 		"none": &graphql.InputObjectFieldConfig{
 			Type:        externalLabelPredicateInput,
-			Description: "Keep records that do not have a matching external label.",
+			Description: "Keep records whose bound label subject does not have a matching external label.",
 		},
 	},
 })
@@ -193,7 +249,7 @@ var externalLabelWhereInput = graphql.NewInputObject(graphql.InputObjectConfig{
 // For each collection lexicon, it creates a WhereInput type with scalar
 // operators for scalar properties, presence-only filters for complex top-level
 // properties, and explicit metadata filters.
-func (b *Builder) buildWhereInputTypes() {
+func (b *Builder) buildWhereInputTypes() error {
 	for _, lex := range b.registry.GetCollectionLexicons() {
 		if lex.Defs.Main == nil {
 			continue
@@ -202,16 +258,24 @@ func (b *Builder) buildWhereInputTypes() {
 		typeName := lexicon.ToTypeName(lex.ID) + "WhereInput"
 		fields := graphql.InputObjectConfigFieldMap{}
 
-		// Always include did as a filterable metadata field.
-		// Uses DIDFilterInput (restricted to eq and in only) because DID is a
-		// column-level filter — operators like contains/startsWith are not meaningful.
+		// Always include URI and DID as filterable metadata fields.
+		// Both are column-level filters, so only exact and batched lookup operators
+		// are exposed; substring operators are intentionally not meaningful here.
+		fields["uri"] = &graphql.InputObjectFieldConfig{
+			Type:        types.URIFilterInput,
+			Description: "Filter by AT-URI",
+		}
 		fields["did"] = &graphql.InputObjectFieldConfig{
 			Type:        types.DIDFilterInput,
 			Description: "Filter by DID (record author)",
 		}
 		fields["externalLabels"] = &graphql.InputObjectFieldConfig{
 			Type:        externalLabelWhereInput,
-			Description: "Filter records by locally ingested external labels before pagination.",
+			Description: "Filter records by locally ingested external labels attached to the record URI before pagination.",
+		}
+		fields["authorLabels"] = &graphql.InputObjectFieldConfig{
+			Type:        externalLabelWhereInput,
+			Description: "Filter records by locally ingested external labels attached to the record author's DID before pagination.",
 		}
 
 		// Add a field for each filterable property.
@@ -222,7 +286,7 @@ func (b *Builder) buildWhereInputTypes() {
 			if types.ReservedRecordFields[entry.Name] {
 				continue // Skip properties that collide with reserved metadata fields
 			}
-			filterInput := types.FilterInputForLexiconProperty(entry.Property.Type, entry.Property.Format)
+			filterInput := b.filterInputForTopLevelProperty(lex.ID, entry.Name, entry.Property)
 			if filterInput == nil {
 				continue // Non-filterable type, such as record.
 			}
@@ -230,11 +294,17 @@ func (b *Builder) buildWhereInputTypes() {
 			description := fmt.Sprintf("Filter by %s", entry.Name)
 			if filterInput == types.PresenceFilterInput {
 				description = fmt.Sprintf("Filter by whether %s is missing/null or present; nested values are not filterable", entry.Name)
+			} else if types.FilterInputForLexiconType(entry.Property.Type, entry.Property.Format) == nil {
+				description = fmt.Sprintf("Filter by whether %s is present, or by exact values nested inside it", entry.Name)
 			}
 			fields[entry.Name] = &graphql.InputObjectFieldConfig{
 				Type:        filterInput,
 				Description: description,
 			}
+		}
+
+		if err := addCollectionFilterExtensionFields(lex.ID, fields); err != nil {
+			return err
 		}
 
 		whereInput := graphql.NewInputObject(graphql.InputObjectConfig{
@@ -245,6 +315,7 @@ func (b *Builder) buildWhereInputTypes() {
 
 		b.whereInputTypes[lex.ID] = whereInput
 	}
+	return nil
 }
 
 // RecordEvent GraphQL type for subscriptions
@@ -393,11 +464,11 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 	})
 }
 
-// Generic record type for the records query
-var genericRecordType = graphql.NewObject(graphql.ObjectConfig{
-	Name:        "GenericRecord",
-	Description: "A generic AT Protocol record",
-	Fields: graphql.Fields{
+// buildGenericRecordTypes builds the GenericRecord connection types. This runs
+// after generated record types so GenericRecord can reference virtual fields that
+// point at generated types, such as certifiedProfileData.
+func (b *Builder) buildGenericRecordTypes() {
+	fields := graphql.Fields{
 		"uri": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "AT-URI of the record",
@@ -423,27 +494,101 @@ var genericRecordType = graphql.NewObject(graphql.ObjectConfig{
 			Description: "The record data as JSON",
 		},
 		"externalLabels": externallabels.Field(),
-	},
-})
+	}
+	if profileType, ok := b.recordTypes[certifiedprofiles.CollectionID]; ok {
+		fields["certifiedProfileData"] = certifiedprofiles.Field(profileType)
+	}
 
-// Generic record edge for pagination
-var genericRecordEdgeType = graphql.NewObject(graphql.ObjectConfig{
-	Name: "GenericRecordEdge",
-	Fields: graphql.Fields{
-		"cursor": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
-		"node":   &graphql.Field{Type: genericRecordType},
-	},
-})
+	b.genericRecordType = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "GenericRecord",
+		Description: "A generic AT Protocol record",
+		Fields:      fields,
+	})
 
-// Generic record connection for pagination
-var genericRecordConnectionType = graphql.NewObject(graphql.ObjectConfig{
-	Name: "GenericRecordConnection",
-	Fields: graphql.Fields{
-		"edges":      &graphql.Field{Type: graphql.NewList(genericRecordEdgeType)},
-		"pageInfo":   &graphql.Field{Type: query.PageInfoType},
-		"totalCount": &graphql.Field{Type: graphql.Int, Description: "Total number of items (if known)"},
-	},
-})
+	genericRecordEdgeType := graphql.NewObject(graphql.ObjectConfig{
+		Name: "GenericRecordEdge",
+		Fields: graphql.Fields{
+			"cursor": &graphql.Field{Type: graphql.NewNonNull(graphql.String)},
+			"node":   &graphql.Field{Type: b.genericRecordType},
+		},
+	})
+
+	b.genericRecordConnection = graphql.NewObject(graphql.ObjectConfig{
+		Name: "GenericRecordConnection",
+		Fields: graphql.Fields{
+			"edges":      &graphql.Field{Type: graphql.NewList(genericRecordEdgeType)},
+			"pageInfo":   &graphql.Field{Type: query.PageInfoType},
+			"totalCount": &graphql.Field{Type: graphql.Int, Description: "Total number of items (if known)"},
+		},
+	})
+}
+
+// buildRecordTimelineTypes builds the bespoke connection used by the generic
+// creation-time timeline. It intentionally does not use GenericRecordConnection
+// because timeline consumers need a single keyset page without totalCount.
+func (b *Builder) buildRecordTimelineTypes() {
+	fields := graphql.Fields{
+		"uri": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "AT-URI of the record.",
+		},
+		"cid": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "CID of the current record value.",
+		},
+		"did": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "DID of the record author.",
+		},
+		"collection": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "AT Protocol collection NSID.",
+		},
+		"rkey": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Record key from the AT-URI.",
+		},
+		"createdAt": &graphql.Field{
+			Type:        graphql.NewNonNull(types.DateTimeScalar),
+			Description: "Materialized top-level record createdAt timestamp used for timeline ordering.",
+		},
+		"indexedAt": &graphql.Field{
+			Type:        graphql.NewNonNull(types.DateTimeScalar),
+			Description: "Timestamp when Hyperindex last indexed the current record row.",
+		},
+		"value": &graphql.Field{
+			Type:        graphql.NewNonNull(types.JSONScalar),
+			Description: "Decoded AT Protocol record payload.",
+		},
+	}
+	if profileType, ok := b.recordTypes[certifiedprofiles.CollectionID]; ok {
+		fields["certifiedProfileData"] = certifiedprofiles.Field(profileType)
+	}
+
+	b.recordTimelineNode = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "RecordTimelineNode",
+		Description: "A current record returned by the generic creation-time timeline.",
+		Fields:      fields,
+	})
+
+	recordTimelineEdge := graphql.NewObject(graphql.ObjectConfig{
+		Name:        "RecordTimelineEdge",
+		Description: "An edge in a record timeline connection.",
+		Fields: graphql.Fields{
+			"cursor": &graphql.Field{Type: graphql.NewNonNull(graphql.String), Description: "Opaque keyset cursor for this timeline row."},
+			"node":   &graphql.Field{Type: graphql.NewNonNull(b.recordTimelineNode), Description: "The timeline record."},
+		},
+	})
+
+	b.recordTimelineConnection = graphql.NewObject(graphql.ObjectConfig{
+		Name:        "RecordTimelineConnection",
+		Description: "A newest-first page of current records across selected collections.",
+		Fields: graphql.Fields{
+			"edges":    &graphql.Field{Type: graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(recordTimelineEdge))), Description: "Timeline edges."},
+			"pageInfo": &graphql.Field{Type: graphql.NewNonNull(query.PageInfoType), Description: "Pagination information."},
+		},
+	})
+}
 
 // buildQueryType builds the root Query type with fields for each collection.
 func (b *Builder) buildQueryType() *graphql.Object {
@@ -451,7 +596,7 @@ func (b *Builder) buildQueryType() *graphql.Object {
 
 	// Add generic records query that works for any collection
 	fields["records"] = &graphql.Field{
-		Type:        genericRecordConnectionType,
+		Type:        b.genericRecordConnection,
 		Description: "Query records from any collection (useful for collections without lexicon schemas)",
 		Args: graphql.FieldConfigArgument{
 			"collection": &graphql.ArgumentConfig{
@@ -478,6 +623,27 @@ func (b *Builder) buildQueryType() *graphql.Object {
 		Resolve: b.createGenericRecordsResolver(),
 	}
 
+	fields["recordTimeline"] = &graphql.Field{
+		Type:        graphql.NewNonNull(b.recordTimelineConnection),
+		Description: "Query a newest-first page of current records across selected collections, optionally filtered by author DIDs.",
+		Args: graphql.FieldConfigArgument{
+			"where": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(recordTimelineWhereInput),
+				Description: "Timeline filters. Use where.collection.in for required collection scope and optional where.did.in for author DIDs.",
+			},
+			"first": &graphql.ArgumentConfig{
+				Type:         graphql.Int,
+				DefaultValue: recordTimelineDefaultPageSize,
+				Description:  "Number of records to return (default 50, max 1000).",
+			},
+			"after": &graphql.ArgumentConfig{
+				Type:        graphql.String,
+				Description: "Opaque cursor returned by a previous recordTimeline page.",
+			},
+		},
+		Resolve: b.createRecordTimelineResolver(),
+	}
+
 	// Add external label lookup by subject DID or AT-URI.
 	fields["externalLabels"] = &graphql.Field{
 		Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(externallabels.Type))),
@@ -488,7 +654,7 @@ func (b *Builder) buildQueryType() *graphql.Object {
 
 	// Add search query for cross-collection text search
 	fields["search"] = &graphql.Field{
-		Type:        genericRecordConnectionType,
+		Type:        b.genericRecordConnection,
 		Description: "Search records by text content",
 		Args: graphql.FieldConfigArgument{
 			"query": &graphql.ArgumentConfig{
@@ -521,6 +687,27 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			},
 		},
 		Resolve: b.createCollectionStatsResolver(),
+	}
+
+	// Add endorsementClosure query for the Certified endorsement trust graph.
+	fields["endorsementClosure"] = &graphql.Field{
+		Type:        graphql.NewNonNull(b.endorsementClosureConnType),
+		Description: "Query the bounded DID-rooted Certified endorsement graph closure from active endorsement badge awards.",
+		Args: graphql.FieldConfigArgument{
+			"where": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(endorsementClosureWhereInput),
+				Description: "Closure filters. where.did.eq is required; optional where.degree.eq selects one returned hop distance from 1 through 3.",
+			},
+			"first": &graphql.ArgumentConfig{
+				Type:        graphql.Int,
+				Description: "Number of closure accounts to return (default 20, maximum 1000).",
+			},
+			"after": &graphql.ArgumentConfig{
+				Type:        graphql.String,
+				Description: "Cursor to start after (forward pagination).",
+			},
+		},
+		Resolve: b.createEndorsementClosureResolver(),
 	}
 
 	// Add collectionTimeSeries query for time series data
@@ -603,15 +790,15 @@ func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Re
 	return filters, didFilter, err
 }
 
-func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, registry *lexicon.Registry) ([]repositories.FieldFilter, repositories.DIDFilter, repositories.ExternalLabelRecordFilter, error) {
+func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, registry *lexicon.Registry) ([]repositories.FieldFilter, repositories.DIDFilter, repositories.ExternalLabelFilterSet, error) {
 	whereMap, ok := whereArg.(map[string]interface{})
 	if !ok || len(whereMap) == 0 {
-		return nil, repositories.DIDFilter{}, repositories.ExternalLabelRecordFilter{}, nil
+		return nil, repositories.DIDFilter{}, repositories.ExternalLabelFilterSet{}, nil
 	}
 
 	var filters []repositories.FieldFilter
 	var didFilter repositories.DIDFilter
-	var externalLabelFilter repositories.ExternalLabelRecordFilter
+	var externalLabelFilters repositories.ExternalLabelFilterSet
 
 	// Look up the record definition once for property type resolution
 	recordDef, _ := registry.GetRecordDef(lexiconID)
@@ -640,22 +827,52 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 		}
 
 		if fieldName == "externalLabels" {
-			parsedExternalLabelFilter, err := extractExternalLabelRecordFilter(filterMap)
+			parsedExternalLabelFilter, err := extractExternalLabelRecordFilter(fieldName, filterMap)
 			if err != nil {
-				return nil, repositories.DIDFilter{}, repositories.ExternalLabelRecordFilter{}, err
+				return nil, repositories.DIDFilter{}, repositories.ExternalLabelFilterSet{}, err
 			}
-			externalLabelFilter = parsedExternalLabelFilter
+			externalLabelFilters.Record = parsedExternalLabelFilter
 			continue
 		}
 
-		// Determine the lexicon type for this field so the repository can CAST correctly.
+		if fieldName == "authorLabels" {
+			parsedExternalLabelFilter, err := extractExternalLabelRecordFilter(fieldName, filterMap)
+			if err != nil {
+				return nil, repositories.DIDFilter{}, repositories.ExternalLabelFilterSet{}, err
+			}
+			externalLabelFilters.Author = parsedExternalLabelFilter
+			continue
+		}
+
+		if extension, ok := collectionFilterExtensionForField(lexiconID, fieldName); ok {
+			filters = append(filters, extractCollectionFilterExtensionFilters(extension, filterMap)...)
+			continue
+		}
+
+		// Determine the filter target and lexicon type for this field so the repository
+		// can read from the correct storage location and CAST correctly. URI is
+		// generated metadata, not a JSON property, so it targets the record column and
+		// must stay string-typed even if a lexicon defines a colliding numeric property
+		// named "uri".
 		fieldType := "string" // default
-		if recordDef != nil {
+		fieldTarget := repositories.FieldFilterTargetJSON
+		if fieldName == "uri" {
+			fieldTarget = repositories.FieldFilterTargetColumn
+		} else if recordDef != nil {
 			if prop := recordDef.GetProperty(fieldName); prop != nil {
 				if prop.Format == "datetime" {
 					fieldType = "datetime"
 				} else {
 					fieldType = prop.Type
+				}
+
+				if types.FilterInputForLexiconType(prop.Type, prop.Format) == nil {
+					nestedFilters, err := extractNestedPropertyFilters(lexiconID, registry, fieldName, *prop, filterMap)
+					if err != nil {
+						return nil, repositories.DIDFilter{}, repositories.ExternalLabelFilterSet{}, err
+					}
+					filters = append(filters, nestedFilters...)
+					continue
 				}
 			}
 		}
@@ -670,30 +887,31 @@ func extractFiltersWithExternalLabels(whereArg interface{}, lexiconID string, re
 				Operator:  op,
 				Value:     val,
 				FieldType: fieldType,
+				Target:    fieldTarget,
 			})
 		}
 	}
 
 	if len(filters) > repositories.MaxFilterConditions {
-		return nil, repositories.DIDFilter{}, repositories.ExternalLabelRecordFilter{}, fmt.Errorf("too many filter conditions: %d (maximum %d)", len(filters), repositories.MaxFilterConditions)
+		return nil, repositories.DIDFilter{}, repositories.ExternalLabelFilterSet{}, fmt.Errorf("too many filter conditions: %d (maximum %d)", len(filters), repositories.MaxFilterConditions)
 	}
 
-	return filters, didFilter, externalLabelFilter, nil
+	return filters, didFilter, externalLabelFilters, nil
 }
 
-func extractExternalLabelRecordFilter(filterMap map[string]interface{}) (repositories.ExternalLabelRecordFilter, error) {
+func extractExternalLabelRecordFilter(fieldName string, filterMap map[string]interface{}) (repositories.ExternalLabelRecordFilter, error) {
 	var filter repositories.ExternalLabelRecordFilter
 	if hasVal, ok := filterMap["has"].(map[string]interface{}); ok && hasVal != nil {
 		predicate, err := extractExternalLabelPredicate(hasVal)
 		if err != nil {
-			return repositories.ExternalLabelRecordFilter{}, fmt.Errorf("invalid externalLabels.has filter: %w", err)
+			return repositories.ExternalLabelRecordFilter{}, fmt.Errorf("invalid %s.has filter: %w", fieldName, err)
 		}
 		filter.Has = &predicate
 	}
 	if noneVal, ok := filterMap["none"].(map[string]interface{}); ok && noneVal != nil {
 		predicate, err := extractExternalLabelPredicate(noneVal)
 		if err != nil {
-			return repositories.ExternalLabelRecordFilter{}, fmt.Errorf("invalid externalLabels.none filter: %w", err)
+			return repositories.ExternalLabelRecordFilter{}, fmt.Errorf("invalid %s.none filter: %w", fieldName, err)
 		}
 		filter.None = &predicate
 	}
@@ -756,7 +974,7 @@ func isTotalCountRequested(p graphql.ResolveParams) bool {
 	return false
 }
 
-func isExternalLabelsSelected(p graphql.ResolveParams, fieldPath ...string) bool {
+func isFieldPathSelected(p graphql.ResolveParams, fieldPath ...string) bool {
 	for _, field := range p.Info.FieldASTs {
 		if selectionSetHasFieldPath(p.Info, field.SelectionSet, fieldPath, map[string]bool{}) {
 			return true
@@ -804,27 +1022,124 @@ func selectionSetHasFieldPath(info graphql.ResolveInfo, selectionSet *ast.Select
 	return false
 }
 
+type externalLabelHydrationRequirements struct {
+	active  bool
+	history bool
+}
+
+func (r externalLabelHydrationRequirements) any() bool {
+	return r.active || r.history
+}
+
+func (r *externalLabelHydrationRequirements) merge(other externalLabelHydrationRequirements) {
+	r.active = r.active || other.active
+	r.history = r.history || other.history
+}
+
 type externalLabelHydration struct {
 	active  map[string][]repositories.ExternalLabel
 	history map[string][]repositories.ExternalLabel
 }
 
 func (b *Builder) hydrateExternalLabelsForConnection(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record) (*externalLabelHydration, error) {
-	if !isExternalLabelsSelected(p, "edges", "node", "externalLabels") {
+	requirements := externalLabelHydrationRequirementsForPath(p, "edges", "node", "externalLabels")
+	if !requirements.any() {
 		return nil, nil
 	}
-	return b.hydrateExternalLabelsForRecords(p, repos, records)
+	return b.hydrateExternalLabelsForRecords(p, repos, records, requirements)
 }
 
 func (b *Builder) hydrateExternalLabelsForSingleRecord(p graphql.ResolveParams, repos *resolver.Repositories, rec *repositories.Record) (*externalLabelHydration, error) {
-	if !isExternalLabelsSelected(p, "externalLabels") {
+	requirements := externalLabelHydrationRequirementsForPath(p, "externalLabels")
+	if !requirements.any() {
 		return nil, nil
 	}
-	return b.hydrateExternalLabelsForRecords(p, repos, []*repositories.Record{rec})
+	return b.hydrateExternalLabelsForRecords(p, repos, []*repositories.Record{rec}, requirements)
 }
 
-func (b *Builder) hydrateExternalLabelsForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record) (*externalLabelHydration, error) {
-	if repos == nil || repos.ExternalLabels == nil || len(records) == 0 {
+func externalLabelHydrationRequirementsForPath(p graphql.ResolveParams, fieldPath ...string) externalLabelHydrationRequirements {
+	var requirements externalLabelHydrationRequirements
+	for _, field := range p.Info.FieldASTs {
+		requirements.merge(selectionSetExternalLabelHydrationRequirements(p.Info, field.SelectionSet, fieldPath, map[string]bool{}))
+	}
+	return requirements
+}
+
+func selectionSetExternalLabelHydrationRequirements(info graphql.ResolveInfo, selectionSet *ast.SelectionSet, fieldPath []string, visitedFragments map[string]bool) externalLabelHydrationRequirements {
+	if selectionSet == nil || len(fieldPath) == 0 {
+		return externalLabelHydrationRequirements{}
+	}
+
+	var requirements externalLabelHydrationRequirements
+	for _, selection := range selectionSet.Selections {
+		switch selected := selection.(type) {
+		case *ast.Field:
+			if selected.Name == nil || selected.Name.Value != fieldPath[0] {
+				continue
+			}
+			if len(fieldPath) == 1 {
+				requirements.merge(externalLabelHydrationRequirementsForField(info, selected))
+				continue
+			}
+			requirements.merge(selectionSetExternalLabelHydrationRequirements(info, selected.SelectionSet, fieldPath[1:], visitedFragments))
+		case *ast.InlineFragment:
+			requirements.merge(selectionSetExternalLabelHydrationRequirements(info, selected.SelectionSet, fieldPath, visitedFragments))
+		case *ast.FragmentSpread:
+			if selected.Name == nil || visitedFragments[selected.Name.Value] {
+				continue
+			}
+			fragment, ok := info.Fragments[selected.Name.Value].(*ast.FragmentDefinition)
+			if !ok {
+				continue
+			}
+			visitedFragments[selected.Name.Value] = true
+			requirements.merge(selectionSetExternalLabelHydrationRequirements(info, fragment.SelectionSet, fieldPath, visitedFragments))
+		}
+	}
+	return requirements
+}
+
+func externalLabelHydrationRequirementsForField(info graphql.ResolveInfo, field *ast.Field) externalLabelHydrationRequirements {
+	activeOnly, known := externalLabelActiveOnlyArgument(info, field)
+	if !known {
+		return externalLabelHydrationRequirements{active: true, history: true}
+	}
+	if activeOnly {
+		return externalLabelHydrationRequirements{active: true}
+	}
+	return externalLabelHydrationRequirements{history: true}
+}
+
+func externalLabelActiveOnlyArgument(info graphql.ResolveInfo, field *ast.Field) (bool, bool) {
+	for _, arg := range field.Arguments {
+		if arg.Name == nil || arg.Name.Value != "activeOnly" {
+			continue
+		}
+		switch value := arg.Value.(type) {
+		case *ast.BooleanValue:
+			return value.Value, true
+		case *ast.Variable:
+			if value.Name == nil {
+				return false, false
+			}
+			variableValue, ok := info.VariableValues[value.Name.Value]
+			if !ok {
+				return false, false
+			}
+			if variableValue == nil {
+				return true, true
+			}
+			activeOnly, ok := variableValue.(bool)
+			return activeOnly, ok
+		default:
+			return false, false
+		}
+	}
+	return true, true
+}
+
+func (b *Builder) hydrateExternalLabelsForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record, requirements externalLabelHydrationRequirements) (*externalLabelHydration, error) {
+	if repos == nil || repos.ExternalLabels == nil || len(records) == 0 || !requirements.any() {
 		return nil, nil
 	}
 
@@ -833,14 +1148,22 @@ func (b *Builder) hydrateExternalLabelsForRecords(p graphql.ResolveParams, repos
 		subjects = append(subjects, repositories.LabelSubject{URI: rec.URI, CID: rec.CID})
 	}
 
-	activeLabelsBySubject, err := repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{ActiveOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("failed to hydrate active external labels: %w", err)
+	var activeLabelsBySubject map[string][]repositories.ExternalLabel
+	if requirements.active {
+		var err error
+		activeLabelsBySubject, err = repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{ActiveOnly: true})
+		if err != nil {
+			return nil, fmt.Errorf("failed to hydrate active external labels: %w", err)
+		}
 	}
 
-	historyLabelsBySubject, err := repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{ActiveOnly: false})
-	if err != nil {
-		return nil, fmt.Errorf("failed to hydrate historical external labels: %w", err)
+	var historyLabelsBySubject map[string][]repositories.ExternalLabel
+	if requirements.history {
+		var err error
+		historyLabelsBySubject, err = repos.ExternalLabels.GetBySubjects(p.Context, subjects, repositories.ExternalLabelFilter{ActiveOnly: false})
+		if err != nil {
+			return nil, fmt.Errorf("failed to hydrate historical external labels: %w", err)
+		}
 	}
 
 	return &externalLabelHydration{
@@ -860,6 +1183,116 @@ func attachExternalLabels(node interface{}, rec *repositories.Record, hydration 
 	subject := repositories.LabelSubject{URI: rec.URI, CID: rec.CID}
 	nodeMap[externallabels.ActiveSourceKey] = hydration.active[subject.Key()]
 	nodeMap[externallabels.HistorySourceKey] = hydration.history[subject.Key()]
+}
+
+type certifiedProfileHydration struct {
+	byDID map[string]map[string]interface{}
+}
+
+func (b *Builder) hydrateCertifiedProfilesForConnection(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record) (*certifiedProfileHydration, error) {
+	if !isFieldPathSelected(p, "edges", "node", "certifiedProfileData") {
+		return nil, nil
+	}
+	externalLabelRequirements := externalLabelHydrationRequirementsForPath(p, "edges", "node", "certifiedProfileData", "externalLabels")
+	return b.hydrateCertifiedProfilesForRecords(p, repos, records, externalLabelRequirements)
+}
+
+func (b *Builder) hydrateCertifiedProfileForSingleRecord(p graphql.ResolveParams, repos *resolver.Repositories, rec *repositories.Record) (*certifiedProfileHydration, error) {
+	if !isFieldPathSelected(p, "certifiedProfileData") {
+		return nil, nil
+	}
+	externalLabelRequirements := externalLabelHydrationRequirementsForPath(p, "certifiedProfileData", "externalLabels")
+	return b.hydrateCertifiedProfilesForRecords(p, repos, []*repositories.Record{rec}, externalLabelRequirements)
+}
+
+func (b *Builder) hydrateCertifiedProfilesForDIDs(p graphql.ResolveParams, repos *resolver.Repositories, dids []string, externalLabelRequirements externalLabelHydrationRequirements) (*certifiedProfileHydration, error) {
+	records := make([]*repositories.Record, 0, len(dids))
+	seen := make(map[string]bool, len(dids))
+	for _, did := range dids {
+		if did == "" || seen[did] {
+			continue
+		}
+		seen[did] = true
+		records = append(records, &repositories.Record{DID: did})
+	}
+	return b.hydrateCertifiedProfilesForRecords(p, repos, records, externalLabelRequirements)
+}
+
+func (b *Builder) hydrateCertifiedProfilesForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record, externalLabelRequirements externalLabelHydrationRequirements) (*certifiedProfileHydration, error) {
+	if repos == nil || repos.Records == nil || len(records) == 0 {
+		return nil, nil
+	}
+	if _, ok := b.recordTypes[certifiedprofiles.CollectionID]; !ok {
+		return nil, nil
+	}
+
+	urisByDID := make(map[string]string, len(records))
+	uris := make([]string, 0, len(records))
+	for _, rec := range records {
+		if rec == nil || rec.DID == "" {
+			continue
+		}
+		if _, exists := urisByDID[rec.DID]; exists {
+			continue
+		}
+		uri := certifiedProfileURI(rec.DID)
+		urisByDID[rec.DID] = uri
+		uris = append(uris, uri)
+	}
+	if len(uris) == 0 {
+		return &certifiedProfileHydration{byDID: map[string]map[string]interface{}{}}, nil
+	}
+
+	profileRecords, err := repos.Records.GetByURIs(p.Context, uris)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch certified profiles: %w", err)
+	}
+
+	var profileLabelHydration *externalLabelHydration
+	if externalLabelRequirements.any() {
+		profileLabelHydration, err = b.hydrateExternalLabelsForRecords(p, repos, profileRecords, externalLabelRequirements)
+		if err != nil {
+			return nil, fmt.Errorf("failed to hydrate certified profile external labels: %w", err)
+		}
+	}
+
+	profilesByDID := make(map[string]map[string]interface{}, len(profileRecords))
+	for _, profileRecord := range profileRecords {
+		var data map[string]interface{}
+		if err := json.Unmarshal([]byte(profileRecord.JSON), &data); err != nil {
+			slog.Warn("Skipping certified profile with invalid JSON", "uri", profileRecord.URI, "error", err)
+			continue
+		}
+		data["uri"] = profileRecord.URI
+		data["cid"] = profileRecord.CID
+		data["did"] = profileRecord.DID
+		data["rkey"] = profileRecord.RKey
+		b.coerceRequiredFields(data, certifiedprofiles.CollectionID)
+		attachExternalLabels(data, profileRecord, profileLabelHydration)
+		profilesByDID[profileRecord.DID] = data
+	}
+
+	return &certifiedProfileHydration{byDID: profilesByDID}, nil
+}
+
+func attachCertifiedProfileData(node interface{}, rec *repositories.Record, hydration *certifiedProfileHydration) {
+	if hydration == nil || rec == nil {
+		return
+	}
+	nodeMap, ok := node.(map[string]interface{})
+	if !ok {
+		return
+	}
+	profile, ok := hydration.byDID[rec.DID]
+	if !ok || profile == nil {
+		nodeMap[certifiedprofiles.SourceKey] = nil
+		return
+	}
+	nodeMap[certifiedprofiles.SourceKey] = profile
+}
+
+func certifiedProfileURI(did string) string {
+	return "at://" + did + "/" + certifiedprofiles.CollectionID + "/" + certifiedprofiles.RKey
 }
 
 // buildSortAwareCursor builds a sort-aware cursor string for a record.
@@ -930,10 +1363,10 @@ func (b *Builder) resolveRecordConnection(
 	// Extract where filters if present (typed collection queries only)
 	var filters []repositories.FieldFilter
 	var didFilter repositories.DIDFilter
-	var externalLabelFilter repositories.ExternalLabelRecordFilter
+	var externalLabelFilters repositories.ExternalLabelFilterSet
 	if whereArg, ok := p.Args["where"]; ok && whereArg != nil {
 		var err error
-		filters, didFilter, externalLabelFilter, err = extractFiltersWithExternalLabels(whereArg, collection, b.registry)
+		filters, didFilter, externalLabelFilters, err = extractFiltersWithExternalLabels(whereArg, collection, b.registry)
 		if err != nil {
 			return nil, err
 		}
@@ -967,7 +1400,7 @@ func (b *Builder) resolveRecordConnection(
 		}
 
 		// Fetch last+1 to detect hasPreviousPage
-		records, err := repos.Records.GetByCollectionReversedWithKeysetCursorAndExternalLabels(p.Context, collection, filters, didFilter, externalLabelFilter, sortOpt, last+1, beforeCursorValues)
+		records, err := repos.Records.GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, last+1, beforeCursorValues)
 		if err != nil {
 			return nil, fmt.Errorf("failed to query records: %w", err)
 		}
@@ -980,6 +1413,10 @@ func (b *Builder) resolveRecordConnection(
 		}
 
 		labelsBySubject, err := b.hydrateExternalLabelsForConnection(p, repos, records)
+		if err != nil {
+			return nil, err
+		}
+		certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, records)
 		if err != nil {
 			return nil, err
 		}
@@ -1000,6 +1437,7 @@ func (b *Builder) resolveRecordConnection(
 				continue
 			}
 			attachExternalLabels(node, rec, labelsBySubject)
+			attachCertifiedProfileData(node, rec, certifiedProfiles)
 
 			cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
 			if startCursor == "" {
@@ -1024,7 +1462,7 @@ func (b *Builder) resolveRecordConnection(
 		}
 
 		if isTotalCountRequested(p) {
-			count, err := repos.Records.GetCollectionCountFilteredWithExternalLabels(p.Context, collection, filters, didFilter, externalLabelFilter)
+			count, err := repos.Records.GetCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
 			if err == nil {
 				result["totalCount"] = int(count)
 			}
@@ -1051,7 +1489,7 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	// Fetch first+1 to determine hasNextPage using the sorted method
-	records, err := repos.Records.GetByCollectionSortedWithKeysetCursorAndExternalLabels(p.Context, collection, filters, didFilter, externalLabelFilter, sortOpt, first+1, afterCursorValues)
+	records, err := repos.Records.GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, first+1, afterCursorValues)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query records: %w", err)
 	}
@@ -1063,6 +1501,10 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	labelsBySubject, err := b.hydrateExternalLabelsForConnection(p, repos, records)
+	if err != nil {
+		return nil, err
+	}
+	certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, records)
 	if err != nil {
 		return nil, err
 	}
@@ -1083,6 +1525,7 @@ func (b *Builder) resolveRecordConnection(
 			continue
 		}
 		attachExternalLabels(node, rec, labelsBySubject)
+		attachCertifiedProfileData(node, rec, certifiedProfiles)
 
 		cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
 		if startCursor == "" {
@@ -1107,7 +1550,7 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	if isTotalCountRequested(p) {
-		count, err := repos.Records.GetCollectionCountFilteredWithExternalLabels(p.Context, collection, filters, didFilter, externalLabelFilter)
+		count, err := repos.Records.GetCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
 		if err == nil {
 			result["totalCount"] = int(count)
 		}
@@ -1170,6 +1613,291 @@ func stringListArg(value interface{}) []string {
 	}
 }
 
+const recordTimelineTimestampFormat = "2006-01-02T15:04:05.000Z"
+
+type recordTimelineCursorPayload struct {
+	Version   int    `json:"v"`
+	CreatedAt string `json:"createdAt"`
+	URI       string `json:"uri"`
+}
+
+func (b *Builder) createRecordTimelineResolver() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		first, err := recordTimelineFirstArg(p.Args["first"])
+		if err != nil {
+			return nil, err
+		}
+
+		collections, authors, authorsEmpty, err := recordTimelineWhereArg(p.Args["where"])
+		if err != nil {
+			return nil, err
+		}
+
+		var afterCursor *repositories.RecordTimelineCursor
+		if after, _ := p.Args["after"].(string); after != "" {
+			afterCursor, err = decodeRecordTimelineCursor(after)
+			if err != nil {
+				return nil, fmt.Errorf("invalid recordTimeline cursor: %w", err)
+			}
+		}
+
+		repos := resolver.GetRepositories(p.Context)
+		if repos == nil || repos.Records == nil {
+			return emptyRecordTimelineConnection(), nil
+		}
+		if authorsEmpty {
+			return emptyRecordTimelineConnection(), nil
+		}
+
+		records, err := repos.Records.GetRecordTimeline(p.Context, authors, collections, first+1, afterCursor)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query recordTimeline: %w", err)
+		}
+
+		hasNextPage := len(records) > first
+		if hasNextPage {
+			records = records[:first]
+		}
+
+		recordsForHydration := make([]*repositories.Record, 0, len(records))
+		for _, rec := range records {
+			recordsForHydration = append(recordsForHydration, &rec.Record)
+		}
+		certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, recordsForHydration)
+		if err != nil {
+			return nil, err
+		}
+
+		edges := make([]interface{}, 0, len(records))
+		var startCursor, endCursor string
+		for _, rec := range records {
+			var rawJSON interface{}
+			if err := json.Unmarshal([]byte(rec.JSON), &rawJSON); err != nil {
+				slog.Warn("Skipping timeline record with invalid JSON", "uri", rec.URI, "error", err)
+				continue
+			}
+
+			createdAt := formatRecordTimelineTimestamp(rec.RecordCreatedAt)
+			node := map[string]interface{}{
+				"uri":        rec.URI,
+				"cid":        rec.CID,
+				"did":        rec.DID,
+				"collection": rec.Collection,
+				"rkey":       nullableString(rec.RKey),
+				"createdAt":  createdAt,
+				"indexedAt":  rec.IndexedAt.UTC().Format(time.RFC3339Nano),
+				"value":      rawJSON,
+			}
+			attachCertifiedProfileData(node, &rec.Record, certifiedProfiles)
+
+			cursor := encodeRecordTimelineCursor(createdAt, rec.URI)
+			if startCursor == "" {
+				startCursor = cursor
+			}
+			endCursor = cursor
+			edges = append(edges, map[string]interface{}{"cursor": cursor, "node": node})
+		}
+
+		return map[string]interface{}{
+			"edges": edges,
+			"pageInfo": map[string]interface{}{
+				"hasNextPage":     hasNextPage,
+				"hasPreviousPage": afterCursor != nil,
+				"startCursor":     nullableString(startCursor),
+				"endCursor":       nullableString(endCursor),
+			},
+		}, nil
+	}
+}
+
+func recordTimelineWhereArg(value interface{}) ([]string, []string, bool, error) {
+	whereMap, ok := value.(map[string]interface{})
+	if !ok || whereMap == nil {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in must include at least one collection NSID")
+	}
+
+	collectionFilter, ok := whereMap["collection"].(map[string]interface{})
+	if !ok || collectionFilter == nil {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in must include at least one collection NSID")
+	}
+	collections, err := recordTimelineStringListArg(collectionFilter["in"], "where.collection.in")
+	if err != nil {
+		return nil, nil, false, err
+	}
+	collections = dedupeStrings(collections)
+	if len(collections) == 0 {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in must include at least one collection NSID")
+	}
+	if len(collections) > repositories.MaxRecordTimelineCollections {
+		return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in supports at most %d values", repositories.MaxRecordTimelineCollections)
+	}
+	for i, collection := range collections {
+		if !lexicon.IsValidNSID(collection) {
+			return nil, nil, false, fmt.Errorf("recordTimeline where.collection.in[%d] must be a valid collection NSID", i)
+		}
+	}
+
+	var authors []string
+	authorsEmpty := false
+	if rawDIDFilter, ok := whereMap["did"]; ok && rawDIDFilter != nil {
+		didFilter, ok := rawDIDFilter.(map[string]interface{})
+		if !ok || didFilter == nil {
+			return nil, nil, false, fmt.Errorf("recordTimeline where.did must be a DID filter")
+		}
+
+		authorFilterName := "where.did.in"
+		if eqAuthor, ok := didFilter["eq"].(string); ok {
+			authorFilterName = "where.did.eq"
+			eqAuthor = strings.TrimSpace(eqAuthor)
+			if eqAuthor == "" {
+				return nil, nil, false, fmt.Errorf("recordTimeline where.did.eq must not be empty")
+			}
+			authors = []string{eqAuthor}
+		} else if rawAuthors, ok := didFilter["in"]; ok && rawAuthors != nil {
+			authors, err = recordTimelineStringListArg(rawAuthors, authorFilterName)
+			if err != nil {
+				return nil, nil, false, err
+			}
+			authors = dedupeStrings(authors)
+			authorsEmpty = len(authors) == 0
+		}
+
+		if len(authors) > repositories.MaxRecordTimelineAuthors {
+			return nil, nil, false, fmt.Errorf("recordTimeline where.did.in supports at most %d values", repositories.MaxRecordTimelineAuthors)
+		}
+		for i, author := range authors {
+			if !isDIDString(author) {
+				if authorFilterName == "where.did.eq" {
+					return nil, nil, false, fmt.Errorf("recordTimeline where.did.eq must be a DID string starting with \"did:\"")
+				}
+				return nil, nil, false, fmt.Errorf("recordTimeline where.did.in[%d] must be a DID string starting with \"did:\"", i)
+			}
+		}
+	}
+
+	return collections, authors, authorsEmpty, nil
+}
+
+func recordTimelineFirstArg(value interface{}) (int, error) {
+	first := recordTimelineDefaultPageSize
+	if value != nil {
+		if parsed, ok := value.(int); ok {
+			first = parsed
+		}
+	}
+	if first < 1 || first > recordTimelineMaxPageSize {
+		return 0, fmt.Errorf("recordTimeline first must be between 1 and %d", recordTimelineMaxPageSize)
+	}
+	return first, nil
+}
+
+func recordTimelineStringListArg(value interface{}, name string) ([]string, error) {
+	switch typed := value.(type) {
+	case []interface{}:
+		items := make([]string, 0, len(typed))
+		for i, item := range typed {
+			valueString, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("recordTimeline %s[%d] must be a string", name, i)
+			}
+			valueString = strings.TrimSpace(valueString)
+			if valueString == "" {
+				return nil, fmt.Errorf("recordTimeline %s[%d] must not be empty", name, i)
+			}
+			items = append(items, valueString)
+		}
+		return items, nil
+	case []string:
+		items := make([]string, 0, len(typed))
+		for i, valueString := range typed {
+			valueString = strings.TrimSpace(valueString)
+			if valueString == "" {
+				return nil, fmt.Errorf("recordTimeline %s[%d] must not be empty", name, i)
+			}
+			items = append(items, valueString)
+		}
+		return items, nil
+	default:
+		return nil, fmt.Errorf("recordTimeline %s must be a list of strings", name)
+	}
+}
+
+func dedupeStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	deduped := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		deduped = append(deduped, value)
+	}
+	return deduped
+}
+
+func isDIDString(value string) bool {
+	return strings.HasPrefix(value, "did:") && !strings.ContainsAny(value, " \t\n\r")
+}
+
+func nullableString(value string) interface{} {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func formatRecordTimelineTimestamp(value time.Time) string {
+	return value.UTC().Truncate(time.Millisecond).Format(recordTimelineTimestampFormat)
+}
+
+func encodeRecordTimelineCursor(createdAt, uri string) string {
+	payload := recordTimelineCursorPayload{Version: 1, CreatedAt: createdAt, URI: uri}
+	encoded, _ := json.Marshal(payload)
+	return base64.RawURLEncoding.EncodeToString(encoded)
+}
+
+func decodeRecordTimelineCursor(cursor string) (*repositories.RecordTimelineCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("cursor must be base64url-encoded")
+	}
+
+	var payload recordTimelineCursorPayload
+	if err := json.Unmarshal(decoded, &payload); err != nil {
+		return nil, fmt.Errorf("cursor payload must be a JSON object")
+	}
+	if payload.Version != 1 {
+		return nil, fmt.Errorf("unsupported cursor version %d", payload.Version)
+	}
+	if payload.CreatedAt == "" {
+		return nil, fmt.Errorf("cursor createdAt is required")
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, payload.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("cursor createdAt must be an RFC3339 timestamp")
+	}
+	if payload.URI == "" || !strings.HasPrefix(payload.URI, "at://") {
+		return nil, fmt.Errorf("cursor uri must be an AT-URI")
+	}
+
+	return &repositories.RecordTimelineCursor{
+		CreatedAt: formatRecordTimelineTimestamp(createdAt),
+		URI:       payload.URI,
+	}, nil
+}
+
+func emptyRecordTimelineConnection() map[string]interface{} {
+	return map[string]interface{}{
+		"edges": []interface{}{},
+		"pageInfo": map[string]interface{}{
+			"hasNextPage":     false,
+			"hasPreviousPage": false,
+			"startCursor":     nil,
+			"endCursor":       nil,
+		},
+	}
+}
+
 // createSearchResolver creates a resolver for the search query.
 // It validates the query string (minimum 3 runes) and calls the Search repository method.
 func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
@@ -1214,6 +1942,10 @@ func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 		if err != nil {
 			return nil, err
 		}
+		certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, records)
+		if err != nil {
+			return nil, err
+		}
 
 		edges := make([]interface{}, 0, len(records))
 		var startCursor, endCursor string
@@ -1240,6 +1972,7 @@ func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 				"value":      value,
 			}
 			attachExternalLabels(node, rec, labelsBySubject)
+			attachCertifiedProfileData(node, rec, certifiedProfiles)
 
 			edges = append(edges, map[string]interface{}{
 				"cursor": cursor,
@@ -1363,7 +2096,12 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 		if err != nil {
 			return nil, err
 		}
+		certifiedProfiles, err := b.hydrateCertifiedProfileForSingleRecord(p, repos, rec)
+		if err != nil {
+			return nil, err
+		}
 		attachExternalLabels(data, rec, labelsBySubject)
+		attachCertifiedProfileData(data, rec, certifiedProfiles)
 
 		return data, nil
 	}

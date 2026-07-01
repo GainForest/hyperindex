@@ -4,7 +4,55 @@ This repository uses [Changie](https://github.com/miniscruff/changie) to curate 
 
 ## Source of truth
 
+This file is the source of truth for when to add, skip, write, batch, and publish Changie release-note fragments. Other repo docs should link here instead of restating the policy.
+
 Release notes come from `.changes/unreleased/*.yaml`, not from commit history. Keep fragments focused on user-facing, operator-facing, or developer-facing changes that should appear in the next changelog entry.
+
+Skip fragments when the diff is only:
+
+- docs-only changes
+- tests-only changes, including API smoke tests and smoke expectations
+- Docker-only or Docker Compose-only changes
+- CI-only changes that do not meaningfully affect operators or contributors
+- repository deployment-metadata-only changes, such as Railway healthcheck timeout tuning, that do not change application runtime behavior or require operators to take action
+- internal refactors with no meaningful external impact
+
+If skipped support files are changed alongside an externally meaningful product, API, config, migration, or runtime change, write the fragment for the externally meaningful change only.
+
+If you are unsure after checking this policy, ask before creating a fragment for a skip-list-only change.
+
+## Agent decision checklist
+
+Before creating a fragment, check the changed files and answer these questions in order:
+
+1. Is the diff only docs, tests, API smoke checks or expectations, Docker or Docker Compose files, CI-only changes, repository deployment metadata with no required operator action, or internal refactors with no external impact?
+   - Yes: do not create a fragment.
+   - No: continue.
+2. Does the change affect public API behavior, GraphQL behavior, runtime behavior, configuration, migrations, deployment behavior, user workflows, or operator workflows?
+   - Yes: create a fragment for that external impact.
+   - No: continue.
+3. Does the change only touch support files from the skip list, but alongside externally meaningful code or schema changes?
+   - Yes: create a fragment for the externally meaningful change only.
+   - No: continue.
+4. Still unsure?
+   - Ask before creating a fragment.
+
+## Changed-file examples
+
+These examples are guidelines, not replacements for the decision checklist:
+
+| Changed files | Fragment? | Why |
+| --- | --- | --- |
+| `README.md`, `docs/**`, or `.agents/**` only | No | Docs-only changes do not need release notes. |
+| `*_test.go`, `tests/**`, or `testdata/**` only | No | Tests-only changes do not affect release behavior. |
+| `tests/api-smoke/**` only | No | API smoke checks and expectations are test coverage, not release behavior. |
+| `Dockerfile`, `docker-compose*.yml`, `docker-compose*.yaml`, or Docker-only support files only | No | Docker-only changes are intentionally excluded from release fragments. |
+| `.github/workflows/**` only | Usually no | CI-only changes are skipped unless they meaningfully change contributor or operator workflow. |
+| `railway.toml` healthcheck timeout tuning only | No | Deployment metadata tuning that requires no operator action does not need release notes. |
+| `internal/graphql/**` or lexicon changes that alter public GraphQL fields, filters, pagination, or errors | Yes | Public API behavior changed. |
+| `internal/database/migrations/**` or repository changes that alter persisted schema or migration behavior | Yes | Operators and downstream users may need to understand the runtime data change. |
+| `internal/config/**`, startup code, or deployment config that changes required environment variables or runtime defaults | Yes | Operators may need to update deployments. |
+| Docker or smoke-test files plus public API/runtime changes | Yes | Write the fragment for the public API/runtime change, not for the support files. |
 
 ## Affects
 
@@ -14,11 +62,39 @@ Recommended values:
 
 - `user` — changes that affect product behavior, APIs, queries, or UX
 - `operator` — changes that affect deployment, configuration, monitoring, or runtime behavior
-- `developer` — changes that affect contributor workflows, tooling, tests, or documentation
+- `developer` — changes that affect release-worthy contributor workflows or tooling; docs-only, tests-only, smoke-only, and Docker-only changes do not need fragments
 
 ## Release-note body guidance
 
-Write the body as a short description of the impact, not the implementation. Good release-note bodies explain what changed, why it matters, and what readers should expect. Bad ones describe internal code paths, file names, or implementation details instead of the visible effect.
+Write the body for someone reading the changelog without the pull request, commit history, or source code open. Good release-note bodies explain:
+
+- what changed
+- why it changed or what problem it solves
+- what readers should expect, do, or watch for
+
+Mention implementation details only when they affect user, operator, or developer behavior. Avoid file names, internal code paths, ticket numbers, or vague summaries that force readers to inspect the PR.
+
+Use enough detail for the size and risk of the change:
+
+- Small fixes or narrow behavior changes can be one clear sentence.
+- New features, meaningful workflow changes, externally relevant refactors, and `breaking`, `deprecated`, or `removed` changes should usually be two to three sentences or one compact paragraph.
+- Operator-facing changes should include configuration, deployment, migration, monitoring, or rollback implications when relevant.
+- Refactor-like changes only need fragments when they have external impact; if they do, explain the rationale and resulting behavior, not the internal rearrangement.
+
+Good examples:
+
+- `Fix OAuth token refresh failures when nonce handling becomes stale so affected users can sign in again without clearing local state.`
+- `Add a curated changelog workflow so release notes can be reviewed before release. Contributors now add focused fragments during feature work, and maintainers batch them into a release PR before publishing.`
+- `Change admin schema behavior so disabled features no longer appear in production queries. This keeps production schemas aligned with the active deployment configuration and avoids exposing fields that cannot return data.`
+- `Rework label ingestion recovery so deployments can handle labeler cursor resets without permanently stalling subscriptions. Operators should still review replayed label data before resetting a subscription cursor.`
+
+Bad examples:
+
+- `Refactor oauth nonce logic`
+- `Update server.go and graphql resolver plumbing`
+- `Add changelog workflow`
+- `Misc fixes`
+- `Implement KAR-123`
 
 ## Kinds
 
@@ -34,8 +110,15 @@ Use these fragment kinds:
 
 ## Contributor workflow
 
-1. Add release-note fragments in feature PRs.
-2. If you need a new entry, create one with:
+1. Check this document before deciding whether a change needs a fragment.
+2. If Changie is not installed locally, install the repo tools:
+
+   ```bash
+   make tools
+   ```
+
+3. Add release-note fragments in feature PRs when this policy says they are needed.
+4. If you need a new entry, create one with:
 
    ```bash
    make changie-new
@@ -47,17 +130,31 @@ Use these fragment kinds:
    changie new
    ```
 
+5. After creating the fragment, rename the generated file in `.changes/unreleased/` to a short descriptive kebab-case title. The filename should describe the release-note topic, not the implementation detail.
+
+   Good filenames:
+
+   - `fix-oauth-refresh-failures.yaml`
+   - `add-admin-schema-toggle.yaml`
+   - `document-curated-changelog-workflow.yaml`
+
+   Bad filenames:
+
+   - `added-20260422-120301.yaml`
+   - `changed-operator-20260422.yaml`
+   - `misc-fix.yaml`
+
 ## Maintainer release workflow
 
-Use two separate manual workflows:
+Run one manual workflow to prepare the release notes PR. After review, merging that PR publishes the release automatically.
 
-- **Prepare release notes PR**
-- **Publish release tag and GitHub Release**
+The **Publish release tag and GitHub Release** workflow remains manually dispatchable from `main` as a fallback when a prepared release file already exists but the automatic publish did not run or did not complete.
 
 ### Decision rule
 
 - If no versioned release file exists yet and `.changes/unreleased/*.yaml` fragments exist, run **Prepare release notes PR**.
-- If a versioned `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` file already exists, run **Publish release tag and GitHub Release**. New unreleased fragments for the next cycle do not block publishing the prepared version.
+- Merge the generated `release/changelog` PR after reviewing the changelog. The release publishes automatically only when the merged PR targets `main`, comes from the same-repository `release/changelog` branch, and has the `release` label.
+- If a versioned `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` file already exists and the automatic publish needs to be retried, run **Publish release tag and GitHub Release** manually from `main`. New unreleased fragments for the next cycle do not block publishing the prepared version.
 
 ### 1. Prepare release notes PR
 
@@ -84,12 +181,12 @@ Use two separate manual workflows:
    ```
 
 7. If Changie does not produce any release diff in `CHANGELOG.md` or `.changes`, the workflow fails.
-8. Otherwise, the workflow creates or updates a PR from `release/changelog` back into `main`.
-9. Inspect the generated changelog diff in that PR before merging.
+8. Otherwise, the workflow ensures the `release` label exists and creates or updates a labeled PR from `release/changelog` back into `main`.
+9. Inspect the generated changelog diff in that PR before merging. Merging this labeled `release/changelog` PR automatically starts publishing.
 
 ### 2. Publish release tag and GitHub Release
 
-1. After the release PR is merged, run **Publish release tag and GitHub Release** from `main`.
+1. The workflow runs automatically after the labeled same-repository `release/changelog` PR is merged into `main`, or manually from `main` as a fallback.
 2. The workflow requires a prepared release file:
 
    - a generated `.changes/vX.Y.Z.md` or `.changes/X.Y.Z.md` release file must exist
@@ -109,7 +206,7 @@ Use two separate manual workflows:
 
 The release workflows use `RELEASE_BOT_TOKEN || GITHUB_TOKEN`.
 
-- **Prepare release notes PR** needs permission to push branch updates and open or update pull requests.
+- **Prepare release notes PR** needs permission to push branch updates, open or update pull requests, and apply the `release` label.
 - **Publish release tag and GitHub Release** needs permission to push tags and create GitHub Releases.
 - If repository settings limit the default `GITHUB_TOKEN`, configure `RELEASE_BOT_TOKEN` with the required write access.
 - Treat `RELEASE_BOT_TOKEN` as a privileged credential. Prefer a fine-grained, repository-scoped token with only the access needed for release branch updates, tag pushes, and GitHub Release creation.
@@ -118,7 +215,7 @@ The publish workflow runs build and test checks in a read-only verification job 
 
 Workflow permissions are intentionally minimal:
 
-- prepare: `contents: write`, `pull-requests: write`
+- prepare: `contents: write`, `issues: write`, `pull-requests: write`
 - publish verification: `contents: read`
 - publish finalization: `contents: write`
 

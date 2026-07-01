@@ -11,9 +11,10 @@ import (
 )
 
 const smokeRecordsQuery = `
-query SmokeRecords($collection: String!, $first: Int!) {
-  records(collection: $collection, first: $first) {
+query SmokeRecords($collection: String!, $first: Int!, $after: String) {
+  records(collection: $collection, first: $first, after: $after) {
     edges {
+      cursor
       node {
         uri
         cid
@@ -23,6 +24,10 @@ query SmokeRecords($collection: String!, $first: Int!) {
         value
       }
     }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
   }
 }`
 
@@ -30,12 +35,19 @@ type recordsQueryResponse struct {
 	Records recordConnection `json:"records"`
 }
 
+type pageInfo struct {
+	HasNextPage bool   `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
+}
+
 type recordConnection struct {
-	Edges []recordEdge `json:"edges"`
+	Edges    []recordEdge `json:"edges"`
+	PageInfo pageInfo     `json:"pageInfo"`
 }
 
 type recordEdge struct {
-	Node Record `json:"node"`
+	Cursor string `json:"cursor"`
+	Node   Record `json:"node"`
 }
 
 type typedByURIRecord struct {
@@ -43,6 +55,14 @@ type typedByURIRecord struct {
 	DID  string `json:"did"`
 	CID  string `json:"cid"`
 	RKey string `json:"rkey"`
+}
+
+type typedRecordConnection struct {
+	Edges []typedRecordEdge `json:"edges"`
+}
+
+type typedRecordEdge struct {
+	Node typedByURIRecord `json:"node"`
 }
 
 func TestRequiredCollectionsAreQueryable(t *testing.T) {
@@ -103,12 +123,66 @@ func TestTypedByURIRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTypedURIWhereFilterRoundTrip(t *testing.T) {
+	config := loadSmokeConfig(t)
+
+	for _, collection := range config.expectations.DataBearingCollections {
+		collection := collection
+		t.Run(collection.NSID, func(t *testing.T) {
+			typedField := config.expectations.TypedQueryFields[collection.NSID]
+			genericResponse := fetchGenericRecords(t, config, collection.NSID, 1)
+			if len(genericResponse.Records.Edges) != 1 {
+				t.Fatalf("records(%q, first: 1) returned %d edges, want exactly 1", collection.NSID, len(genericResponse.Records.Edges))
+			}
+
+			genericRecord := genericResponse.Records.Edges[0].Node
+			assertGenericRecordShape(t, collection.NSID, 0, genericRecord)
+
+			eqRecords := fetchTypedRecordsByURIWhereEQ(t, config, typedField, genericRecord.URI)
+			assertSingleURIWhereMatch(t, typedField+" where.uri.eq", genericRecord, eqRecords)
+
+			inRecords := fetchTypedRecordsByURIWhereIn(t, config, typedField, genericRecord.URI)
+			assertSingleURIWhereMatch(t, typedField+" where.uri.in", genericRecord, inRecords)
+		})
+	}
+
+	smokeLog("✓ Typed uri where filters work for eq and in")
+}
+
 func fetchGenericRecords(t testing.TB, config smokeConfig, collection string, first int) recordsQueryResponse {
 	t.Helper()
+	return fetchGenericRecordsPage(t, config, collection, first, "")
+}
 
+func fetchAllGenericRecords(t testing.TB, config smokeConfig, collection string) []recordEdge {
+	t.Helper()
+
+	var edges []recordEdge
+	after := ""
+	for {
+		page := fetchGenericRecordsPage(t, config, collection, 1000, after)
+		edges = append(edges, page.Records.Edges...)
+		if !page.Records.PageInfo.HasNextPage {
+			return edges
+		}
+		if page.Records.PageInfo.EndCursor == "" {
+			t.Fatalf("records(%q) has next page without an end cursor", collection)
+		}
+		after = page.Records.PageInfo.EndCursor
+	}
+}
+
+func fetchGenericRecordsPage(t testing.TB, config smokeConfig, collection string, first int, after string) recordsQueryResponse {
+	t.Helper()
+
+	var afterValue any
+	if after != "" {
+		afterValue = after
+	}
 	response := postGraphQL(t, context.Background(), config, "SmokeRecords", smokeRecordsQuery, map[string]any{
 		"collection": collection,
 		"first":      first,
+		"after":      afterValue,
 	})
 
 	var decoded recordsQueryResponse
@@ -117,6 +191,70 @@ func fetchGenericRecords(t testing.TB, config smokeConfig, collection string, fi
 	}
 
 	return decoded
+}
+
+func fetchTypedRecordsByURIWhereEQ(t testing.TB, config smokeConfig, typedField string, uri string) []typedByURIRecord {
+	t.Helper()
+
+	query := fmt.Sprintf(`
+query SmokeTypedURIWhereEQ($uri: String!) {
+  %s(first: 2, where: { uri: { eq: $uri } }) {
+    edges {
+      node {
+        uri
+        did
+        cid
+        rkey
+      }
+    }
+  }
+}`, typedField)
+
+	response := postGraphQL(t, context.Background(), config, "SmokeTypedURIWhereEQ", query, map[string]any{
+		"uri": uri,
+	})
+
+	return decodeTypedRecordConnection(t, response, "SmokeTypedURIWhereEQ", typedField, uri)
+}
+
+func fetchTypedRecordsByURIWhereIn(t testing.TB, config smokeConfig, typedField string, uri string) []typedByURIRecord {
+	t.Helper()
+
+	query := fmt.Sprintf(`
+query SmokeTypedURIWhereIn($uris: [String!]) {
+  %s(first: 2, where: { uri: { in: $uris } }) {
+    edges {
+      node {
+        uri
+        did
+        cid
+        rkey
+      }
+    }
+  }
+}`, typedField)
+
+	response := postGraphQL(t, context.Background(), config, "SmokeTypedURIWhereIn", query, map[string]any{
+		"uris": []string{uri},
+	})
+
+	return decodeTypedRecordConnection(t, response, "SmokeTypedURIWhereIn", typedField, uri)
+}
+
+func decodeTypedRecordConnection(t testing.TB, response GraphQLResponse, operationName string, typedField string, uri string) []typedByURIRecord {
+	t.Helper()
+
+	var decoded map[string]typedRecordConnection
+	if err := json.Unmarshal(response.Data, &decoded); err != nil {
+		t.Fatalf("decode %s data for %s uri %q: %v", operationName, typedField, uri, err)
+	}
+
+	connection := decoded[typedField]
+	records := make([]typedByURIRecord, 0, len(connection.Edges))
+	for _, edge := range connection.Edges {
+		records = append(records, edge.Node)
+	}
+	return records
 }
 
 func fetchTypedRecordByURI(t testing.TB, config smokeConfig, typedField string, uri string) *typedByURIRecord {
@@ -179,6 +317,15 @@ func assertGenericRecordShape(t testing.TB, collection string, edgeIndex int, re
 			t.Fatalf("record shape %s: value $type = %q, want %q", location, typeName, collection)
 		}
 	}
+}
+
+func assertSingleURIWhereMatch(t testing.TB, label string, generic Record, records []typedByURIRecord) {
+	t.Helper()
+
+	if len(records) != 1 {
+		t.Fatalf("%s returned %d records for uri %q, want exactly 1", label, len(records), generic.URI)
+	}
+	assertMatchingRecordMetadata(t, label, generic, records[0])
 }
 
 func assertMatchingRecordMetadata(t testing.TB, typedByURIField string, generic Record, typed typedByURIRecord) {

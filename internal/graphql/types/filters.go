@@ -41,6 +41,28 @@ var StringFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	},
 })
 
+// ExactStringFilterInput is a GraphQL InputObject for exact string matching.
+// Use it for nested JSON fields where substring operators would be expensive or
+// ambiguous. Top-level string properties continue to use StringFilterInput.
+var ExactStringFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "ExactStringFilterInput",
+	Description: "Exact filter conditions for string fields",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"eq": &graphql.InputObjectFieldConfig{
+			Type:        graphql.String,
+			Description: "Equal to",
+		},
+		"in": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewList(graphql.NewNonNull(graphql.String)),
+			Description: "Value is in list",
+		},
+		"isNull": &graphql.InputObjectFieldConfig{
+			Type:        graphql.Boolean,
+			Description: "Field is null",
+		},
+	},
+})
+
 // IntFilterInput is a GraphQL InputObject for filtering integer fields.
 var IntFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	Name:        "IntFilterInput",
@@ -117,10 +139,72 @@ var FloatFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	},
 })
 
+// ExactIntFilterInput is a GraphQL InputObject for exact integer matching.
+// Use it for nested integer fields where range operators are intentionally not
+// exposed in the first nested-filter slice.
+var ExactIntFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "ExactIntFilterInput",
+	Description: "Exact filter conditions for integer fields",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"eq": &graphql.InputObjectFieldConfig{
+			Type:        graphql.Int,
+			Description: "Equal to",
+		},
+		"in": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewList(graphql.NewNonNull(graphql.Int)),
+			Description: "Value is in list",
+		},
+		"isNull": &graphql.InputObjectFieldConfig{
+			Type:        graphql.Boolean,
+			Description: "Field is null",
+		},
+	},
+})
+
+// ExactFloatFilterInput is a GraphQL InputObject for exact floating-point matching.
+// Use it for nested number fields where range operators are intentionally not
+// exposed in the first nested-filter slice.
+var ExactFloatFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "ExactFloatFilterInput",
+	Description: "Exact filter conditions for float fields",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"eq": &graphql.InputObjectFieldConfig{
+			Type:        graphql.Float,
+			Description: "Equal to",
+		},
+		"in": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewList(graphql.NewNonNull(graphql.Float)),
+			Description: "Value is in list",
+		},
+		"isNull": &graphql.InputObjectFieldConfig{
+			Type:        graphql.Boolean,
+			Description: "Field is null",
+		},
+	},
+})
+
 // BooleanFilterInput is a GraphQL InputObject for filtering boolean fields.
 var BooleanFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	Name:        "BooleanFilterInput",
 	Description: "Filter conditions for boolean fields",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"eq": &graphql.InputObjectFieldConfig{
+			Type:        graphql.Boolean,
+			Description: "Equal to",
+		},
+		"isNull": &graphql.InputObjectFieldConfig{
+			Type:        graphql.Boolean,
+			Description: "Field is null",
+		},
+	},
+})
+
+// ExactBooleanFilterInput is a GraphQL InputObject for exact boolean matching.
+// Use it for nested boolean fields where only equality and null checks are
+// supported.
+var ExactBooleanFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "ExactBooleanFilterInput",
+	Description: "Exact filter conditions for boolean fields",
 	Fields: graphql.InputObjectConfigFieldMap{
 		"eq": &graphql.InputObjectFieldConfig{
 			Type:        graphql.Boolean,
@@ -169,12 +253,53 @@ var DateTimeFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	},
 })
 
-// DIDFilterInput is a restricted GraphQL InputObject for filtering DID fields.
-// DID is a column-level filter (not a JSON field), so only eq and in are meaningful.
+// ExactDateTimeFilterInput is a GraphQL InputObject for exact datetime matching.
+// Use it for nested datetime fields where range operators are intentionally not
+// exposed in the first nested-filter slice.
+var ExactDateTimeFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "ExactDateTimeFilterInput",
+	Description: "Exact filter conditions for datetime fields",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"eq": &graphql.InputObjectFieldConfig{
+			Type:        DateTimeScalar,
+			Description: "Equal to",
+		},
+		"in": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewList(graphql.NewNonNull(DateTimeScalar)),
+			Description: "Value is in list",
+		},
+		"isNull": &graphql.InputObjectFieldConfig{
+			Type:        graphql.Boolean,
+			Description: "Field is null",
+		},
+	},
+})
+
+// DIDFilterInput is a restricted GraphQL InputObject for filtering DID values.
+// Root record-author DID filters are applied to the DID column; virtual DID
+// filters may compile to JSON or specialized SQL. Only eq and in are meaningful.
 // Operators like contains or startsWith are not supported for DIDs.
 var DIDFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
 	Name:        "DIDFilterInput",
 	Description: "Filter conditions for DID fields (column-level). Only eq and in are supported.",
+	Fields: graphql.InputObjectConfigFieldMap{
+		"eq": &graphql.InputObjectFieldConfig{
+			Type:        graphql.String,
+			Description: "Equals",
+		},
+		"in": &graphql.InputObjectFieldConfig{
+			Type:        graphql.NewList(graphql.NewNonNull(graphql.String)),
+			Description: "In list",
+		},
+	},
+})
+
+// URIFilterInput is a restricted GraphQL InputObject for filtering AT-URI
+// metadata fields. URI filters are column-level filters, so exact matching and
+// batched lookup are supported while substring matching is intentionally not.
+var URIFilterInput = graphql.NewInputObject(graphql.InputObjectConfig{
+	Name:        "URIFilterInput",
+	Description: "Filter conditions for AT-URI metadata fields. Only eq and in are supported.",
 	Fields: graphql.InputObjectConfigFieldMap{
 		"eq": &graphql.InputObjectFieldConfig{
 			Type:        graphql.String,
@@ -218,6 +343,28 @@ func FilterInputForLexiconType(lexiconType, format string) *graphql.InputObject 
 		return FloatFilterInput
 	case lexicon.TypeBoolean:
 		return BooleanFilterInput
+	default:
+		return nil
+	}
+}
+
+// ExactFilterInputForLexiconType maps scalar lexicon property types and formats
+// to exact-match filter inputs. Nested filters use this narrower operator set so
+// generated complex-field filters stay predictable and avoid expensive substring
+// matching in JSON paths.
+func ExactFilterInputForLexiconType(lexiconType, format string) *graphql.InputObject {
+	switch lexiconType {
+	case lexicon.TypeString:
+		if format == lexicon.FormatDatetime {
+			return ExactDateTimeFilterInput
+		}
+		return ExactStringFilterInput
+	case lexicon.TypeInteger:
+		return ExactIntFilterInput
+	case "number":
+		return ExactFloatFilterInput
+	case lexicon.TypeBoolean:
+		return ExactBooleanFilterInput
 	default:
 		return nil
 	}

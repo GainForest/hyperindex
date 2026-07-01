@@ -4,6 +4,7 @@ package repositories
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,7 +16,7 @@ import (
 
 // Batch size constants for SQL operations.
 const (
-	// BatchInsertSize is the number of records per INSERT batch (5 params each = 500 SQL params).
+	// BatchInsertSize is the number of records per INSERT batch (6 params each = 600 SQL params).
 	BatchInsertSize = 100
 
 	// SQLParamBatchSize is the batch size for IN-clause queries, kept under SQLite's 999 param limit.
@@ -34,6 +35,16 @@ const (
 	// It does not, by itself, guarantee the overall query stays within SQLite's
 	// aggregate parameter limit when combined with other bound arguments.
 	MaxINListSize = 100
+
+	// MaxRecordTimelineAuthors is the largest author DID set accepted by the
+	// record timeline API. SQLite timeline queries bind the set as JSON to stay
+	// below SQLite's aggregate parameter limit while preserving one global page.
+	MaxRecordTimelineAuthors = 1000
+
+	// MaxRecordTimelineCollections is the largest explicit collection set accepted
+	// by record timeline queries. Callers must choose collections so timeline
+	// queries do not scan every indexed collection by default.
+	MaxRecordTimelineCollections = 25
 
 	// MaxFilterConditions is the maximum number of individual filter conditions allowed per query.
 	// The DID filter does not count toward this cap.
@@ -54,12 +65,61 @@ type Record struct {
 	RKey       string
 }
 
-// FieldFilter represents a single filter condition on a JSON field.
+// RecordTimelineCursor identifies a position in the creation-time record
+// timeline. CreatedAt must use the repository's normalized UTC timestamp format
+// so SQLite text comparisons and PostgreSQL timestamptz comparisons behave the
+// same way.
+type RecordTimelineCursor struct {
+	CreatedAt string
+	URI       string
+}
+
+// RecordTimelineRecord is a current AT Protocol record returned by the generic
+// creation-time timeline query. RecordCreatedAt is the materialized top-level
+// record JSON createdAt timestamp used for ordering and cursor generation.
+type RecordTimelineRecord struct {
+	Record
+	RecordCreatedAt time.Time
+}
+
+// FieldFilterTarget identifies where a record field filter reads its value
+// from. Use JSON for lexicon-defined record properties, Column only for
+// generated metadata filters that intentionally target record table columns, and
+// explicit collection filter extensions for hand-authored product queries that
+// are not expressible as same-record lexicon JSON paths.
+type FieldFilterTarget string
+
+const (
+	// FieldFilterTargetJSON reads from the record JSON payload. It is also the
+	// default when FieldFilter.Target is empty, which keeps older callers on the
+	// safe lexicon-property path.
+	FieldFilterTargetJSON FieldFilterTarget = "json"
+
+	// FieldFilterTargetColumn reads from a whitelisted metadata column on the
+	// record table. Use it only for generated metadata filters such as uri.
+	FieldFilterTargetColumn FieldFilterTarget = "column"
+
+	// FieldFilterTargetContributorDID is a narrow compatibility filter for
+	// org.hypercerts.claim.activity contributor lookups. It matches inline
+	// contributor DID strings and contributorInformation strongRefs whose target
+	// record has a matching identifier.
+	FieldFilterTargetContributorDID FieldFilterTarget = "contributor_did"
+
+	// FieldFilterTargetBadgeAwardBadgeType is a collection filter extension for
+	// app.certified.badge.award. It reads the award's badge strongRef URI and
+	// filters against the referenced app.certified.badge.definition badgeType.
+	FieldFilterTargetBadgeAwardBadgeType FieldFilterTarget = "badge_award_badge_type"
+)
+
+// FieldFilter represents a single condition on a filterable record field.
 type FieldFilter struct {
-	Field     string      // JSON field name (e.g., "title", "createdAt"). Must be a valid field name.
-	Operator  string      // One of: "eq", "neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith", "isNull"
-	Value     interface{} // The comparison value. For "in", must be []interface{}. For "isNull", must be bool.
-	FieldType string      // Lexicon type used for SQL casting. Numeric types are cast; complex types are presence-filtered with isNull.
+	Field     string            // Field name for diagnostics. JSON targets use a top-level JSON property unless Path is set; column targets use a whitelisted metadata column.
+	Path      []string          // Optional JSON path from the record root for nested filters. Empty means Field is the JSON path.
+	ArrayPath []string          // Optional JSON path to an array field whose elements should be searched with any-semantics. Filters with the same ArrayPath are correlated against the same array element; Path is evaluated relative to that element.
+	Operator  string            // One of: "eq", "neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith", "isNull"
+	Value     interface{}       // The comparison value. For "in", must be []interface{}. For "isNull", must be bool.
+	FieldType string            // Lexicon type used for SQL casting. Numeric types are cast; complex types are presence-filtered with isNull.
+	Target    FieldFilterTarget // Where to read Field from. Empty means FieldFilterTargetJSON.
 }
 
 // DIDFilter represents a filter on the did column.
@@ -92,9 +152,10 @@ type ExternalLabelPredicate struct {
 	ActiveOnly bool
 }
 
-// ExternalLabelRecordFilter applies external-label existence predicates to
-// record queries. Has keeps records with a matching label. None excludes records
-// with a matching label. When both are set, both conditions must hold.
+// ExternalLabelRecordFilter applies external-label existence predicates to one
+// bound label subject in record queries. Has keeps records with a matching
+// label. None excludes records with a matching label. When both are set, both
+// conditions must hold.
 type ExternalLabelRecordFilter struct {
 	Has  *ExternalLabelPredicate
 	None *ExternalLabelPredicate
@@ -103,6 +164,26 @@ type ExternalLabelRecordFilter struct {
 // IsEmpty reports whether no external-label conditions are configured.
 func (f ExternalLabelRecordFilter) IsEmpty() bool {
 	return f.Has == nil && f.None == nil
+}
+
+type externalLabelSubject int
+
+const (
+	externalLabelSubjectRecord externalLabelSubject = iota
+	externalLabelSubjectAuthor
+)
+
+// ExternalLabelFilterSet groups external-label predicates by subject binding.
+// Record powers where.externalLabels; Author powers where.authorLabels.
+type ExternalLabelFilterSet struct {
+	Record ExternalLabelRecordFilter
+	Author ExternalLabelRecordFilter
+}
+
+// IsEmpty reports whether no external-label conditions are configured for any
+// subject binding.
+func (f ExternalLabelFilterSet) IsEmpty() bool {
+	return f.Record.IsEmpty() && f.Author.IsEmpty()
 }
 
 // SortOption specifies a sort field and direction for record queries.
@@ -150,6 +231,14 @@ func NewRecordsRepository(db database.Executor) *RecordsRepository {
 	return &RecordsRepository{db: db}
 }
 
+func recordCreatedAtValue(recordJSON string) database.Value {
+	createdAt, ok := atproto.NormalizeRecordCreatedAt(recordJSON)
+	if !ok {
+		return database.NullValue{}
+	}
+	return database.TimestamptzValue(createdAt)
+}
+
 // validateSQLiteAggregateParameterCount ensures SQLite queries stay within the
 // hard per-query parameter limit. Non-SQLite dialects are not capped here.
 func (r *RecordsRepository) validateSQLiteAggregateParameterCount(paramCount int) error {
@@ -177,8 +266,10 @@ func (r *RecordsRepository) recordColumns() string {
 // Insert inserts or updates a record in the database.
 // Skips if the CID already exists (content unchanged).
 func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collection, jsonData string) (InsertResult, error) {
-	// Check if URI exists with same CID
-	existingCID, err := r.getCIDByURI(ctx, uri)
+	createdAtValue := recordCreatedAtValue(jsonData)
+
+	// Check if URI exists with same CID.
+	existingCID, existingHasRecordCreatedAt, err := r.getCIDAndRecordCreatedAtByURI(ctx, uri)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Skipped, err
 	}
@@ -187,6 +278,11 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 	// If cid == "" (omitted by Tap for some events), always proceed with the
 	// upsert so new records aren't silently dropped by the "" == "" comparison.
 	if cid != "" && existingCID == cid {
+		if !existingHasRecordCreatedAt {
+			if err := r.fillMissingRecordCreatedAt(ctx, uri, createdAtValue); err != nil {
+				return Skipped, err
+			}
+		}
 		return Skipped, nil // Content unchanged
 	}
 
@@ -195,23 +291,26 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 	p3 := r.db.Placeholder(3)
 	p4 := r.db.Placeholder(4)
 	p5 := r.db.Placeholder(5)
+	p6 := r.db.Placeholder(6)
 
 	var sqlStr string
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
-		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json)
-			VALUES (%s, %s, %s, %s, %s::jsonb)
+		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json, record_created_at)
+			VALUES (%s, %s, %s, %s, %s::jsonb, %s::timestamptz)
 			ON CONFLICT(uri) DO UPDATE SET
 				cid = EXCLUDED.cid,
 				json = EXCLUDED.json,
-				indexed_at = NOW()`, p1, p2, p3, p4, p5)
+				indexed_at = NOW(),
+				record_created_at = COALESCE(record.record_created_at, EXCLUDED.record_created_at)`, p1, p2, p3, p4, p5, p6)
 	default:
-		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json)
-			VALUES (%s, %s, %s, %s, %s)
+		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json, record_created_at)
+			VALUES (%s, %s, %s, %s, %s, %s)
 			ON CONFLICT(uri) DO UPDATE SET
 				cid = excluded.cid,
 				json = excluded.json,
-				indexed_at = datetime('now')`, p1, p2, p3, p4, p5)
+				indexed_at = datetime('now'),
+				record_created_at = COALESCE(record.record_created_at, excluded.record_created_at)`, p1, p2, p3, p4, p5, p6)
 	}
 
 	_, err = r.db.Exec(ctx, sqlStr, []database.Value{
@@ -220,6 +319,7 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 		database.Text(did),
 		database.Text(collection),
 		database.Text(jsonData),
+		createdAtValue,
 	})
 	if err != nil {
 		return Skipped, err
@@ -270,45 +370,49 @@ func (r *RecordsRepository) insertBatchTx(ctx context.Context, tx *sql.Tx, recor
 	var args []any
 
 	for i, rec := range records {
-		base := i * 5
+		base := i * 6
 		var valueSet string
 
 		if r.db.Dialect() == database.PostgreSQL {
-			valueSet = fmt.Sprintf("(%s, %s, %s, %s, %s::jsonb)",
+			valueSet = fmt.Sprintf("(%s, %s, %s, %s, %s::jsonb, %s::timestamptz)",
 				r.db.Placeholder(base+1),
 				r.db.Placeholder(base+2),
 				r.db.Placeholder(base+3),
 				r.db.Placeholder(base+4),
-				r.db.Placeholder(base+5))
+				r.db.Placeholder(base+5),
+				r.db.Placeholder(base+6))
 		} else {
-			valueSet = fmt.Sprintf("(%s, %s, %s, %s, %s)",
+			valueSet = fmt.Sprintf("(%s, %s, %s, %s, %s, %s)",
 				r.db.Placeholder(base+1),
 				r.db.Placeholder(base+2),
 				r.db.Placeholder(base+3),
 				r.db.Placeholder(base+4),
-				r.db.Placeholder(base+5))
+				r.db.Placeholder(base+5),
+				r.db.Placeholder(base+6))
 		}
 		valueSets = append(valueSets, valueSet)
 
-		args = append(args, rec.URI, rec.CID, rec.DID, rec.Collection, rec.JSON)
+		args = append(args, rec.URI, rec.CID, rec.DID, rec.Collection, rec.JSON, r.db.ConvertParams([]database.Value{recordCreatedAtValue(rec.JSON)})[0])
 	}
 
 	var sqlStr string
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
-		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json)
+		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json, record_created_at)
 			VALUES %s
 			ON CONFLICT(uri) DO UPDATE SET
 				cid = EXCLUDED.cid,
 				json = EXCLUDED.json,
-				indexed_at = NOW()`, strings.Join(valueSets, ", "))
+				indexed_at = NOW(),
+				record_created_at = COALESCE(record.record_created_at, EXCLUDED.record_created_at)`, strings.Join(valueSets, ", "))
 	default:
-		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json)
+		sqlStr = fmt.Sprintf(`INSERT INTO record (uri, cid, did, collection, json, record_created_at)
 			VALUES %s
 			ON CONFLICT(uri) DO UPDATE SET
 				cid = excluded.cid,
 				json = excluded.json,
-				indexed_at = datetime('now')`, strings.Join(valueSets, ", "))
+				indexed_at = datetime('now'),
+				record_created_at = COALESCE(record.record_created_at, excluded.record_created_at)`, strings.Join(valueSets, ", "))
 	}
 
 	_, err := tx.ExecContext(ctx, sqlStr, args...)
@@ -338,22 +442,142 @@ func (r *RecordsRepository) GetByURIs(ctx context.Context, uris []string) ([]*Re
 		return nil, nil
 	}
 
-	placeholders := r.db.Placeholders(len(uris), 1)
-	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE uri IN (%s)",
-		r.recordColumns(), placeholders)
+	records := make([]*Record, 0, len(uris))
+	for start := 0; start < len(uris); start += SQLParamBatchSize {
+		end := start + SQLParamBatchSize
+		if end > len(uris) {
+			end = len(uris)
+		}
+		batch := uris[start:end]
 
-	params := make([]database.Value, len(uris))
-	for i, uri := range uris {
-		params[i] = database.Text(uri)
+		placeholders := r.db.Placeholders(len(batch), 1)
+		sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE uri IN (%s)",
+			r.recordColumns(), placeholders)
+
+		params := make([]database.Value, len(batch))
+		for i, uri := range batch {
+			params[i] = database.Text(uri)
+		}
+
+		rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+		if err != nil {
+			return nil, err
+		}
+		batchRecords, scanErr := scanRecords(rows)
+		closeErr := rows.Close()
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		records = append(records, batchRecords...)
 	}
 
-	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+	return records, nil
+}
+
+// GetRecordTimeline returns one creation-time page of current records across
+// explicit collections and an optional author set. Nil authors means no author
+// filter; an empty author slice returns no rows. Rows are ordered by
+// record_created_at DESC, uri DESC and use the same tuple for keyset cursors.
+func (r *RecordsRepository) GetRecordTimeline(ctx context.Context, authors, collections []string, limit int, after *RecordTimelineCursor) ([]*RecordTimelineRecord, error) {
+	if limit <= 0 || len(collections) == 0 {
+		return nil, nil
+	}
+	if authors != nil && len(authors) == 0 {
+		return nil, nil
+	}
+
+	var conditions []string
+	var params []database.Value
+	nextPlaceholder := 1
+
+	conditions = append(conditions, "record_created_at IS NOT NULL")
+	if r.db.Dialect() == database.SQLite {
+		conditions = append(conditions, "json_valid(json)")
+	}
+
+	collectionCondition, collectionParams, consumed, err := r.timelineSetCondition("collection", collections, nextPlaceholder)
 	if err != nil {
 		return nil, err
 	}
+	conditions = append(conditions, collectionCondition)
+	params = append(params, collectionParams...)
+	nextPlaceholder += consumed
+
+	if authors != nil {
+		authorCondition, authorParams, consumed, err := r.timelineSetCondition("did", authors, nextPlaceholder)
+		if err != nil {
+			return nil, err
+		}
+		conditions = append(conditions, authorCondition)
+		params = append(params, authorParams...)
+		nextPlaceholder += consumed
+	}
+
+	if after != nil {
+		createdAtPlaceholder := r.recordCreatedAtCursorValueExpr(r.db.Placeholder(nextPlaceholder))
+		createdAtAgainPlaceholder := r.recordCreatedAtCursorValueExpr(r.db.Placeholder(nextPlaceholder + 1))
+		uriPlaceholder := r.db.Placeholder(nextPlaceholder + 2)
+		conditions = append(conditions, fmt.Sprintf("(record_created_at < %s OR (record_created_at = %s AND uri < %s))", createdAtPlaceholder, createdAtAgainPlaceholder, uriPlaceholder))
+		params = append(params, database.TimestamptzValue(after.CreatedAt), database.TimestamptzValue(after.CreatedAt), database.Text(after.URI))
+		nextPlaceholder += 3
+	}
+
+	limitPlaceholder := r.db.Placeholder(nextPlaceholder)
+	params = append(params, database.IntValue(int64(limit)))
+
+	sqlStr := fmt.Sprintf(`SELECT %s
+		FROM record
+		WHERE %s
+		ORDER BY record_created_at DESC, uri DESC
+		LIMIT %s`, r.recordTimelineColumns(), strings.Join(conditions, " AND "), limitPlaceholder)
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query record timeline: %w", err)
+	}
 	defer rows.Close()
 
-	return scanRecords(rows)
+	return scanRecordTimelineRecords(rows)
+}
+
+func (r *RecordsRepository) recordTimelineColumns() string {
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		return "uri, cid, did, collection, json::text, indexed_at::text, rkey, record_created_at::text"
+	default:
+		return "uri, cid, did, collection, json, indexed_at, rkey, record_created_at"
+	}
+}
+
+func (r *RecordsRepository) recordCreatedAtCursorValueExpr(placeholder string) string {
+	if r.db.Dialect() == database.PostgreSQL {
+		return fmt.Sprintf("%s::timestamptz", placeholder)
+	}
+	return placeholder
+}
+
+func (r *RecordsRepository) timelineSetCondition(column string, values []string, startPlaceholder int) (string, []database.Value, int, error) {
+	if len(values) == 0 {
+		return "", nil, 0, fmt.Errorf("%s set must not be empty", column)
+	}
+
+	if r.db.Dialect() == database.SQLite {
+		encoded, err := json.Marshal(values)
+		if err != nil {
+			return "", nil, 0, fmt.Errorf("failed to encode %s set: %w", column, err)
+		}
+		return fmt.Sprintf("%s IN (SELECT value FROM json_each(%s))", column, r.db.Placeholder(startPlaceholder)), []database.Value{database.Text(string(encoded))}, 1, nil
+	}
+
+	placeholders := r.db.Placeholders(len(values), startPlaceholder)
+	params := make([]database.Value, len(values))
+	for i, value := range values {
+		params[i] = database.Text(value)
+	}
+	return fmt.Sprintf("%s IN (%s)", column, placeholders), params, len(values), nil
 }
 
 // GetByCollection retrieves records for a specific collection.
@@ -437,95 +661,387 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 	var params []database.Value
 	placeholderIdx := startPlaceholder
 
-	for _, f := range filters {
-		extract := r.db.JSONExtract("json", f.Field)
-
-		// Wrap numeric types in a CAST for proper comparison
-		isNumeric := f.FieldType == "integer" || f.FieldType == "number"
-		if isNumeric {
-			switch r.db.Dialect() {
-			case database.PostgreSQL:
-				extract = fmt.Sprintf("(%s)::numeric", extract)
-			default:
-				extract = fmt.Sprintf("CAST(%s AS REAL)", extract)
-			}
-		}
-
-		switch f.Operator {
-		case "eq":
-			conditions = append(conditions, fmt.Sprintf("%s = %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "neq":
-			conditions = append(conditions, fmt.Sprintf("%s != %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "gt":
-			conditions = append(conditions, fmt.Sprintf("%s > %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "lt":
-			conditions = append(conditions, fmt.Sprintf("%s < %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "gte":
-			conditions = append(conditions, fmt.Sprintf("%s >= %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "lte":
-			conditions = append(conditions, fmt.Sprintf("%s <= %s", extract, r.db.Placeholder(placeholderIdx)))
-			params = append(params, toDBValue(f.Value))
-			placeholderIdx++
-		case "contains":
-			likeOp := "LIKE"
-			if r.db.Dialect() == database.PostgreSQL {
-				likeOp = "ILIKE"
-			}
-			conditions = append(conditions, fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)))
-			val := fmt.Sprintf("%%%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
-			params = append(params, database.Text(val))
-			placeholderIdx++
-		case "startsWith":
-			likeOp := "LIKE"
-			if r.db.Dialect() == database.PostgreSQL {
-				likeOp = "ILIKE"
-			}
-			conditions = append(conditions, fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)))
-			val := fmt.Sprintf("%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
-			params = append(params, database.Text(val))
-			placeholderIdx++
-		case "isNull":
-			isNull, ok := f.Value.(bool)
-			if !ok {
-				return "", nil, fmt.Errorf("isNull filter on field %q must be a boolean, got %T", f.Field, f.Value)
-			}
-			if isNull {
-				conditions = append(conditions, fmt.Sprintf("%s IS NULL", extract))
-			} else {
-				conditions = append(conditions, fmt.Sprintf("%s IS NOT NULL", extract))
-			}
-		case "in":
-			inVals, _ := f.Value.([]interface{})
-			if len(inVals) == 0 {
-				// Empty IN list — always false
-				conditions = append(conditions, "1 = 0")
+	processedArrayGroups := make(map[string]bool)
+	for i, f := range filters {
+		if isArrayAnyFilter(f) {
+			groupKey := arrayFilterGroupKey(f)
+			if processedArrayGroups[groupKey] {
 				continue
 			}
-			if len(inVals) > MaxINListSize {
-				return "", nil, fmt.Errorf("IN filter on field %q exceeds maximum of %d values", f.Field, MaxINListSize)
+			processedArrayGroups[groupKey] = true
+
+			arrayFilters := make([]FieldFilter, 0, len(filters)-i)
+			for _, candidate := range filters[i:] {
+				if arrayFilterGroupKey(candidate) == groupKey {
+					arrayFilters = append(arrayFilters, candidate)
+				}
 			}
-			placeholders := r.db.Placeholders(len(inVals), placeholderIdx)
-			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", extract, placeholders))
-			for _, v := range inVals {
-				params = append(params, toDBValue(v))
-				placeholderIdx++
+
+			condition, conditionParams, consumed, err := r.buildArrayAnyFilterCondition(arrayFilters, placeholderIdx, i)
+			if err != nil {
+				return "", nil, err
 			}
-		default:
-			return "", nil, fmt.Errorf("unsupported filter operator %q for field %q", f.Operator, f.Field)
+			conditions = append(conditions, condition)
+			params = append(params, conditionParams...)
+			placeholderIdx += consumed
+			continue
 		}
+
+		condition, conditionParams, consumed, err := r.buildFieldFilterCondition(f, placeholderIdx, i)
+		if err != nil {
+			return "", nil, err
+		}
+		conditions = append(conditions, condition)
+		params = append(params, conditionParams...)
+		placeholderIdx += consumed
 	}
 
 	return strings.Join(conditions, " AND "), params, nil
+}
+
+func isArrayAnyFilter(f FieldFilter) bool {
+	return (f.Target == "" || f.Target == FieldFilterTargetJSON) && len(f.ArrayPath) > 0
+}
+
+func arrayFilterGroupKey(f FieldFilter) string {
+	if !isArrayAnyFilter(f) {
+		return ""
+	}
+	return strings.Join(f.ArrayPath, "\x00")
+}
+
+func (r *RecordsRepository) buildFieldFilterCondition(f FieldFilter, placeholderIdx, filterIndex int) (string, []database.Value, int, error) {
+	switch f.Target {
+	case FieldFilterTargetContributorDID:
+		return r.buildContributorDIDFilterCondition(f, placeholderIdx)
+	case FieldFilterTargetBadgeAwardBadgeType:
+		return r.buildBadgeAwardBadgeTypeFilterCondition(f, placeholderIdx)
+	case "", FieldFilterTargetJSON:
+		if len(f.ArrayPath) > 0 {
+			return r.buildArrayAnyFilterCondition([]FieldFilter{f}, placeholderIdx, filterIndex)
+		}
+	}
+
+	extract, err := r.filterFieldExpr(f)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	return r.buildScalarFilterCondition(extract, f, placeholderIdx)
+}
+
+func (r *RecordsRepository) buildScalarFilterCondition(extract string, f FieldFilter, placeholderIdx int) (string, []database.Value, int, error) {
+	// Wrap numeric types in a CAST for proper comparison.
+	isNumeric := f.FieldType == "integer" || f.FieldType == "number"
+	if isNumeric {
+		switch r.db.Dialect() {
+		case database.PostgreSQL:
+			extract = fmt.Sprintf("(%s)::numeric", extract)
+		default:
+			extract = fmt.Sprintf("CAST(%s AS REAL)", extract)
+		}
+	}
+
+	switch f.Operator {
+	case "eq":
+		return fmt.Sprintf("%s = %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "neq":
+		return fmt.Sprintf("%s != %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "gt":
+		return fmt.Sprintf("%s > %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "lt":
+		return fmt.Sprintf("%s < %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "gte":
+		return fmt.Sprintf("%s >= %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "lte":
+		return fmt.Sprintf("%s <= %s", extract, r.db.Placeholder(placeholderIdx)), []database.Value{toDBValue(f.Value)}, 1, nil
+	case "contains":
+		likeOp := "LIKE"
+		if r.db.Dialect() == database.PostgreSQL {
+			likeOp = "ILIKE"
+		}
+		val := fmt.Sprintf("%%%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
+		return fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)), []database.Value{database.Text(val)}, 1, nil
+	case "startsWith":
+		likeOp := "LIKE"
+		if r.db.Dialect() == database.PostgreSQL {
+			likeOp = "ILIKE"
+		}
+		val := fmt.Sprintf("%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
+		return fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)), []database.Value{database.Text(val)}, 1, nil
+	case "isNull":
+		isNull, ok := f.Value.(bool)
+		if !ok {
+			return "", nil, 0, fmt.Errorf("isNull filter on field %q must be a boolean, got %T", f.Field, f.Value)
+		}
+		if isNull {
+			return fmt.Sprintf("%s IS NULL", extract), nil, 0, nil
+		}
+		return fmt.Sprintf("%s IS NOT NULL", extract), nil, 0, nil
+	case "in":
+		inVals, ok := f.Value.([]interface{})
+		if !ok {
+			return "", nil, 0, fmt.Errorf("IN filter on field %q must be a list, got %T", f.Field, f.Value)
+		}
+		if len(inVals) == 0 {
+			return "1 = 0", nil, 0, nil
+		}
+		if len(inVals) > MaxINListSize {
+			return "", nil, 0, fmt.Errorf("IN filter on field %q exceeds maximum of %d values", f.Field, MaxINListSize)
+		}
+		placeholders := r.db.Placeholders(len(inVals), placeholderIdx)
+		params := make([]database.Value, 0, len(inVals))
+		for _, v := range inVals {
+			params = append(params, toDBValue(v))
+		}
+		return fmt.Sprintf("%s IN (%s)", extract, placeholders), params, len(params), nil
+	default:
+		return "", nil, 0, fmt.Errorf("unsupported filter operator %q for field %q", f.Operator, f.Field)
+	}
+}
+
+func (r *RecordsRepository) buildArrayAnyFilterCondition(filters []FieldFilter, placeholderIdx, filterIndex int) (string, []database.Value, int, error) {
+	if len(filters) == 0 {
+		return "", nil, 0, fmt.Errorf("array any filter requires at least one condition")
+	}
+
+	first := filters[0]
+	alias := fmt.Sprintf("nested_filter_%d", filterIndex)
+	arrayExpr := r.jsonValuePathExpr("record.json", first.ArrayPath)
+	innerConditions := make([]string, 0, len(filters))
+	params := make([]database.Value, 0, len(filters))
+	consumed := 0
+
+	for _, f := range filters {
+		if !isArrayAnyFilter(f) || !sameStringSlice(f.ArrayPath, first.ArrayPath) {
+			return "", nil, 0, fmt.Errorf("array any filters must share one JSON array path")
+		}
+
+		innerExpr := r.jsonTextPathExpr(alias+".value", f.Path)
+		innerCondition, innerParams, innerConsumed, err := r.buildScalarFilterCondition(innerExpr, f, placeholderIdx+consumed)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		innerConditions = append(innerConditions, innerCondition)
+		params = append(params, innerParams...)
+		consumed += innerConsumed
+	}
+	innerCondition := strings.Join(innerConditions, " AND ")
+
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		safeArrayExpr := fmt.Sprintf("CASE WHEN jsonb_typeof(%s) = 'array' THEN %s ELSE '[]'::jsonb END", arrayExpr, arrayExpr)
+		return fmt.Sprintf("EXISTS (SELECT 1 FROM jsonb_array_elements(%s) AS %s(value) WHERE %s)", safeArrayExpr, alias, innerCondition), params, consumed, nil
+	default:
+		arrayTypeExpr := r.sqliteJSONTypePathExpr("record.json", first.ArrayPath)
+		safeArrayExpr := fmt.Sprintf("CASE WHEN %s = 'array' THEN %s ELSE '[]' END", arrayTypeExpr, arrayExpr)
+		return fmt.Sprintf("%s = 'array' AND EXISTS (SELECT 1 FROM json_each(%s) AS %s WHERE %s)", arrayTypeExpr, safeArrayExpr, alias, innerCondition), params, consumed, nil
+	}
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *RecordsRepository) jsonTextPathExpr(column string, path []string) string {
+	if len(path) == 0 {
+		if r.db.Dialect() == database.PostgreSQL {
+			return fmt.Sprintf("%s #>> '{}'", column)
+		}
+		return column
+	}
+	if r.db.Dialect() != database.PostgreSQL {
+		return fmt.Sprintf("CASE WHEN json_valid(%s) THEN %s ELSE NULL END", column, r.db.JSONExtractPath(column, path))
+	}
+	return r.db.JSONExtractPath(column, path)
+}
+
+func (r *RecordsRepository) sqliteJSONTypePathExpr(column string, path []string) string {
+	_ = r.db.JSONExtractPath(column, path)
+	return fmt.Sprintf("json_type(%s, '%s')", column, sqliteJSONPath(path))
+}
+
+func sqliteJSONPath(path []string) string {
+	if len(path) == 0 {
+		return "$"
+	}
+	return "$." + strings.Join(path, ".")
+}
+
+func (r *RecordsRepository) jsonValuePathExpr(column string, path []string) string {
+	if len(path) == 0 {
+		return column
+	}
+
+	// Reuse the executor's path validation before building dialect-specific JSON
+	// value expressions.
+	_ = r.db.JSONExtractPath(column, path)
+
+	if r.db.Dialect() != database.PostgreSQL {
+		return r.db.JSONExtractPath(column, path)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(column)
+	for _, segment := range path {
+		sb.WriteString("->'")
+		sb.WriteString(segment)
+		sb.WriteString("'")
+	}
+	return sb.String()
+}
+
+func (r *RecordsRepository) buildBadgeAwardBadgeTypeFilterCondition(f FieldFilter, placeholderIdx int) (string, []database.Value, int, error) {
+	badgeTypeExpr := r.badgeAwardBadgeTypeExpr()
+	return r.buildScalarFilterCondition(badgeTypeExpr, f, placeholderIdx)
+}
+
+func (r *RecordsRepository) badgeAwardBadgeTypeExpr() string {
+	badgeURIExpr := r.jsonTextPathExpr("record.json", []string{"badge", "uri"})
+	badgeTypeExpr := r.jsonTextPathExpr("badge_definition.json", []string{"badgeType"})
+	return fmt.Sprintf(`(
+		SELECT %s
+		FROM record badge_definition
+		WHERE badge_definition.uri = %s
+			AND badge_definition.collection = 'app.certified.badge.definition'
+		LIMIT 1
+	)`, badgeTypeExpr, badgeURIExpr)
+}
+
+func (r *RecordsRepository) buildContributorDIDFilterCondition(f FieldFilter, placeholderIdx int) (string, []database.Value, int, error) {
+	values, err := contributorDIDFilterValues(f)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	if len(values) == 0 {
+		return "1 = 0", nil, 0, nil
+	}
+	if len(values) > MaxINListSize {
+		return "", nil, 0, fmt.Errorf("contributor DID filter exceeds maximum of %d values", MaxINListSize)
+	}
+
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		params := contributorDIDParams(values, 2)
+		placeholders := r.db.Placeholders(len(values), placeholderIdx)
+		refPlaceholders := r.db.Placeholders(len(values), placeholderIdx+len(values))
+		return fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(record.json->'contributors') = 'array' THEN record.json->'contributors' ELSE '[]'::jsonb END) AS contributor(value)
+			WHERE contributor.value #>> '{}' IN (%[1]s)
+				OR contributor.value->>'identity' IN (%[1]s)
+				OR contributor.value->'contributorIdentity'->>'identity' IN (%[1]s)
+				OR contributor.value->'contributorIdentity'->>'did' IN (%[1]s)
+				OR EXISTS (
+					SELECT 1 FROM record contributor_info
+					WHERE contributor_info.uri = contributor.value->'contributorIdentity'->>'uri'
+						AND contributor_info.collection = 'org.hypercerts.claim.contributorInformation'
+						AND contributor_info.json->>'identifier' IN (%[2]s)
+				)
+		)`, placeholders, refPlaceholders), params, len(params), nil
+	default:
+		params := contributorDIDParams(values, 5)
+		barePlaceholders := r.db.Placeholders(len(values), placeholderIdx)
+		directIdentityPlaceholders := r.db.Placeholders(len(values), placeholderIdx+len(values))
+		identityPlaceholders := r.db.Placeholders(len(values), placeholderIdx+(len(values)*2))
+		didPlaceholders := r.db.Placeholders(len(values), placeholderIdx+(len(values)*3))
+		refPlaceholders := r.db.Placeholders(len(values), placeholderIdx+(len(values)*4))
+		directIdentityExpr := r.jsonTextPathExpr("contributor.value", []string{"identity"})
+		identityExpr := r.jsonTextPathExpr("contributor.value", []string{"contributorIdentity", "identity"})
+		didExpr := r.jsonTextPathExpr("contributor.value", []string{"contributorIdentity", "did"})
+		contributorInfoURIExpr := r.jsonTextPathExpr("contributor.value", []string{"contributorIdentity", "uri"})
+		contributorsExpr := r.jsonValuePathExpr("record.json", []string{"contributors"})
+		contributorsTypeExpr := r.sqliteJSONTypePathExpr("record.json", []string{"contributors"})
+		safeContributorsExpr := fmt.Sprintf("CASE WHEN %s = 'array' THEN %s ELSE '[]' END", contributorsTypeExpr, contributorsExpr)
+		return fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM json_each(%[10]s) AS contributor
+			WHERE contributor.value IN (%[1]s)
+				OR %[2]s IN (%[3]s)
+				OR %[4]s IN (%[5]s)
+				OR %[6]s IN (%[7]s)
+				OR EXISTS (
+					SELECT 1 FROM record contributor_info
+					WHERE contributor_info.uri = %[8]s
+						AND contributor_info.collection = 'org.hypercerts.claim.contributorInformation'
+						AND json_extract(contributor_info.json, '$.identifier') IN (%[9]s)
+				)
+		)`, barePlaceholders, directIdentityExpr, directIdentityPlaceholders, identityExpr, identityPlaceholders, didExpr, didPlaceholders, contributorInfoURIExpr, refPlaceholders, safeContributorsExpr), params, len(params), nil
+	}
+}
+
+func contributorDIDParams(values []string, copies int) []database.Value {
+	params := make([]database.Value, 0, len(values)*copies)
+	for range copies {
+		for _, value := range values {
+			params = append(params, database.Text(value))
+		}
+	}
+	return params
+}
+
+func contributorDIDFilterValues(f FieldFilter) ([]string, error) {
+	switch f.Operator {
+	case "eq":
+		value, ok := f.Value.(string)
+		if !ok {
+			return nil, fmt.Errorf("contributor DID eq filter must be a string, got %T", f.Value)
+		}
+		if value == "" {
+			return nil, nil
+		}
+		return []string{value}, nil
+	case "in":
+		values, ok := f.Value.([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("contributor DID in filter must be a list, got %T", f.Value)
+		}
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			text, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("contributor DID in filter values must be strings, got %T", value)
+			}
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unsupported contributor DID filter operator %q", f.Operator)
+	}
+}
+
+// metadataFilterColumns is the set of record table columns that generated
+// metadata filters may read directly. Keep this narrower than directSortColumns:
+// sort fields and where-filter fields have different collision rules.
+var metadataFilterColumns = map[string]bool{
+	"uri": true,
+}
+
+// filterFieldExpr returns the SQL expression used for a filterable field. The
+// filter target decides whether Field is a JSON property or a record table
+// column; callers must not infer that from the field name alone.
+func (r *RecordsRepository) filterFieldExpr(f FieldFilter) (string, error) {
+	switch f.Target {
+	case "", FieldFilterTargetJSON:
+		if len(f.Path) > 0 {
+			return r.db.JSONExtractPath("json", f.Path), nil
+		}
+		return r.db.JSONExtract("json", f.Field), nil
+	case FieldFilterTargetColumn:
+		if !metadataFilterColumns[f.Field] {
+			return "", fmt.Errorf("unsupported metadata filter column %q: expose it as a generated metadata filter before using FieldFilterTargetColumn", f.Field)
+		}
+		return f.Field, nil
+	default:
+		return "", fmt.Errorf("unsupported filter target %q for field %q: use FieldFilterTargetJSON or FieldFilterTargetColumn", f.Target, f.Field)
+	}
 }
 
 // buildDIDFilterClause builds a SQL WHERE clause fragment for a DIDFilter.
@@ -560,7 +1076,7 @@ func (r *RecordsRepository) buildDIDFilterClause(f DIDFilter, startPlaceholder i
 	return clause, params, len(f.IN), nil
 }
 
-func (r *RecordsRepository) buildExternalLabelRecordFilterClause(filter ExternalLabelRecordFilter, startPlaceholder int) (string, []database.Value, error) {
+func (r *RecordsRepository) buildExternalLabelFilterSetClause(filter ExternalLabelFilterSet, startPlaceholder int) (string, []database.Value, error) {
 	if filter.IsEmpty() {
 		return "", nil, nil
 	}
@@ -569,10 +1085,42 @@ func (r *RecordsRepository) buildExternalLabelRecordFilterClause(filter External
 	var params []database.Value
 	placeholderIdx := startPlaceholder
 
-	if filter.Has != nil {
-		clause, clauseParams, consumed, err := r.buildExternalLabelExistsSubquery("el_has", *filter.Has, placeholderIdx)
+	for _, subjectFilter := range []struct {
+		subject externalLabelSubject
+		alias   string
+		filter  ExternalLabelRecordFilter
+	}{
+		{subject: externalLabelSubjectRecord, alias: "el_record", filter: filter.Record},
+		{subject: externalLabelSubjectAuthor, alias: "el_author", filter: filter.Author},
+	} {
+		clause, clauseParams, consumed, err := r.buildExternalLabelSubjectFilterClause(subjectFilter.subject, subjectFilter.alias, subjectFilter.filter, placeholderIdx)
 		if err != nil {
 			return "", nil, err
+		}
+		if clause == "" {
+			continue
+		}
+		clauses = append(clauses, clause)
+		params = append(params, clauseParams...)
+		placeholderIdx += consumed
+	}
+
+	return strings.Join(clauses, " AND "), params, nil
+}
+
+func (r *RecordsRepository) buildExternalLabelSubjectFilterClause(subject externalLabelSubject, aliasPrefix string, filter ExternalLabelRecordFilter, startPlaceholder int) (string, []database.Value, int, error) {
+	if filter.IsEmpty() {
+		return "", nil, 0, nil
+	}
+
+	var clauses []string
+	var params []database.Value
+	placeholderIdx := startPlaceholder
+
+	if filter.Has != nil {
+		clause, clauseParams, consumed, err := r.buildExternalLabelExistsSubquery(aliasPrefix+"_has", subject, *filter.Has, placeholderIdx)
+		if err != nil {
+			return "", nil, 0, err
 		}
 		clauses = append(clauses, fmt.Sprintf("EXISTS (%s)", clause))
 		params = append(params, clauseParams...)
@@ -580,21 +1128,22 @@ func (r *RecordsRepository) buildExternalLabelRecordFilterClause(filter External
 	}
 
 	if filter.None != nil {
-		clause, clauseParams, _, err := r.buildExternalLabelExistsSubquery("el_none", *filter.None, placeholderIdx)
+		clause, clauseParams, consumed, err := r.buildExternalLabelExistsSubquery(aliasPrefix+"_none", subject, *filter.None, placeholderIdx)
 		if err != nil {
-			return "", nil, err
+			return "", nil, 0, err
 		}
 		clauses = append(clauses, fmt.Sprintf("NOT EXISTS (%s)", clause))
 		params = append(params, clauseParams...)
+		placeholderIdx += consumed
 	}
 
-	return strings.Join(clauses, " AND "), params, nil
+	return strings.Join(clauses, " AND "), params, placeholderIdx - startPlaceholder, nil
 }
 
-func (r *RecordsRepository) buildExternalLabelExistsSubquery(alias string, predicate ExternalLabelPredicate, startPlaceholder int) (string, []database.Value, int, error) {
-	conditions := []string{
-		fmt.Sprintf("%s.uri = record.uri", alias),
-		fmt.Sprintf("(%s.cid IS NULL OR %s.cid = record.cid)", alias, alias),
+func (r *RecordsRepository) buildExternalLabelExistsSubquery(alias string, subject externalLabelSubject, predicate ExternalLabelPredicate, startPlaceholder int) (string, []database.Value, int, error) {
+	conditions, err := externalLabelSubjectConditions(alias, subject)
+	if err != nil {
+		return "", nil, 0, err
 	}
 	var params []database.Value
 	placeholderIdx := startPlaceholder
@@ -620,6 +1169,23 @@ func (r *RecordsRepository) buildExternalLabelExistsSubquery(alias string, predi
 	}
 
 	return fmt.Sprintf("SELECT 1 FROM external_label %s WHERE %s", alias, strings.Join(conditions, " AND ")), params, placeholderIdx - startPlaceholder, nil
+}
+
+func externalLabelSubjectConditions(alias string, subject externalLabelSubject) ([]string, error) {
+	switch subject {
+	case externalLabelSubjectRecord:
+		return []string{
+			fmt.Sprintf("%s.uri = record.uri", alias),
+			fmt.Sprintf("(%s.cid IS NULL OR %s.cid = record.cid)", alias, alias),
+		}, nil
+	case externalLabelSubjectAuthor:
+		return []string{
+			fmt.Sprintf("%s.uri = record.did", alias),
+			fmt.Sprintf("%s.cid IS NULL", alias),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown external label subject %d", subject)
+	}
 }
 
 func (r *RecordsRepository) buildExternalLabelStringFilterConditions(column string, filters []ExternalLabelStringFilter, startPlaceholder int) ([]string, []database.Value, int, error) {
@@ -946,18 +1512,35 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	limit int,
 	afterCursorValues []string,
 ) ([]*Record, error) {
-	return r.GetByCollectionSortedWithKeysetCursorAndExternalLabels(ctx, collection, filters, didFilter, ExternalLabelRecordFilter{}, sort, limit, afterCursorValues)
+	return r.GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{}, sort, limit, afterCursorValues)
 }
 
 // GetByCollectionSortedWithKeysetCursorAndExternalLabels retrieves records for a
-// collection with JSON field filters, DID filters, external-label filters, a
-// configurable sort order, and keyset-based pagination.
+// collection with JSON field filters, DID filters, record-level external-label
+// filters, a configurable sort order, and keyset-based pagination.
 func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursorAndExternalLabels(
 	ctx context.Context,
 	collection string,
 	filters []FieldFilter,
 	didFilter DIDFilter,
 	externalLabelFilter ExternalLabelRecordFilter,
+	sort *SortOption,
+	limit int,
+	afterCursorValues []string,
+) ([]*Record, error) {
+	return r.GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{Record: externalLabelFilter}, sort, limit, afterCursorValues)
+}
+
+// GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters retrieves records
+// for a collection with JSON field filters, DID filters, record-level and
+// author-level external-label filters, a configurable sort order, and
+// keyset-based pagination.
+func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
 	sort *SortOption,
 	limit int,
 	afterCursorValues []string,
@@ -1028,7 +1611,7 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursorAndExternalLabe
 	}
 
 	// External label filters
-	if labelClause, labelParams, err := r.buildExternalLabelRecordFilterClause(externalLabelFilter, nextPlaceholder); err != nil {
+	if labelClause, labelParams, err := r.buildExternalLabelFilterSetClause(externalLabelFilters, nextPlaceholder); err != nil {
 		return nil, fmt.Errorf("failed to build external label filter clause: %w", err)
 	} else if labelClause != "" {
 		whereParts = append(whereParts, labelClause)
@@ -1076,18 +1659,35 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	limit int,
 	beforeCursorValues []string,
 ) ([]*Record, error) {
-	return r.GetByCollectionReversedWithKeysetCursorAndExternalLabels(ctx, collection, filters, didFilter, ExternalLabelRecordFilter{}, sort, limit, beforeCursorValues)
+	return r.GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{}, sort, limit, beforeCursorValues)
 }
 
 // GetByCollectionReversedWithKeysetCursorAndExternalLabels retrieves records for
-// backward pagination while applying JSON field, DID, and external-label filters
-// before LIMIT so Relay pagination stays correct.
+// backward pagination while applying JSON field, DID, and record-level
+// external-label filters before LIMIT so Relay pagination stays correct.
 func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursorAndExternalLabels(
 	ctx context.Context,
 	collection string,
 	filters []FieldFilter,
 	didFilter DIDFilter,
 	externalLabelFilter ExternalLabelRecordFilter,
+	sort *SortOption,
+	limit int,
+	beforeCursorValues []string,
+) ([]*Record, error) {
+	return r.GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{Record: externalLabelFilter}, sort, limit, beforeCursorValues)
+}
+
+// GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters retrieves
+// records for backward pagination while applying JSON field, DID, record-level,
+// and author-level external-label filters before LIMIT so Relay pagination stays
+// correct.
+func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
 	sort *SortOption,
 	limit int,
 	beforeCursorValues []string,
@@ -1172,7 +1772,7 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursorAndExternalLa
 	}
 
 	// External label filters
-	if labelClause, labelParams, err := r.buildExternalLabelRecordFilterClause(externalLabelFilter, nextPlaceholder); err != nil {
+	if labelClause, labelParams, err := r.buildExternalLabelFilterSetClause(externalLabelFilters, nextPlaceholder); err != nil {
 		return nil, fmt.Errorf("failed to build external label filter clause: %w", err)
 	} else if labelClause != "" {
 		whereParts = append(whereParts, labelClause)
@@ -1293,17 +1893,30 @@ func (r *RecordsRepository) GetCountByDID(ctx context.Context, did string) (int6
 func (r *RecordsRepository) GetCollectionCountFiltered(
 	ctx context.Context, collection string, filters []FieldFilter, didFilter DIDFilter,
 ) (int64, error) {
-	return r.GetCollectionCountFilteredWithExternalLabels(ctx, collection, filters, didFilter, ExternalLabelRecordFilter{})
+	return r.GetCollectionCountFilteredWithExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{})
 }
 
 // GetCollectionCountFilteredWithExternalLabels returns the count with optional
-// DID, JSON field, and external-label filters applied.
+// DID, JSON field, and record-level external-label filters applied.
 func (r *RecordsRepository) GetCollectionCountFilteredWithExternalLabels(
 	ctx context.Context,
 	collection string,
 	filters []FieldFilter,
 	didFilter DIDFilter,
 	externalLabelFilter ExternalLabelRecordFilter,
+) (int64, error) {
+	return r.GetCollectionCountFilteredWithExternalLabelFilters(ctx, collection, filters, didFilter, ExternalLabelFilterSet{Record: externalLabelFilter})
+}
+
+// GetCollectionCountFilteredWithExternalLabelFilters returns the count with
+// optional DID, JSON field, record-level external-label, and author-level
+// external-label filters applied.
+func (r *RecordsRepository) GetCollectionCountFilteredWithExternalLabelFilters(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
 ) (int64, error) {
 	var whereParts []string
 	var params []database.Value
@@ -1334,7 +1947,7 @@ func (r *RecordsRepository) GetCollectionCountFilteredWithExternalLabels(
 	}
 
 	// External label filters
-	if labelClause, labelParams, err := r.buildExternalLabelRecordFilterClause(externalLabelFilter, nextPlaceholder); err != nil {
+	if labelClause, labelParams, err := r.buildExternalLabelFilterSetClause(externalLabelFilters, nextPlaceholder); err != nil {
 		return 0, fmt.Errorf("failed to build external label filter clause: %w", err)
 	} else if labelClause != "" {
 		whereParts = append(whereParts, labelClause)
@@ -1660,11 +2273,26 @@ func (r *RecordsRepository) Search(
 
 // Helper functions
 
-func (r *RecordsRepository) getCIDByURI(ctx context.Context, uri string) (string, error) {
+func (r *RecordsRepository) getCIDAndRecordCreatedAtByURI(ctx context.Context, uri string) (string, bool, error) {
 	var cid string
-	err := r.db.QueryRow(ctx, fmt.Sprintf("SELECT cid FROM record WHERE uri = %s", r.db.Placeholder(1)),
-		[]database.Value{database.Text(uri)}, &cid)
-	return cid, err
+	var recordCreatedAt sql.NullString
+	recordCreatedAtExpr := "record_created_at"
+	if r.db.Dialect() == database.PostgreSQL {
+		recordCreatedAtExpr = "record_created_at::text"
+	}
+	err := r.db.QueryRow(ctx, fmt.Sprintf("SELECT cid, %s FROM record WHERE uri = %s", recordCreatedAtExpr, r.db.Placeholder(1)),
+		[]database.Value{database.Text(uri)}, &cid, &recordCreatedAt)
+	return cid, recordCreatedAt.Valid && recordCreatedAt.String != "", err
+}
+
+func (r *RecordsRepository) fillMissingRecordCreatedAt(ctx context.Context, uri string, value database.Value) error {
+	if _, ok := value.(database.NullValue); ok {
+		return nil
+	}
+	_, err := r.db.Exec(ctx,
+		fmt.Sprintf("UPDATE record SET record_created_at = %s WHERE uri = %s AND record_created_at IS NULL", r.recordCreatedAtCursorValueExpr(r.db.Placeholder(1)), r.db.Placeholder(2)),
+		[]database.Value{value, database.Text(uri)})
+	return err
 }
 
 func scanRecords(rows *sql.Rows) ([]*Record, error) {
@@ -1677,6 +2305,22 @@ func scanRecords(rows *sql.Rows) ([]*Record, error) {
 		}
 		// Try various timestamp formats
 		rec.IndexedAt = atproto.ParseTimestamp(indexedAtStr)
+		records = append(records, &rec)
+	}
+	return records, rows.Err()
+}
+
+func scanRecordTimelineRecords(rows *sql.Rows) ([]*RecordTimelineRecord, error) {
+	var records []*RecordTimelineRecord
+	for rows.Next() {
+		var rec RecordTimelineRecord
+		var indexedAtStr string
+		var recordCreatedAtStr string
+		if err := rows.Scan(&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey, &recordCreatedAtStr); err != nil {
+			return nil, err
+		}
+		rec.IndexedAt = atproto.ParseTimestamp(indexedAtStr)
+		rec.RecordCreatedAt = atproto.ParseTimestamp(recordCreatedAtStr)
 		records = append(records, &rec)
 	}
 	return records, rows.Err()
