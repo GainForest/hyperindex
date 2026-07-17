@@ -41,10 +41,15 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 
 	switch event.Action {
 	case ActionCreate, ActionUpdate:
-		// Events may arrive without a record body (e.g. during Tap backfill when
-		// the PDS record could not be fetched). Ack and skip — nothing to store.
+		// Events may arrive without a record body (e.g. when Tap could not fetch
+		// or parse the record from the PDS). Ack and skip — nothing to store —
+		// but log loudly: every one of these is a record that silently never
+		// reaches the index, which is painful to diagnose after the fact.
 		if len(event.Record) == 0 {
-			slog.Debug("Skipping create/update event with no record body", "uri", uri)
+			slog.Warn("Skipping create/update event with no record body — record will be missing from the index",
+				"uri", uri,
+				"cid", event.CID,
+			)
 			return nil
 		}
 

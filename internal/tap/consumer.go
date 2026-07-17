@@ -24,6 +24,12 @@ const (
 	// defaultReadTimeout is the timeout for WebSocket read operations.
 	defaultReadTimeout = 60 * time.Second
 
+	// pingInterval is how often the consumer pings the Tap server to keep an
+	// idle connection alive. Tap sends nothing while there are no events, so
+	// without client pings every idle connection hits the read deadline and
+	// reconnects in a permanent ~60s flap loop.
+	pingInterval = 30 * time.Second
+
 	// minBackoff is the initial reconnection backoff duration.
 	minBackoff = time.Second
 
@@ -73,6 +79,11 @@ type Consumer struct {
 	// writeTextFn allows overriding WebSocket write behavior in tests.
 	// When nil, writeText is used.
 	writeTextFn func(conn *websocket.Conn, msg string) error
+
+	// writeMu serializes writes to the WebSocket connection: acks from the
+	// read loop and pings from the keepalive goroutine must never interleave
+	// (gorilla connections do not support concurrent writers).
+	writeMu sync.Mutex
 
 	// conn is the active WebSocket connection.
 	conn   *websocket.Conn
@@ -211,6 +222,16 @@ func (c *Consumer) runOnce(ctx context.Context) (bool, bool, error) {
 
 	slog.Info("Connected to Tap", "url", channelURL)
 
+	// Keepalive: extend the read deadline whenever the server answers a ping,
+	// and ping on an interval so idle (event-less) connections stay open
+	// instead of flapping on the read deadline every 60 seconds.
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(defaultReadTimeout))
+	})
+	pingDone := make(chan struct{})
+	defer close(pingDone)
+	go c.pingLoop(ctx, conn, pingDone)
+
 	for {
 		// Check for stop signal before reading.
 		select {
@@ -312,10 +333,39 @@ func (c *Consumer) dispatch(ctx context.Context, conn *websocket.Conn, event *Ev
 
 // writeText sends a text message on the WebSocket connection with a write deadline.
 func (c *Consumer) writeText(conn *websocket.Conn, msg string) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	if err := conn.SetWriteDeadline(time.Now().Add(defaultWriteTimeout)); err != nil {
 		return fmt.Errorf("failed to set write deadline: %w", err)
 	}
 	return conn.WriteMessage(websocket.TextMessage, []byte(msg))
+}
+
+// pingLoop keeps an idle connection alive by pinging the Tap server until the
+// connection is torn down (done closed) or the consumer stops. Write errors
+// end the loop quietly; the read loop notices the dead connection and
+// reconnects with its usual backoff.
+func (c *Consumer) pingLoop(ctx context.Context, conn *websocket.Conn, done <-chan struct{}) {
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-c.done:
+			return
+		case <-ticker.C:
+			c.writeMu.Lock()
+			err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(defaultWriteTimeout))
+			c.writeMu.Unlock()
+			if err != nil {
+				return
+			}
+		}
+	}
 }
 
 // isWriteError reports whether err originated from a failed ack write.
