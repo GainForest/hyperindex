@@ -88,6 +88,16 @@ func TestMigrations_Run(t *testing.T) {
 			t.Errorf("expected index %q to exist, but got error: %v", index, err)
 		}
 	}
+
+	var removalMigrationApplied int
+	if err := exec.DB().QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = '011')",
+	).Scan(&removalMigrationApplied); err != nil {
+		t.Fatalf("failed to check migration 011: %v", err)
+	}
+	if removalMigrationApplied != 1 {
+		t.Fatal("expected migration 011 to be applied")
+	}
 }
 
 func TestMigrations_BackfillsRecordCreatedAtSQLite(t *testing.T) {
@@ -164,10 +174,10 @@ func sqliteRecordCreatedAt(t *testing.T, exec *sqlite.Executor, uri string) stri
 	return value.String
 }
 
-func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
+func TestMigrations_RunAndRollbackPostgres(t *testing.T) {
 	databaseURL, ok := safePostgresTestDatabaseURL(t)
 	if !ok {
-		t.Skip("PostgreSQL migration rename test requires DATABASE_URL pointing at a postgres database named test or ending with _test/-test")
+		t.Skip("PostgreSQL migration test requires DATABASE_URL pointing at a postgres database named test or ending with _test/-test")
 	}
 
 	ctx := context.Background()
@@ -207,6 +217,12 @@ func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_indexing_activity_timestamp")
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_indexing_activity_rkey")
 	assertPostgresSequenceExists(ctx, t, exec, schemaName, "indexing_activity_id_seq")
+	assertPostgresIndexNotExists(ctx, t, exec, schemaName, "idx_record_json_gin")
+
+	if err := migrations.Rollback(ctx, exec); err != nil {
+		t.Fatalf("Rollback() returned error: %v", err)
+	}
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_json_gin")
 }
 
 func TestMigrations_BackfillsRecordCreatedAtPostgres(t *testing.T) {
@@ -449,6 +465,22 @@ func assertPostgresIndexExists(ctx context.Context, t *testing.T, exec *postgres
 	}
 	if count != 1 {
 		t.Errorf("postgres index %q count = %d, want 1", indexName, count)
+	}
+}
+
+func assertPostgresIndexNotExists(ctx context.Context, t *testing.T, exec *postgres.Executor, schemaName, indexName string) {
+	t.Helper()
+
+	var count int
+	if err := exec.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pg_indexes WHERE schemaname = $1 AND indexname = $2`,
+		schemaName,
+		indexName,
+	).Scan(&count); err != nil {
+		t.Fatalf("failed to count postgres index %q: %v", indexName, err)
+	}
+	if count != 0 {
+		t.Errorf("postgres index %q count = %d, want 0", indexName, count)
 	}
 }
 
