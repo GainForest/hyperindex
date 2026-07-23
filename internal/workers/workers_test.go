@@ -226,73 +226,39 @@ func TestBackfillState_Reset(t *testing.T) {
 // ActivityCleanupWorker tests
 // ---------------------------------------------------------------------------
 
-func TestActivityCleanupWorker_StartStop(t *testing.T) {
-	// Use a nil activity repo — Start will call cleanup which will call
-	// CleanupOldActivity on the repo. We need a real repo backed by a real
-	// DB to avoid a nil-pointer panic during the initial cleanup() call.
-	// Import testutil from an external test package would create a cycle
-	// (workers -> testutil -> migrations -> database -> ... ), so instead
-	// we exercise only the goroutine lifecycle by cancelling the context
-	// before Start can do meaningful work.
+type cleanupActivityStore struct {
+	calls chan int
+}
 
-	// We cannot easily construct an IndexingActivityRepository without
-	// a database.Executor, so we test the goroutine lifecycle by using
-	// a context that is immediately cancelled, preventing cleanup from
-	// executing against a nil repo.
-	//
-	// For a full integration test with a real DB, see
-	// internal/integration or use testutil from an _test package.
-
-	// Verify Stop doesn't hang using a timeout channel.
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel() // cancel immediately so cleanup is skipped or errors harmlessly
-
-		// Create worker with nil repo — cleanup will error-log but not panic
-		// because the context is already cancelled and slog.Error is safe.
-		// Actually, CleanupOldActivity dereferences the repo. Instead, let's
-		// just test that the goroutine lifecycle (start/stop via context) works
-		// by relying on context cancellation in the select loop.
-
-		w := &ActivityCleanupWorker{
-			activity:     nil,
-			interval:     time.Hour,
-			retentionHrs: 168,
-			stop:         make(chan struct{}),
-			done:         make(chan struct{}),
-		}
-
-		// Start the worker goroutine manually (skip the initial cleanup
-		// call which would dereference nil repo).
-		go func() {
-			defer close(w.done)
-
-			ticker := time.NewTicker(w.interval)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-w.stop:
-					return
-				case <-ticker.C:
-					// would call cleanup, skipped for test
-				}
-			}
-		}()
-
-		w.Stop()
-	}()
-
+func (s *cleanupActivityStore) CleanupOldActivity(_ context.Context, hours int) error {
 	select {
-	case <-done:
-		// success — Stop returned without hanging
-	case <-time.After(5 * time.Second):
-		t.Fatal("ActivityCleanupWorker.Stop() hung for more than 5 seconds")
+	case s.calls <- hours:
+	default:
+	}
+	return nil
+}
+
+func TestActivityCleanupWorker_StartRunsCleanupPeriodically(t *testing.T) {
+	activity := &cleanupActivityStore{calls: make(chan int, 4)}
+	w := &ActivityCleanupWorker{
+		activity:     activity,
+		interval:     10 * time.Millisecond,
+		retentionHrs: 168,
+		stop:         make(chan struct{}),
+		done:         make(chan struct{}),
+	}
+
+	w.Start(context.Background())
+	defer w.Stop()
+
+	for call := 1; call <= 2; call++ {
+		select {
+		case hours := <-activity.calls:
+			if hours != 168 {
+				t.Fatalf("cleanup call %d used retention hours %d, want 168", call, hours)
+			}
+		case <-time.After(250 * time.Millisecond):
+			t.Fatalf("cleanup call %d did not run", call)
+		}
 	}
 }

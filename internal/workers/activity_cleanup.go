@@ -9,9 +9,13 @@ import (
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 )
 
+type activityCleanupStore interface {
+	CleanupOldActivity(ctx context.Context, hours int) error
+}
+
 // ActivityCleanupWorker periodically cleans up old activity entries.
 type ActivityCleanupWorker struct {
-	activity     *repositories.IndexingActivityRepository
+	activity     activityCleanupStore
 	interval     time.Duration
 	retentionHrs int
 	stop         chan struct{}
@@ -38,11 +42,11 @@ func (w *ActivityCleanupWorker) Start(ctx context.Context) {
 	// Run immediately on start
 	w.cleanup(ctx)
 
-	ticker := time.NewTicker(w.interval)
-	defer ticker.Stop()
-
 	go func() {
 		defer close(w.done)
+
+		ticker := time.NewTicker(w.interval)
+		defer ticker.Stop()
 
 		for {
 			select {
