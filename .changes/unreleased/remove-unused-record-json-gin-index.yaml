@@ -1,0 +1,4 @@
+kind: fixed
+body: Remove the unused PostgreSQL whole-document record JSON GIN index, reducing index storage and write maintenance without changing current query behavior.
+custom:
+  Affects: operator
