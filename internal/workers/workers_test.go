@@ -231,7 +231,10 @@ type cleanupActivityStore struct {
 }
 
 func (s *cleanupActivityStore) CleanupOldActivity(_ context.Context, hours int) error {
-	s.calls <- hours
+	select {
+	case s.calls <- hours:
+	default:
+	}
 	return nil
 }
 
