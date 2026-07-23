@@ -114,11 +114,8 @@ func (h *IndexHandler) HandleIdentity(ctx context.Context, event *IdentityEvent)
 	}
 
 	if shouldPurgeIdentity(event) {
-		if err := h.records.DeleteByDID(ctx, event.DID); err != nil {
-			return fmt.Errorf("failed to delete records by did: %w", err)
-		}
-		if err := h.actors.DeleteByDID(ctx, event.DID); err != nil {
-			return fmt.Errorf("failed to delete actor by did: %w", err)
+		if err := h.records.PurgeActorData(ctx, event.DID); err != nil {
+			return fmt.Errorf("failed to purge actor data: %w", err)
 		}
 
 		slog.Info("Purged identity from index",
