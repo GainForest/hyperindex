@@ -347,6 +347,102 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
+func TestParseAllowedOrigins(t *testing.T) {
+	got := ParseAllowedOrigins(" https://one.example, ,https://two.example,https://one.example ")
+	want := []string{"https://one.example", "https://two.example"}
+
+	if len(got) != len(want) {
+		t.Fatalf("ParseAllowedOrigins() len = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ParseAllowedOrigins()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestPublicAllowedOriginListDefaultsToWildcard(t *testing.T) {
+	cfg := Config{}
+
+	got := cfg.PublicAllowedOriginList()
+	if len(got) != 1 || got[0] != "*" {
+		t.Fatalf("PublicAllowedOriginList() = %#v, want [*]", got)
+	}
+}
+
+func TestAdminAllowedOriginListUsesExplicitOriginsOnly(t *testing.T) {
+	t.Run("admin env wins", func(t *testing.T) {
+		cfg := Config{
+			AllowedOrigins:      "https://legacy.example",
+			AdminAllowedOrigins: "https://admin.example",
+		}
+
+		got := cfg.AdminAllowedOriginList()
+		if len(got) != 1 || got[0] != "https://admin.example" {
+			t.Fatalf("AdminAllowedOriginList() = %#v, want explicit admin origin", got)
+		}
+	})
+
+	t.Run("legacy explicit origins fallback", func(t *testing.T) {
+		cfg := Config{AllowedOrigins: "https://legacy.example"}
+
+		got := cfg.AdminAllowedOriginList()
+		if len(got) != 1 || got[0] != "https://legacy.example" {
+			t.Fatalf("AdminAllowedOriginList() = %#v, want legacy origin", got)
+		}
+	})
+
+	t.Run("legacy wildcard does not open admin", func(t *testing.T) {
+		cfg := Config{AllowedOrigins: "*"}
+
+		if got := cfg.AdminAllowedOriginList(); len(got) != 0 {
+			t.Fatalf("AdminAllowedOriginList() = %#v, want empty", got)
+		}
+	})
+
+	t.Run("legacy wildcard is ignored but explicit origins remain", func(t *testing.T) {
+		cfg := Config{AllowedOrigins: "*,https://legacy.example"}
+
+		got := cfg.AdminAllowedOriginList()
+		if len(got) != 1 || got[0] != "https://legacy.example" {
+			t.Fatalf("AdminAllowedOriginList() = %#v, want explicit legacy origin", got)
+		}
+	})
+}
+
+func TestConfigValidateRejectsAdminWildcardOrigin(t *testing.T) {
+	cfg := Config{
+		SecretKeyBase:       "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
+		Port:                8080,
+		AdminAPIKey:         "admin-secret-123",
+		AdminAllowedOrigins: "*",
+	}
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "ADMIN_ALLOWED_ORIGINS") {
+		t.Fatalf("Validate() error = %v, want ADMIN_ALLOWED_ORIGINS error", err)
+	}
+}
+
+func TestLoadCORSOriginConfig(t *testing.T) {
+	t.Setenv("ADMIN_API_KEY", "admin-secret-123")
+	t.Setenv("SECRET_KEY_BASE", "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing")
+	t.Setenv("PUBLIC_ALLOWED_ORIGINS", "")
+	t.Setenv("ADMIN_ALLOWED_ORIGINS", "https://admin.example")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.PublicAllowedOrigins != "*" {
+		t.Fatalf("PublicAllowedOrigins = %q, want *", cfg.PublicAllowedOrigins)
+	}
+	if cfg.AdminAllowedOrigins != "https://admin.example" {
+		t.Fatalf("AdminAllowedOrigins = %q, want https://admin.example", cfg.AdminAllowedOrigins)
+	}
+}
+
 func TestLoadAdminAPIKey(t *testing.T) {
 	os.Setenv("ADMIN_API_KEY", "admin-secret")
 	os.Setenv("SECRET_KEY_BASE", "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing")

@@ -36,7 +36,7 @@ func createMinimalSchema() (*graphqlgo.Schema, error) {
 }
 
 func TestHandler_ServeHTTP_NoCORSInHandler(t *testing.T) {
-	// CORS is handled by the router-level CORSMiddleware, not the handler.
+	// CORS is handled by route-level CORSMiddleware, not the handler.
 	// Verify the handler does NOT set CORS headers directly.
 	schema, err := createMinimalSchema()
 	if err != nil {
@@ -55,7 +55,7 @@ func TestHandler_ServeHTTP_NoCORSInHandler(t *testing.T) {
 		handler.ServeHTTP(w, req)
 
 		if w.Header().Get("Access-Control-Allow-Origin") != "" {
-			t.Error("handler should not set Access-Control-Allow-Origin (CORS is middleware's job)")
+			t.Error("handler should not set Access-Control-Allow-Origin (CORS is route middleware's job)")
 		}
 	})
 }

@@ -422,9 +422,18 @@ SECRET_KEY_BASE=your-secret-key-at-least-64-characters-long-generate-with-openss
 # Example: openssl rand -base64 32
 ADMIN_API_KEY=replace-with-a-random-secret
 
-# WebSocket origins — comma-separated allowed origins for subscriptions.
-# Unset or empty allows all origins. Set a comma-separated list to restrict origins; "*" also allows all origins.
-# ALLOWED_ORIGINS=https://your-frontend.vercel.app
+# Browser origins for public GraphQL HTTP and subscription APIs.
+# Empty or "*" allows every origin so independent browser frontends can query public indexed data.
+# Set a comma-separated list only if you need to restrict public browser access.
+PUBLIC_ALLOWED_ORIGINS=*
+
+# Browser origins for admin GraphQL. Empty keeps admin GraphQL same-origin only.
+# Set explicit trusted admin frontend origins when the admin UI is hosted separately.
+# Wildcard "*" is rejected for admin routes.
+# ADMIN_ALLOWED_ORIGINS=https://admin.hypercerts.dev
+
+# Deprecated: ALLOWED_ORIGINS is kept only as a compatibility fallback for explicit admin origins.
+# Use PUBLIC_ALLOWED_ORIGINS and ADMIN_ALLOWED_ORIGINS instead.
 
 # Tap record ingestion (recommended)
 # TAP_ENABLED=true

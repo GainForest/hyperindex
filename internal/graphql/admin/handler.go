@@ -102,7 +102,7 @@ func logSafeURLVariableValue(value interface{}) interface{} {
 }
 
 // ServeHTTP handles admin GraphQL HTTP requests.
-// CORS is handled by the router-level middleware; not duplicated here.
+// CORS is handled by route-level middleware; not duplicated here.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Parse the request
 	var params struct {

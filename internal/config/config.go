@@ -24,8 +24,16 @@ type Config struct {
 	DatabaseURL string
 
 	// Security
-	SecretKeyBase  string
-	AllowedOrigins string // Comma-separated allowed WebSocket/CORS origins (empty or "*" = allow all)
+	SecretKeyBase string
+	// AllowedOrigins is a deprecated comma-separated origin list kept as a fallback for admin CORS.
+	// Use PublicAllowedOrigins and AdminAllowedOrigins for new deployments.
+	AllowedOrigins string
+	// PublicAllowedOrigins is a comma-separated origin list for public GraphQL HTTP and WebSocket APIs.
+	// Empty or "*" allows all browser origins so independent frontends can query public data.
+	PublicAllowedOrigins string
+	// AdminAllowedOrigins is a comma-separated explicit origin list for admin GraphQL browser clients.
+	// Empty keeps admin GraphQL same-origin only unless deprecated AllowedOrigins has explicit origins.
+	AdminAllowedOrigins string
 
 	// OAuth
 	ExternalBaseURL   string
@@ -88,8 +96,10 @@ func Load() (*Config, error) {
 		DatabaseURL: getEnv("DATABASE_URL", "sqlite:data/hyperindex.db"),
 
 		// Security
-		SecretKeyBase:  getEnv("SECRET_KEY_BASE", ""),
-		AllowedOrigins: getEnv("ALLOWED_ORIGINS", ""),
+		SecretKeyBase:        getEnv("SECRET_KEY_BASE", ""),
+		AllowedOrigins:       getEnv("ALLOWED_ORIGINS", ""),
+		PublicAllowedOrigins: getEnv("PUBLIC_ALLOWED_ORIGINS", "*"),
+		AdminAllowedOrigins:  getEnv("ADMIN_ALLOWED_ORIGINS", ""),
 
 		// OAuth
 		ExternalBaseURL:   getEnv("EXTERNAL_BASE_URL", ""),
@@ -152,6 +162,10 @@ func Load() (*Config, error) {
 		slog.Info("ADMIN_API_KEY enabled for admin API access", "admin_api_key_set", true)
 	}
 
+	if strings.TrimSpace(cfg.AllowedOrigins) != "" {
+		slog.Warn("ALLOWED_ORIGINS is deprecated; use PUBLIC_ALLOWED_ORIGINS for public GraphQL and ADMIN_ALLOWED_ORIGINS for admin GraphQL")
+	}
+
 	// Set default external base URL if not provided
 	cfg.ExternalBaseURL = strings.TrimSpace(cfg.ExternalBaseURL)
 	if cfg.ExternalBaseURL == "" {
@@ -184,6 +198,10 @@ func (c *Config) Validate() error {
 
 	if len(c.SecretKeyBase) < 64 {
 		return fmt.Errorf("SECRET_KEY_BASE must be at least 64 characters")
+	}
+
+	if containsWildcardOrigin(ParseAllowedOrigins(c.AdminAllowedOrigins)) {
+		return fmt.Errorf("ADMIN_ALLOWED_ORIGINS must list explicit trusted origins; wildcard '*' is only supported by PUBLIC_ALLOWED_ORIGINS")
 	}
 
 	if c.Port < 1 || c.Port > 65535 {
@@ -225,7 +243,9 @@ func (c *Config) LogConfig() {
 		"jetstream_collections", c.JetstreamCollections,
 		"jetstream_disable_cursor", c.JetstreamDisableCursor,
 		"backfill_on_start", c.BackfillOnStart,
-		"allowed_origins", c.AllowedOrigins,
+		"allowed_origins_deprecated", c.AllowedOrigins,
+		"public_allowed_origins", c.PublicAllowedOrigins,
+		"admin_allowed_origins", c.AdminAllowedOrigins,
 		"tap_enabled", c.TapEnabled,
 		"tap_url", c.TapURL,
 		"tap_admin_password_set", c.TapAdminPassword != "",
@@ -235,6 +255,68 @@ func (c *Config) LogConfig() {
 		"labeler_subscribe_reconnect_min", c.LabelerSubscribeReconnectMin.String(),
 		"labeler_subscribe_reconnect_max", c.LabelerSubscribeReconnectMax.String(),
 	)
+}
+
+// PublicAllowedOriginList returns the origins allowed to call public GraphQL routes from browsers.
+// Public GraphQL is intentionally open by default; set PUBLIC_ALLOWED_ORIGINS to restrict it.
+func (c *Config) PublicAllowedOriginList() []string {
+	origins := ParseAllowedOrigins(c.PublicAllowedOrigins)
+	if len(origins) == 0 {
+		return []string{"*"}
+	}
+	return origins
+}
+
+// AdminAllowedOriginList returns the origins allowed to call admin GraphQL routes from browsers.
+// Admin GraphQL is same-origin only by default. When ADMIN_ALLOWED_ORIGINS is unset, explicit
+// origins from deprecated ALLOWED_ORIGINS are used as a compatibility fallback; wildcard values
+// from ALLOWED_ORIGINS are ignored for admin routes.
+func (c *Config) AdminAllowedOriginList() []string {
+	origins := ParseAllowedOrigins(c.AdminAllowedOrigins)
+	if len(origins) > 0 {
+		return origins
+	}
+
+	return removeWildcardOrigins(ParseAllowedOrigins(c.AllowedOrigins))
+}
+
+// ParseAllowedOrigins parses a comma-separated browser origin list, trimming whitespace and duplicates.
+func ParseAllowedOrigins(raw string) []string {
+	parts := strings.Split(raw, ",")
+	origins := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		origins = append(origins, trimmed)
+	}
+	return origins
+}
+
+func containsWildcardOrigin(origins []string) bool {
+	for _, origin := range origins {
+		if strings.TrimSpace(origin) == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+func removeWildcardOrigins(origins []string) []string {
+	explicitOrigins := make([]string, 0, len(origins))
+	for _, origin := range origins {
+		if strings.TrimSpace(origin) == "*" {
+			continue
+		}
+		explicitOrigins = append(explicitOrigins, origin)
+	}
+	return explicitOrigins
 }
 
 // LabelerSubscribeURLList returns trimmed labeler subscription URLs.
