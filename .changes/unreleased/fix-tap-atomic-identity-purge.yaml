@@ -1,0 +1,4 @@
+kind: fixed
+body: Make Tap identity purges transactional so actor records are retained when deleting the actor fails, preventing partially purged identities.
+custom:
+  Affects: operator

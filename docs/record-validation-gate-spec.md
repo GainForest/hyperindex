@@ -33,7 +33,7 @@ Hyperindex builds the public GraphQL registry and validator from one saved Lexic
 
 ## Persisted schema
 
-Migration 011 adds record validation metadata:
+Migration 012 adds record validation metadata:
 
 ```sql
 validation_status TEXT NOT NULL DEFAULT 'unknown_schema'
@@ -52,14 +52,14 @@ CREATE INDEX idx_record_collection_lexicon_hash
   ON record(collection, lexicon_hash);
 ```
 
-Migration 012 adds `lexicon.raw_json TEXT`. New admin writes save both:
+Migration 013 adds `lexicon.raw_json TEXT`. New admin writes save both:
 
 - `lexicon.json`, retained as JSON/JSONB for existing behavior
 - `lexicon.raw_json`, the exact uploaded or resolved bytes used for hashing
 
 Existing PostgreSQL JSONB rows can only be backfilled from PostgreSQL's normalized `json::text`; their pre-migration formatting cannot be recovered. After migration, new writes preserve exact bytes in both dialects.
 
-Migration 013 adds the startup refresh paging index:
+Migration 014 adds the startup refresh paging index:
 
 ```sql
 CREATE INDEX idx_record_collection_uri

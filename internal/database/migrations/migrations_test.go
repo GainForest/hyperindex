@@ -115,6 +115,16 @@ func TestMigrations_Run(t *testing.T) {
 	if validationError.Valid || validatedAt.Valid || lexiconHash.Valid {
 		t.Fatalf("validation metadata nullable defaults = error:%v validatedAt:%v hash:%v, want all null", validationError.Valid, validatedAt.Valid, lexiconHash.Valid)
 	}
+
+	var removalMigrationApplied int
+	if err := exec.DB().QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = '011')",
+	).Scan(&removalMigrationApplied); err != nil {
+		t.Fatalf("failed to check migration 011: %v", err)
+	}
+	if removalMigrationApplied != 1 {
+		t.Fatal("expected migration 011 to be applied")
+	}
 }
 
 func TestMigrations_BackfillsRecordCreatedAtSQLite(t *testing.T) {
@@ -276,6 +286,14 @@ func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
 	if validationError.Valid || validatedAt.Valid || lexiconHash.Valid {
 		t.Fatalf("postgres validation metadata nullable defaults = error:%v validatedAt:%v hash:%v, want all null", validationError.Valid, validatedAt.Valid, lexiconHash.Valid)
 	}
+	assertPostgresIndexNotExists(ctx, t, exec, schemaName, "idx_record_json_gin")
+
+	for _, version := range []string{"014", "013", "012", "011"} {
+		if err := migrations.Rollback(ctx, exec); err != nil {
+			t.Fatalf("Rollback(%s) returned error: %v", version, err)
+		}
+	}
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_json_gin")
 }
 
 func TestMigrations_BackfillsRecordCreatedAtPostgres(t *testing.T) {
@@ -453,7 +471,7 @@ func TestMigrations_Rollback(t *testing.T) {
 	}
 }
 
-func TestMigrations_Rollback013Then012PreservesLexiconData(t *testing.T) {
+func TestMigrations_Rollback014Then013PreservesLexiconData(t *testing.T) {
 	exec := newTestExecutor(t)
 	ctx := context.Background()
 	if err := migrations.Run(ctx, exec); err != nil {
@@ -465,16 +483,16 @@ func TestMigrations_Rollback013Then012PreservesLexiconData(t *testing.T) {
 	}
 
 	if err := migrations.Rollback(ctx, exec); err != nil {
-		t.Fatalf("Rollback(013) error = %v", err)
+		t.Fatalf("Rollback(014) error = %v", err)
 	}
-	if sqliteIndexExists(t, exec, "idx_record_collection_uri") || migrationVersionExists(t, exec, "013") {
-		t.Fatal("migration 013 schema/version remained after rollback")
+	if sqliteIndexExists(t, exec, "idx_record_collection_uri") || migrationVersionExists(t, exec, "014") {
+		t.Fatal("migration 014 schema/version remained after rollback")
 	}
 	if err := migrations.Rollback(ctx, exec); err != nil {
-		t.Fatalf("Rollback(012) error = %v", err)
+		t.Fatalf("Rollback(013) error = %v", err)
 	}
-	if sqliteColumnExists(t, exec, "lexicon", "raw_json") || migrationVersionExists(t, exec, "012") {
-		t.Fatal("migration 012 schema/version remained after rollback")
+	if sqliteColumnExists(t, exec, "lexicon", "raw_json") || migrationVersionExists(t, exec, "013") {
+		t.Fatal("migration 013 schema/version remained after rollback")
 	}
 	var saved string
 	if err := exec.DB().QueryRowContext(ctx, `SELECT json FROM lexicon WHERE id = ?`, "com.example.saved").Scan(&saved); err != nil {
@@ -492,12 +510,12 @@ func TestMigrations_ApplyAndVersionRecordRollbackTogether(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if err := migrations.Rollback(ctx, exec); err != nil {
-		t.Fatalf("Rollback(013) error = %v", err)
+		t.Fatalf("Rollback(014) error = %v", err)
 	}
 	if _, err := exec.DB().ExecContext(ctx, `
-		CREATE TRIGGER fail_migration_013_record
+		CREATE TRIGGER fail_migration_014_record
 		BEFORE INSERT ON schema_migrations
-		WHEN NEW.version = '013'
+		WHEN NEW.version = '014'
 		BEGIN SELECT RAISE(ABORT, 'forced version record failure'); END;
 	`); err != nil {
 		t.Fatalf("create failure trigger: %v", err)
@@ -508,10 +526,10 @@ func TestMigrations_ApplyAndVersionRecordRollbackTogether(t *testing.T) {
 		t.Fatalf("Run() error = %v, want forced version record failure", err)
 	}
 	if sqliteIndexExists(t, exec, "idx_record_collection_uri") {
-		t.Fatal("migration 013 index survived failed atomic apply")
+		t.Fatal("migration 014 index survived failed atomic apply")
 	}
-	if migrationVersionExists(t, exec, "013") {
-		t.Fatal("migration 013 version was recorded after failed atomic apply")
+	if migrationVersionExists(t, exec, "014") {
+		t.Fatal("migration 014 version was recorded after failed atomic apply")
 	}
 }
 
@@ -522,16 +540,16 @@ func TestMigrations_DownAndVersionDeleteRollbackTogether(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if err := migrations.Rollback(ctx, exec); err != nil {
-		t.Fatalf("Rollback(013) error = %v", err)
+		t.Fatalf("Rollback(014) error = %v", err)
 	}
 	const raw = `{"lexicon":1,"id":"com.example.rollback","defs":{}}`
 	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO lexicon (id, json, raw_json) VALUES (?, ?, ?)`, "com.example.rollback", raw, raw); err != nil {
 		t.Fatalf("insert Lexicon before failed rollback: %v", err)
 	}
 	if _, err := exec.DB().ExecContext(ctx, `
-		CREATE TRIGGER fail_migration_012_delete
+		CREATE TRIGGER fail_migration_013_delete
 		BEFORE DELETE ON schema_migrations
-		WHEN OLD.version = '012'
+		WHEN OLD.version = '013'
 		BEGIN SELECT RAISE(ABORT, 'forced version delete failure'); END;
 	`); err != nil {
 		t.Fatalf("create failure trigger: %v", err)
@@ -539,13 +557,13 @@ func TestMigrations_DownAndVersionDeleteRollbackTogether(t *testing.T) {
 
 	err := migrations.Rollback(ctx, exec)
 	if err == nil || !strings.Contains(err.Error(), "forced version delete failure") {
-		t.Fatalf("Rollback(012) error = %v, want forced version delete failure", err)
+		t.Fatalf("Rollback(013) error = %v, want forced version delete failure", err)
 	}
 	if !sqliteColumnExists(t, exec, "lexicon", "raw_json") {
 		t.Fatal("raw_json column was not restored after failed atomic rollback")
 	}
-	if !migrationVersionExists(t, exec, "012") {
-		t.Fatal("migration 012 version was removed after failed atomic rollback")
+	if !migrationVersionExists(t, exec, "013") {
+		t.Fatal("migration 013 version was removed after failed atomic rollback")
 	}
 	var saved string
 	if err := exec.DB().QueryRowContext(ctx, `SELECT raw_json FROM lexicon WHERE id = ?`, "com.example.rollback").Scan(&saved); err != nil {
@@ -793,6 +811,22 @@ func assertPostgresIndexExists(ctx context.Context, t *testing.T, exec *postgres
 	}
 	if count != 1 {
 		t.Errorf("postgres index %q count = %d, want 1", indexName, count)
+	}
+}
+
+func assertPostgresIndexNotExists(ctx context.Context, t *testing.T, exec *postgres.Executor, schemaName, indexName string) {
+	t.Helper()
+
+	var count int
+	if err := exec.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pg_indexes WHERE schemaname = $1 AND indexname = $2`,
+		schemaName,
+		indexName,
+	).Scan(&count); err != nil {
+		t.Fatalf("failed to count postgres index %q: %v", indexName, err)
+	}
+	if count != 0 {
+		t.Errorf("postgres index %q count = %d, want 0", indexName, count)
 	}
 }
 
