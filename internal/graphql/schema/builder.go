@@ -2,6 +2,7 @@
 package schema
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"github.com/graphql-go/graphql/language/ast"
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/authoridentity"
 	"github.com/GainForest/hyperindex/internal/graphql/certifiedprofiles"
 	"github.com/GainForest/hyperindex/internal/graphql/externallabels"
 	"github.com/GainForest/hyperindex/internal/graphql/query"
@@ -25,11 +27,14 @@ import (
 	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
+type authorBatchLoader func(context.Context, *repositories.ActorsRepository, []string) (map[string]*repositories.Actor, error)
+
 // Builder builds a GraphQL schema from lexicon definitions.
 type Builder struct {
 	registry      *lexicon.Registry
 	mapper        *types.Mapper
 	objectBuilder *types.ObjectBuilder
+	loadAuthors   authorBatchLoader
 
 	// Built types
 	recordTypes           map[string]*graphql.Object      // lexiconID -> record type
@@ -54,9 +59,12 @@ type Builder struct {
 func NewBuilder(registry *lexicon.Registry) *Builder {
 	mapper := types.NewMapper()
 	return &Builder{
-		registry:              registry,
-		mapper:                mapper,
-		objectBuilder:         types.NewObjectBuilder(mapper, registry),
+		registry:      registry,
+		mapper:        mapper,
+		objectBuilder: types.NewObjectBuilder(mapper, registry),
+		loadAuthors: func(ctx context.Context, actors *repositories.ActorsRepository, dids []string) (map[string]*repositories.Actor, error) {
+			return actors.GetByDIDs(ctx, dids)
+		},
 		recordTypes:           make(map[string]*graphql.Object),
 		connectionTypes:       make(map[string]*graphql.Object),
 		sortFieldEnums:        make(map[string]*graphql.Enum),
@@ -336,9 +344,11 @@ var recordEventType = graphql.NewObject(graphql.ObjectConfig{
 			Description: "CID of the record",
 		},
 		"did": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.String),
-			Description: "DID of the actor who made the change",
+			Type:              graphql.NewNonNull(graphql.String),
+			Description:       "DID of the actor who made the change",
+			DeprecationReason: authoridentity.DIDDeprecationReason,
 		},
+		"author": authoridentity.Field(),
 		"collection": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "Collection NSID",
@@ -442,18 +452,29 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 			Type:        recordType,
 			Description: fmt.Sprintf("Subscribe to %s record changes", lexiconID),
 			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-				event, ok := p.Source.(*subscription.RecordEvent)
-				if !ok || event == nil {
+				var eventCollection string
+				var record map[string]interface{}
+				switch source := p.Source.(type) {
+				case *subscription.RecordEvent:
+					if source == nil {
+						return nil, nil
+					}
+					eventCollection = source.Collection
+					record = source.Record
+				case map[string]interface{}:
+					payload, _ := source["recordEvents"].(map[string]interface{})
+					eventCollection, _ = payload["collection"].(string)
+					record, _ = payload["record"].(map[string]interface{})
+				default:
 					return nil, nil
 				}
-				// Only return if collection matches
-				if event.Collection != collection {
+				if eventCollection != collection {
 					return nil, nil
 				}
-				if event.Record != nil {
-					b.coerceRequiredFields(event.Record, collection)
+				if record != nil {
+					b.coerceRequiredFields(record, collection)
 				}
-				return event.Record, nil
+				return record, nil
 			},
 		}
 	}
@@ -478,9 +499,11 @@ func (b *Builder) buildGenericRecordTypes() {
 			Description: "CID of the record",
 		},
 		"did": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.String),
-			Description: "DID of the actor",
+			Type:              graphql.NewNonNull(graphql.String),
+			Description:       "DID of the actor",
+			DeprecationReason: authoridentity.DIDDeprecationReason,
 		},
+		"author": authoridentity.Field(),
 		"collection": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "Collection NSID",
@@ -537,9 +560,11 @@ func (b *Builder) buildRecordTimelineTypes() {
 			Description: "CID of the current record value.",
 		},
 		"did": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.String),
-			Description: "DID of the record author.",
+			Type:              graphql.NewNonNull(graphql.String),
+			Description:       "DID of the record author.",
+			DeprecationReason: authoridentity.DIDDeprecationReason,
 		},
+		"author": authoridentity.Field(),
 		"collection": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "AT Protocol collection NSID.",
@@ -1185,6 +1210,71 @@ func attachExternalLabels(node interface{}, rec *repositories.Record, hydration 
 	nodeMap[externallabels.HistorySourceKey] = hydration.history[subject.Key()]
 }
 
+type authorHydration struct {
+	byDID map[string]map[string]interface{}
+}
+
+func (b *Builder) hydrateAuthorsForConnection(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record) (*authorHydration, error) {
+	if !isFieldPathSelected(p, "edges", "node", "author") {
+		return nil, nil
+	}
+	return b.hydrateAuthorsForRecords(p, repos, records)
+}
+
+func (b *Builder) hydrateAuthorForSingleRecord(p graphql.ResolveParams, repos *resolver.Repositories, rec *repositories.Record) (*authorHydration, error) {
+	if !isFieldPathSelected(p, "author") {
+		return nil, nil
+	}
+	return b.hydrateAuthorsForRecords(p, repos, []*repositories.Record{rec})
+}
+
+func (b *Builder) hydrateAuthorsForRecords(p graphql.ResolveParams, repos *resolver.Repositories, records []*repositories.Record) (*authorHydration, error) {
+	if repos == nil || repos.Actors == nil || len(records) == 0 {
+		return nil, nil
+	}
+
+	dids := make([]string, 0, len(records))
+	seen := make(map[string]bool, len(records))
+	for _, rec := range records {
+		if rec == nil || rec.DID == "" || seen[rec.DID] {
+			continue
+		}
+		seen[rec.DID] = true
+		dids = append(dids, rec.DID)
+	}
+	if len(dids) == 0 {
+		return &authorHydration{byDID: map[string]map[string]interface{}{}}, nil
+	}
+
+	actors, err := b.loadAuthors(p.Context, repos.Actors, dids)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate record authors: %w", err)
+	}
+
+	byDID := make(map[string]map[string]interface{}, len(dids))
+	for _, did := range dids {
+		handle := ""
+		if actor, ok := actors[did]; ok && actor != nil {
+			handle = actor.Handle
+		}
+		byDID[did] = authoridentity.NewSource(did, handle)
+	}
+	return &authorHydration{byDID: byDID}, nil
+}
+
+func attachAuthorIdentity(node interface{}, rec *repositories.Record, hydration *authorHydration) {
+	if hydration == nil || rec == nil {
+		return
+	}
+	nodeMap, ok := node.(map[string]interface{})
+	if !ok {
+		return
+	}
+	if author, exists := hydration.byDID[rec.DID]; exists {
+		nodeMap[authoridentity.SourceKey] = author
+	}
+}
+
 type certifiedProfileHydration struct {
 	byDID map[string]map[string]interface{}
 }
@@ -1416,6 +1506,10 @@ func (b *Builder) resolveRecordConnection(
 		if err != nil {
 			return nil, err
 		}
+		authors, err := b.hydrateAuthorsForConnection(p, repos, records)
+		if err != nil {
+			return nil, err
+		}
 		certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, records)
 		if err != nil {
 			return nil, err
@@ -1437,6 +1531,7 @@ func (b *Builder) resolveRecordConnection(
 				continue
 			}
 			attachExternalLabels(node, rec, labelsBySubject)
+			attachAuthorIdentity(node, rec, authors)
 			attachCertifiedProfileData(node, rec, certifiedProfiles)
 
 			cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
@@ -1504,6 +1599,10 @@ func (b *Builder) resolveRecordConnection(
 	if err != nil {
 		return nil, err
 	}
+	authors, err := b.hydrateAuthorsForConnection(p, repos, records)
+	if err != nil {
+		return nil, err
+	}
 	certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, records)
 	if err != nil {
 		return nil, err
@@ -1525,6 +1624,7 @@ func (b *Builder) resolveRecordConnection(
 			continue
 		}
 		attachExternalLabels(node, rec, labelsBySubject)
+		attachAuthorIdentity(node, rec, authors)
 		attachCertifiedProfileData(node, rec, certifiedProfiles)
 
 		cursor := encodeCursorValues(sortFieldValueForRecord(rec, value, sortOpt), rec.URI)
@@ -1663,6 +1763,10 @@ func (b *Builder) createRecordTimelineResolver() graphql.FieldResolveFn {
 		for _, rec := range records {
 			recordsForHydration = append(recordsForHydration, &rec.Record)
 		}
+		authorIdentities, err := b.hydrateAuthorsForConnection(p, repos, recordsForHydration)
+		if err != nil {
+			return nil, err
+		}
 		certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, recordsForHydration)
 		if err != nil {
 			return nil, err
@@ -1688,6 +1792,7 @@ func (b *Builder) createRecordTimelineResolver() graphql.FieldResolveFn {
 				"indexedAt":  rec.IndexedAt.UTC().Format(time.RFC3339Nano),
 				"value":      rawJSON,
 			}
+			attachAuthorIdentity(node, &rec.Record, authorIdentities)
 			attachCertifiedProfileData(node, &rec.Record, certifiedProfiles)
 
 			cursor := encodeRecordTimelineCursor(createdAt, rec.URI)
@@ -1942,6 +2047,10 @@ func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 		if err != nil {
 			return nil, err
 		}
+		authors, err := b.hydrateAuthorsForConnection(p, repos, records)
+		if err != nil {
+			return nil, err
+		}
 		certifiedProfiles, err := b.hydrateCertifiedProfilesForConnection(p, repos, records)
 		if err != nil {
 			return nil, err
@@ -1972,6 +2081,7 @@ func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 				"value":      value,
 			}
 			attachExternalLabels(node, rec, labelsBySubject)
+			attachAuthorIdentity(node, rec, authors)
 			attachCertifiedProfileData(node, rec, certifiedProfiles)
 
 			edges = append(edges, map[string]interface{}{
@@ -2096,11 +2206,16 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 		if err != nil {
 			return nil, err
 		}
+		authors, err := b.hydrateAuthorForSingleRecord(p, repos, rec)
+		if err != nil {
+			return nil, err
+		}
 		certifiedProfiles, err := b.hydrateCertifiedProfileForSingleRecord(p, repos, rec)
 		if err != nil {
 			return nil, err
 		}
 		attachExternalLabels(data, rec, labelsBySubject)
+		attachAuthorIdentity(data, rec, authors)
 		attachCertifiedProfileData(data, rec, certifiedProfiles)
 
 		return data, nil

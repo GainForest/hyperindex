@@ -346,6 +346,7 @@ func TestObjectBuilder_BuildRecordType_SkipsReservedFields(t *testing.T) {
 		{name: "did collision", colliding: "did", wantMetaType: "String!"},
 		{name: "cid collision", colliding: "cid", wantMetaType: "String!"},
 		{name: "rkey collision", colliding: "rkey", wantMetaType: "String!"},
+		{name: "author collision", colliding: "author", wantMetaType: "ActorIdentity!"},
 		{name: "externalLabels collision", colliding: "externalLabels", wantMetaType: "[ExternalLabel!]!"},
 	}
 

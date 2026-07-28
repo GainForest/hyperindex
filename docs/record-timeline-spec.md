@@ -239,7 +239,7 @@ Records with missing, malformed, or unparseable `createdAt` are excluded from `r
 
 If no Certified profile record exists for an author, `certifiedProfileData` is `null`.
 
-If a future `handle` field is added to `AppCertifiedActorProfile`, it should be implemented as nullable virtual identity metadata, not persisted into the profile JSON. The profile hydration path can batch-fetch handles for the page's distinct DIDs only when `certifiedProfileData.handle` is selected.
+`author` is non-null virtual identity metadata on every timeline node. It exposes the record author's non-null DID and nullable current handle from the `actor` table; the legacy direct `did` output remains available but is deprecated. The resolver batch-fetches actors for the page's distinct DIDs only when `author` is selected.
 
 ## Database design
 
@@ -383,15 +383,15 @@ LIMIT ?;
    - build profile URIs `at://<did>/app.certified.actor.profile/self`,
    - fetch them with one batch `GetByURIs` call,
    - attach profile source maps by DID.
-7. If future virtual profile fields such as `handle` are selected:
-   - batch-fetch handles for the same distinct DIDs,
-   - attach them to profile source maps before field resolution.
+7. If `author` is selected:
+   - batch-fetch actors for the same distinct DIDs,
+   - attach `{ did, handle }` identity source maps before field resolution.
 
 This is not N+1. The expected query count is:
 
 - one query for timeline rows,
 - plus one optional batch query for Certified profile records,
-- plus one optional batch query for actor handles if that virtual field exists and is selected.
+- plus one optional batch query for actor identities when `author` is selected.
 
 ## Performance expectations
 

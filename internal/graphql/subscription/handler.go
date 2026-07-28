@@ -10,6 +10,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/graphql-go/graphql"
+
+	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 )
 
 const (
@@ -46,6 +48,7 @@ type subscribePayload struct {
 type Handler struct {
 	schema   *graphql.Schema
 	pubsub   *PubSub
+	repos    *resolver.Repositories
 	upgrader websocket.Upgrader
 }
 
@@ -53,10 +56,11 @@ type Handler struct {
 // allowedOrigins controls which origins may open WebSocket connections.
 // Pass []string{"*"} to allow all origins (development only).
 // Pass nil or empty slice to enforce same-origin policy.
-func NewHandler(schema *graphql.Schema, pubsub *PubSub, allowedOrigins []string) *Handler {
+func NewHandler(schema *graphql.Schema, pubsub *PubSub, repos *resolver.Repositories, allowedOrigins []string) *Handler {
 	return &Handler{
 		schema: schema,
 		pubsub: pubsub,
+		repos:  repos,
 		upgrader: websocket.Upgrader{
 			Subprotocols: []string{graphqlWSProtocol},
 			CheckOrigin:  makeOriginChecker(allowedOrigins),
@@ -109,6 +113,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		conn:          conn,
 		schema:        h.schema,
 		pubsub:        h.pubsub,
+		repos:         h.repos,
 		subscriptions: make(map[string]context.CancelFunc),
 	}
 
@@ -120,6 +125,7 @@ type wsClient struct {
 	conn          *websocket.Conn
 	schema        *graphql.Schema
 	pubsub        *PubSub
+	repos         *resolver.Repositories
 	subscriptions map[string]context.CancelFunc
 	mu            sync.Mutex
 	initialized   bool
@@ -181,8 +187,9 @@ func (c *wsClient) handleSubscribe(msg *wsMessage) {
 		return
 	}
 
-	// Create a cancellable context
-	ctx, cancel := context.WithCancel(context.Background())
+	// Create a cancellable context with the same repositories available to
+	// normal HTTP GraphQL resolvers.
+	ctx, cancel := context.WithCancel(resolver.WithRepositories(context.Background(), c.repos))
 
 	c.mu.Lock()
 	c.subscriptions[msg.ID] = cancel

@@ -17,6 +17,7 @@ import (
 	"github.com/graphql-go/graphql/language/parser"
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/graphql/authoridentity"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/testutil"
@@ -443,6 +444,7 @@ func TestBuildRecordType_ReservedFieldCollision(t *testing.T) {
 		{name: "did collision", colliding: "did", wantType: "String!"},
 		{name: "cid collision", colliding: "cid", wantType: "String!"},
 		{name: "rkey collision", colliding: "rkey", wantType: "String!"},
+		{name: "author collision", colliding: "author", wantType: "ActorIdentity!"},
 		{name: "externalLabels collision", colliding: "externalLabels", wantType: "[ExternalLabel!]!"},
 	}
 
@@ -517,6 +519,7 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 		{name: "uri collision in WhereInput", colliding: "uri"},
 		{name: "cid collision in WhereInput", colliding: "cid"},
 		{name: "rkey collision in WhereInput", colliding: "rkey"},
+		{name: "author collision in WhereInput", colliding: "author"},
 		{name: "externalLabels collision in WhereInput", colliding: "externalLabels"},
 		{name: "authorLabels collision in WhereInput", colliding: "authorLabels"},
 	}
@@ -3200,6 +3203,224 @@ func TestCertifiedProfileDataMissingProfileReturnsNull(t *testing.T) {
 	node := firstConnectionNode(t, data["comExampleCertifiedConsumer"], "comExampleCertifiedConsumer")
 	if got := node["certifiedProfileData"]; got != nil {
 		t.Fatalf("certifiedProfileData = %#v, want nil", got)
+	}
+}
+
+func TestRecordAuthorIdentityAcrossQueries(t *testing.T) {
+	schema := buildCertifiedProfileTestSchema(t)
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+
+	if err := db.Actors.UpsertIdentity(ctx, "did:plc:alice", "alice.example"); err != nil {
+		t.Fatalf("UpsertIdentity(alice) error = %v", err)
+	}
+	if err := db.Actors.UpsertIdentity(ctx, "did:plc:bob", "handle.invalid"); err != nil {
+		t.Fatalf("UpsertIdentity(bob) error = %v", err)
+	}
+	for _, record := range []struct {
+		uri  string
+		cid  string
+		did  string
+		rkey string
+		json string
+	}{
+		{
+			uri:  "at://did:plc:alice/com.example.certified.consumer/alice-record",
+			cid:  "cid-author-alice",
+			did:  "did:plc:alice",
+			rkey: "alice-record",
+			json: `{"text":"hello from alice","createdAt":"2025-01-02T03:04:05Z"}`,
+		},
+		{
+			uri:  "at://did:plc:bob/com.example.certified.consumer/bob-record",
+			cid:  "cid-author-bob",
+			did:  "did:plc:bob",
+			rkey: "bob-record",
+			json: `{"text":"hello from bob","createdAt":"2025-01-01T03:04:05Z"}`,
+		},
+	} {
+		if _, err := db.Records.Insert(ctx, record.uri, record.cid, record.did, "com.example.certified.consumer", record.json); err != nil {
+			t.Fatalf("Insert(%s) error = %v", record.did, err)
+		}
+	}
+
+	repos := &resolver.Repositories{Records: db.Records, Actors: db.Actors, ExternalLabels: db.ExternalLabels}
+	ctx = resolver.WithRepositories(ctx, repos)
+	query := `{
+		typed: comExampleCertifiedConsumer(first: 10) {
+			edges { node { did author { did handle } } }
+		}
+		generic: records(collection: "com.example.certified.consumer", first: 10) {
+			edges { node { did author { did handle } } }
+		}
+		timeline: recordTimeline(where: { collection: { in: ["com.example.certified.consumer"] } }, first: 10) {
+			edges { node { did author { did handle } } }
+		}
+		searchResults: search(query: "hello", collection: "com.example.certified.consumer", first: 10) {
+			edges { node { did author { did handle } } }
+		}
+		alice: comExampleCertifiedConsumerByUri(uri: "at://did:plc:alice/com.example.certified.consumer/alice-record") {
+			did author { did handle }
+		}
+		bob: comExampleCertifiedConsumerByUri(uri: "at://did:plc:bob/com.example.certified.consumer/bob-record") {
+			did author { did handle }
+		}
+	}`
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+
+	for _, field := range []string{"typed", "generic", "timeline", "searchResults"} {
+		connection := data[field].(map[string]interface{})
+		edges := connection["edges"].([]interface{})
+		if len(edges) != 2 {
+			t.Fatalf("%s edges = %d, want 2", field, len(edges))
+		}
+		for _, rawEdge := range edges {
+			node := rawEdge.(map[string]interface{})["node"].(map[string]interface{})
+			assertRecordAuthor(t, node, field)
+		}
+	}
+	assertRecordAuthor(t, data["alice"].(map[string]interface{}), "alice")
+	assertRecordAuthor(t, data["bob"].(map[string]interface{}), "bob")
+
+	for _, typeName := range []string{"ComExampleCertifiedConsumer", "GenericRecord", "RecordTimelineNode", "RecordEvent"} {
+		recordType := schema.Type(typeName)
+		if recordType == nil {
+			t.Fatalf("%s type missing", typeName)
+		}
+		fields := recordType.(*graphql.Object).Fields()
+		if got := fields["did"].DeprecationReason; got != "Use author.did instead." {
+			t.Fatalf("%s.did deprecation reason = %q", typeName, got)
+		}
+		if got := fields["author"].Type.String(); got != "ActorIdentity!" {
+			t.Fatalf("%s.author type = %q, want ActorIdentity!", typeName, got)
+		}
+	}
+
+	subscriptionResult := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `subscription { recordEvents { did author { did handle } } }`,
+		Context:       ctx,
+		RootObject: map[string]interface{}{
+			"recordEvents": map[string]interface{}{"did": "did:plc:alice"},
+		},
+	})
+	if len(subscriptionResult.Errors) > 0 {
+		t.Fatalf("subscription author returned errors: %v", subscriptionResult.Errors)
+	}
+	subscriptionData := subscriptionResult.Data.(map[string]interface{})["recordEvents"].(map[string]interface{})
+	assertRecordAuthor(t, subscriptionData, "recordEvents")
+
+	typedSubscriptionResult := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `subscription { comExampleCertifiedConsumerEvents { did author { did handle } } }`,
+		Context:       ctx,
+		RootObject: map[string]interface{}{
+			"recordEvents": map[string]interface{}{
+				"collection": "com.example.certified.consumer",
+				"record": map[string]interface{}{
+					"uri":  "at://did:plc:alice/com.example.certified.consumer/alice-record",
+					"cid":  "cid-author-alice",
+					"did":  "did:plc:alice",
+					"rkey": "alice-record",
+				},
+			},
+		},
+	})
+	if len(typedSubscriptionResult.Errors) > 0 {
+		t.Fatalf("typed subscription author returned errors: %v", typedSubscriptionResult.Errors)
+	}
+	typedSubscriptionData := typedSubscriptionResult.Data.(map[string]interface{})["comExampleCertifiedConsumerEvents"].(map[string]interface{})
+	assertRecordAuthor(t, typedSubscriptionData, "comExampleCertifiedConsumerEvents")
+}
+
+func TestAuthorHydrationIsSelectionAwareAndBatched(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	if err := db.Actors.UpsertIdentity(ctx, "did:plc:alice", "alice.example"); err != nil {
+		t.Fatalf("UpsertIdentity() error = %v", err)
+	}
+
+	builder := NewBuilder(lexicon.NewRegistry())
+	originalLoader := builder.loadAuthors
+	loaderCalls := 0
+	var loadedDIDs []string
+	builder.loadAuthors = func(ctx context.Context, actors *repositories.ActorsRepository, dids []string) (map[string]*repositories.Actor, error) {
+		loaderCalls++
+		loadedDIDs = append([]string(nil), dids...)
+		return originalLoader(ctx, actors, dids)
+	}
+	repos := &resolver.Repositories{Actors: db.Actors}
+	records := []*repositories.Record{
+		{DID: "did:plc:alice"},
+		{DID: "did:plc:bob"},
+		{DID: "did:plc:alice"},
+	}
+
+	withoutAuthor := resolveParamsForQueryField(t, `{ records(collection: "com.example.record") { edges { node { uri } } } }`, nil)
+	withoutAuthor.Context = ctx
+	hydration, err := builder.hydrateAuthorsForConnection(withoutAuthor, repos, records)
+	if err != nil {
+		t.Fatalf("hydrateAuthorsForConnection(without author) error = %v", err)
+	}
+	if hydration != nil {
+		t.Fatalf("hydrateAuthorsForConnection(without author) = %#v, want nil", hydration)
+	}
+	if loaderCalls != 0 {
+		t.Fatalf("author loader calls without author selection = %d, want 0", loaderCalls)
+	}
+
+	withAuthor := resolveParamsForQueryField(t, `{ records(collection: "com.example.record") { edges { node { author { did handle } } } } }`, nil)
+	withAuthor.Context = ctx
+	hydration, err = builder.hydrateAuthorsForConnection(withAuthor, repos, records)
+	if err != nil {
+		t.Fatalf("hydrateAuthorsForConnection(with author) error = %v", err)
+	}
+	if len(hydration.byDID) != 2 {
+		t.Fatalf("len(hydration.byDID) = %d, want 2 distinct authors", len(hydration.byDID))
+	}
+	if loaderCalls != 1 {
+		t.Fatalf("author loader calls with author selection = %d, want 1", loaderCalls)
+	}
+	if len(loadedDIDs) != 2 {
+		t.Fatalf("author loader DID count = %d, want 2 distinct DIDs", len(loadedDIDs))
+	}
+
+	node := map[string]interface{}{"did": "did:plc:alice"}
+	attachAuthorIdentity(node, records[0], hydration)
+	attached, ok := node[authoridentity.SourceKey].(map[string]interface{})
+	if !ok {
+		t.Fatalf("attached author = %T, want map", node[authoridentity.SourceKey])
+	}
+	if attached["handle"] != "alice.example" {
+		t.Fatalf("attached handle = %v, want alice.example", attached["handle"])
+	}
+}
+
+func assertRecordAuthor(t *testing.T, node map[string]interface{}, path string) {
+	t.Helper()
+	did, _ := node["did"].(string)
+	author, ok := node["author"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("%s author = %T, want map", path, node["author"])
+	}
+	if author["did"] != did {
+		t.Fatalf("%s author.did = %v, want %s", path, author["did"], did)
+	}
+	switch did {
+	case "did:plc:alice":
+		if author["handle"] != "alice.example" {
+			t.Fatalf("%s alice handle = %v, want alice.example", path, author["handle"])
+		}
+	case "did:plc:bob":
+		if author["handle"] != nil {
+			t.Fatalf("%s bob handle = %v, want null", path, author["handle"])
+		}
+	default:
+		t.Fatalf("%s unexpected did %q", path, did)
 	}
 }
 

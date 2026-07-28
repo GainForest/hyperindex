@@ -71,6 +71,21 @@ For examples with variables:
 }
 ```
 
+## Record author identity
+
+Generated record types, `GenericRecord`, `RecordTimelineNode`, `RecordEvent`, and typed record subscriptions expose structured author identity metadata:
+
+```graphql
+author {
+  did
+  handle
+}
+```
+
+Prefer `author.did` and `author.handle` in output selection sets. `author` is non-null; `handle` is nullable when no current verified handle is available. The direct record-level `did` output remains functional but is deprecated. DID filters are unchanged: continue using `where.did` to filter records by author DID.
+
+`author` is reserved record metadata. If an uploaded Lexicon defines a top-level property named `author`, Hyperindex skips that property and its generated filter in favor of `ActorIdentity`; tell schema owners to rename colliding Lexicon properties.
+
 ## Core filter model
 
 Most typed list queries accept:
@@ -174,7 +189,7 @@ query RecentCertifiedRecords($where: RecordTimelineWhereInput!, $after: String) 
       node {
         uri
         cid
-        did
+        author { did handle }
         collection
         rkey
         createdAt
@@ -379,7 +394,7 @@ query HypercertsForDid($did: String!, $after: String) {
       node {
         uri
         cid
-        did
+        author { did handle }
         rkey
         title
         shortDescription
@@ -414,7 +429,7 @@ query HypercertByUri($uri: String!) {
   orgHypercertsClaimActivityByUri(uri: $uri) {
     uri
     cid
-    did
+    author { did handle }
     rkey
     title
     shortDescription
@@ -588,7 +603,7 @@ query CertifiedProfile($did: String!) {
       node {
         uri
         cid
-        did
+        author { did handle }
         displayName
         description
         website
@@ -709,4 +724,5 @@ query HypercertCollectionStats {
 - Say “certified profile” for `app.certified.actor.profile` records.
 - Say “EVM link” or “wallet link” for `app.certified.link.evm` records.
 - When giving user-facing parameterized examples, include both the query and variables.
+- Prefer `author { did handle }` in record output selection sets. Keep using `where.did` for author filtering; only the direct output field is deprecated.
 - When the schema has changed, prefer live introspection over this file and mention the endpoint used.

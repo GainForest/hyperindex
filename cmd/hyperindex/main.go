@@ -787,7 +787,7 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 				allowedOrigins[i] = strings.TrimSpace(allowedOrigins[i])
 			}
 		}
-		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema(), pubsub, allowedOrigins)
+		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema(), pubsub, repos, allowedOrigins)
 		r.Handle("/graphql/ws", subscriptionHandler)
 		slog.Info("GraphQL subscriptions enabled", "path", "/graphql/ws")
 	}

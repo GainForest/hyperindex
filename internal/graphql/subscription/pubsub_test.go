@@ -218,6 +218,12 @@ func TestPublishRecord(t *testing.T) {
 		if event.Record["uri"] != "at://did:plc:test/col/123" {
 			t.Errorf("record.uri = %v", event.Record["uri"])
 		}
+		if event.Record["did"] != "did:plc:test" {
+			t.Errorf("record.did = %v", event.Record["did"])
+		}
+		if event.Record["rkey"] != "123" {
+			t.Errorf("record.rkey = %v", event.Record["rkey"])
+		}
 	case <-time.After(time.Second):
 		t.Error("Timed out waiting for event")
 	}
