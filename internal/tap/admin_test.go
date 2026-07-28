@@ -201,14 +201,16 @@ func TestAdminClient_RepoInfo(t *testing.T) {
 		body       string
 		wantErr    bool
 		wantDID    string
+		wantHandle string
 	}{
 		{
 			name:       "success",
 			did:        "did:plc:abc",
 			statusCode: http.StatusOK,
-			body:       `{"did":"did:plc:abc","status":"active","rev":"abc123"}`,
+			body:       `{"did":"did:plc:abc","handle":"alice.example","status":"active","rev":"abc123"}`,
 			wantErr:    false,
 			wantDID:    "did:plc:abc",
+			wantHandle: "alice.example",
 		},
 		{
 			name:       "not found",
@@ -255,6 +257,9 @@ func TestAdminClient_RepoInfo(t *testing.T) {
 				}
 				if info.DID != tt.wantDID {
 					t.Errorf("DID: expected %s, got %s", tt.wantDID, info.DID)
+				}
+				if info.Handle != tt.wantHandle {
+					t.Errorf("Handle: expected %s, got %s", tt.wantHandle, info.Handle)
 				}
 			}
 		})

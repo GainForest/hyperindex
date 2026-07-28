@@ -37,6 +37,7 @@ func NewAdminClient(baseURL, password string) *AdminClient {
 // RepoInfoResponse holds the response from GET /info/:did.
 type RepoInfoResponse struct {
 	DID    string `json:"did"`
+	Handle string `json:"handle"`
 	Status string `json:"status"`
 	Rev    string `json:"rev,omitempty"`
 }

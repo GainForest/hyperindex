@@ -48,8 +48,9 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 			return nil
 		}
 
-		// Ensure actor exists (empty handle; identity events update it)
-		if err := h.actors.Upsert(ctx, event.DID, ""); err != nil {
+		// Ensure the actor exists without erasing identity metadata populated by
+		// Tap identity events.
+		if err := h.actors.Ensure(ctx, event.DID); err != nil {
 			slog.Debug("Failed to upsert actor", "did", event.DID, "error", err)
 		}
 
@@ -126,7 +127,7 @@ func (h *IndexHandler) HandleIdentity(ctx context.Context, event *IdentityEvent)
 		return nil
 	}
 
-	return h.actors.Upsert(ctx, event.DID, event.Handle)
+	return h.actors.UpsertIdentity(ctx, event.DID, event.Handle)
 }
 
 func shouldPurgeIdentity(event *IdentityEvent) bool {

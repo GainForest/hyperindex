@@ -52,6 +52,123 @@ func TestActorsRepository_Upsert(t *testing.T) {
 	}
 }
 
+func TestActorsRepository_EnsurePreservesHandle(t *testing.T) {
+	repo := setupActorsTest(t)
+	ctx := context.Background()
+
+	if err := repo.UpsertIdentity(ctx, "did:plc:alice", "alice.example"); err != nil {
+		t.Fatalf("UpsertIdentity() error = %v", err)
+	}
+	if err := repo.Ensure(ctx, "did:plc:alice"); err != nil {
+		t.Fatalf("Ensure(existing) error = %v", err)
+	}
+	if err := repo.Ensure(ctx, "did:plc:bob"); err != nil {
+		t.Fatalf("Ensure(new) error = %v", err)
+	}
+
+	alice, err := repo.GetByDID(ctx, "did:plc:alice")
+	if err != nil {
+		t.Fatalf("GetByDID(alice) error = %v", err)
+	}
+	if alice.Handle != "alice.example" {
+		t.Fatalf("alice.Handle = %q, want %q", alice.Handle, "alice.example")
+	}
+
+	bob, err := repo.GetByDID(ctx, "did:plc:bob")
+	if err != nil {
+		t.Fatalf("GetByDID(bob) error = %v", err)
+	}
+	if bob.Handle != "" {
+		t.Fatalf("bob.Handle = %q, want empty", bob.Handle)
+	}
+}
+
+func TestActorsRepository_GetByDIDs(t *testing.T) {
+	repo := setupActorsTest(t)
+	ctx := context.Background()
+
+	if err := repo.UpsertIdentity(ctx, "did:plc:alice", "alice.example"); err != nil {
+		t.Fatalf("UpsertIdentity(alice) error = %v", err)
+	}
+	if err := repo.Ensure(ctx, "did:plc:bob"); err != nil {
+		t.Fatalf("Ensure(bob) error = %v", err)
+	}
+
+	actors, err := repo.GetByDIDs(ctx, []string{"did:plc:bob", "did:plc:missing", "did:plc:alice"})
+	if err != nil {
+		t.Fatalf("GetByDIDs() error = %v", err)
+	}
+	if len(actors) != 2 {
+		t.Fatalf("len(GetByDIDs()) = %d, want 2", len(actors))
+	}
+	if actors["did:plc:alice"].Handle != "alice.example" {
+		t.Fatalf("alice handle = %q, want alice.example", actors["did:plc:alice"].Handle)
+	}
+	if actors["did:plc:bob"].Handle != "" {
+		t.Fatalf("bob handle = %q, want empty", actors["did:plc:bob"].Handle)
+	}
+
+	empty, err := repo.GetByDIDs(ctx, nil)
+	if err != nil {
+		t.Fatalf("GetByDIDs(nil) error = %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("len(GetByDIDs(nil)) = %d, want 0", len(empty))
+	}
+}
+
+func TestActorsRepository_MissingHandleReconciliation(t *testing.T) {
+	repo := setupActorsTest(t)
+	ctx := context.Background()
+
+	if err := repo.Ensure(ctx, "did:plc:alice"); err != nil {
+		t.Fatalf("Ensure(alice) error = %v", err)
+	}
+	if err := repo.Ensure(ctx, "did:plc:bob"); err != nil {
+		t.Fatalf("Ensure(bob) error = %v", err)
+	}
+	if err := repo.UpsertIdentity(ctx, "did:plc:carol", "carol.example"); err != nil {
+		t.Fatalf("UpsertIdentity(carol) error = %v", err)
+	}
+
+	firstPage, err := repo.ListDIDsMissingHandle(ctx, "", 1)
+	if err != nil {
+		t.Fatalf("ListDIDsMissingHandle(first page) error = %v", err)
+	}
+	if len(firstPage) != 1 || firstPage[0] != "did:plc:alice" {
+		t.Fatalf("first page = %v, want [did:plc:alice]", firstPage)
+	}
+	secondPage, err := repo.ListDIDsMissingHandle(ctx, firstPage[0], 10)
+	if err != nil {
+		t.Fatalf("ListDIDsMissingHandle(second page) error = %v", err)
+	}
+	if len(secondPage) != 1 || secondPage[0] != "did:plc:bob" {
+		t.Fatalf("second page = %v, want [did:plc:bob]", secondPage)
+	}
+
+	updated, err := repo.SetHandleIfMissing(ctx, "did:plc:alice", "alice.example")
+	if err != nil {
+		t.Fatalf("SetHandleIfMissing(alice) error = %v", err)
+	}
+	if !updated {
+		t.Fatal("SetHandleIfMissing(alice) = false, want true")
+	}
+	updated, err = repo.SetHandleIfMissing(ctx, "did:plc:carol", "stale.example")
+	if err != nil {
+		t.Fatalf("SetHandleIfMissing(carol) error = %v", err)
+	}
+	if updated {
+		t.Fatal("SetHandleIfMissing(carol) = true, want false")
+	}
+	carol, err := repo.GetByDID(ctx, "did:plc:carol")
+	if err != nil {
+		t.Fatalf("GetByDID(carol) error = %v", err)
+	}
+	if carol.Handle != "carol.example" {
+		t.Fatalf("carol.Handle = %q, want carol.example", carol.Handle)
+	}
+}
+
 func TestActorsRepository_BatchUpsert(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -99,6 +216,36 @@ func TestActorsRepository_BatchUpsert(t *testing.T) {
 				t.Errorf("GetCount() = %d, want %d", count, tt.want)
 			}
 		})
+	}
+}
+
+func TestActorsRepository_BatchUpsertDoesNotEraseHandleWithEmptyResolution(t *testing.T) {
+	repo := setupActorsTest(t)
+	ctx := context.Background()
+
+	if err := repo.UpsertIdentity(ctx, "did:plc:alice", "alice.example"); err != nil {
+		t.Fatalf("UpsertIdentity() error = %v", err)
+	}
+	if err := repo.BatchUpsert(ctx, []repositories.ActorData{
+		{DID: "did:plc:alice", Handle: ""},
+		{DID: "did:plc:bob", Handle: ""},
+	}); err != nil {
+		t.Fatalf("BatchUpsert() error = %v", err)
+	}
+
+	alice, err := repo.GetByDID(ctx, "did:plc:alice")
+	if err != nil {
+		t.Fatalf("GetByDID(alice) error = %v", err)
+	}
+	if alice.Handle != "alice.example" {
+		t.Fatalf("alice.Handle = %q, want alice.example", alice.Handle)
+	}
+	bob, err := repo.GetByDID(ctx, "did:plc:bob")
+	if err != nil {
+		t.Fatalf("GetByDID(bob) error = %v", err)
+	}
+	if bob.Handle != "" {
+		t.Fatalf("bob.Handle = %q, want empty", bob.Handle)
 	}
 }
 
