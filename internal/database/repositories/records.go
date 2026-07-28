@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -19,6 +20,10 @@ import (
 const (
 	// BatchInsertSize is the number of records per INSERT batch (6 params each = 600 SQL params).
 	BatchInsertSize = 100
+
+	// ValidationBatchUpsertSize keeps validation-aware batches within SQLite's
+	// 999-parameter limit (9 params each = 900 SQL params).
+	ValidationBatchUpsertSize = 100
 
 	// SQLParamBatchSize is the batch size for IN-clause queries, kept under SQLite's 999 param limit.
 	SQLParamBatchSize = 900
@@ -68,6 +73,34 @@ type Record struct {
 	ValidationError  string
 	ValidatedAt      *time.Time
 	LexiconHash      string
+}
+
+// RecordWrite is a create/update ingestion write whose raw record and local
+// validation result must be persisted together. RKey is carried for diagnostics
+// and caller-side validation; the database derives it from URI.
+type RecordWrite struct {
+	URI              string
+	CID              string
+	DID              string
+	Collection       string
+	RKey             string
+	JSON             string
+	ValidationStatus validation.Status
+	ValidationError  string
+	LexiconHash      string
+}
+
+// BackfillBatchResult identifies content changes committed by a backfill batch.
+// ChangedIndices refer to the input RecordWrite slice; Skipped counts same-URI,
+// same-non-empty-CID records whose validation metadata was repaired.
+type BackfillBatchResult struct {
+	ChangedIndices []int
+	Skipped        int
+}
+
+type normalizedBackfillWrite struct {
+	write         RecordWrite
+	originalIndex int
 }
 
 // RecordTimelineCursor identifies a position in the creation-time record
@@ -231,9 +264,36 @@ type RecordsRepository struct {
 	db database.Executor
 }
 
+const backfillDIDLockShardCount = 256
+
+var backfillDIDLockShards = func() [backfillDIDLockShardCount]chan struct{} {
+	var shards [backfillDIDLockShardCount]chan struct{}
+	for i := range shards {
+		shards[i] = make(chan struct{}, 1)
+	}
+	return shards
+}()
+
 // NewRecordsRepository creates a new records repository.
 func NewRecordsRepository(db database.Executor) *RecordsRepository {
 	return &RecordsRepository{db: db}
+}
+
+func acquireBackfillDIDProcessLock(ctx context.Context, did string) (func(), error) {
+	lockKey := backfillDIDLockKey(did)
+	shard := backfillDIDLockShards[uint64(lockKey)%backfillDIDLockShardCount]
+	select {
+	case shard <- struct{}{}:
+		return func() { <-shard }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func backfillDIDLockKey(did string) int64 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(did))
+	return int64(hasher.Sum64())
 }
 
 func recordCreatedAtValue(recordJSON string) database.Value {
@@ -333,6 +393,463 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 	return Inserted, nil
 }
 
+type existingValidationWriteState struct {
+	cid                string
+	hasRecordCreatedAt bool
+	status             validation.Status
+	validationError    string
+	hasValidatedAt     bool
+	lexiconHash        string
+}
+
+// UpsertWithValidation writes raw content and its validation result together.
+// An unchanged non-empty CID returns Skipped, but stale or missing validation
+// metadata and record_created_at are repaired before returning.
+func (r *RecordsRepository) UpsertWithValidation(ctx context.Context, rec RecordWrite) (InsertResult, error) {
+	if err := validateRecordWrite(rec); err != nil {
+		return Skipped, err
+	}
+
+	createdAtValue := recordCreatedAtValue(rec.JSON)
+	existing, err := r.getValidationWriteState(ctx, rec.URI)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return Skipped, fmt.Errorf("read existing validation state for %s: %w", rec.URI, err)
+	}
+	if err == nil && rec.CID != "" && existing.cid == rec.CID {
+		_, incomingHasRecordCreatedAt := createdAtValue.(database.TimestamptzValue)
+		needsCreatedAtRepair := !existing.hasRecordCreatedAt && incomingHasRecordCreatedAt
+		metadataCurrent := existing.status == rec.ValidationStatus &&
+			existing.validationError == rec.ValidationError &&
+			existing.hasValidatedAt &&
+			existing.lexiconHash == rec.LexiconHash
+		if metadataCurrent && !needsCreatedAtRepair {
+			return Skipped, nil
+		}
+
+		repaired, err := r.repairSameCIDValidation(ctx, rec, createdAtValue)
+		if err != nil {
+			return Skipped, err
+		}
+		if repaired {
+			return Skipped, nil
+		}
+		// A concurrent write changed the CID after the read. Fall through to the
+		// full upsert so content and metadata still move together.
+	}
+
+	if _, err := r.db.Exec(ctx, r.validationUpsertSQL(0), recordWriteValues(rec, createdAtValue)); err != nil {
+		return Skipped, fmt.Errorf("upsert record %s with validation: %w", rec.URI, err)
+	}
+	return Inserted, nil
+}
+
+// BatchUpsertWithValidation writes validation-aware records in one transaction.
+// Every conflict updates raw content and validation metadata in the same SQL
+// statement; unchanged content keeps its original indexed_at value.
+func (r *RecordsRepository) BatchUpsertWithValidation(ctx context.Context, records []RecordWrite) error {
+	if len(records) == 0 {
+		return nil
+	}
+	for _, rec := range records {
+		if err := validateRecordWrite(rec); err != nil {
+			return err
+		}
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin validation-aware record transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for start := 0; start < len(records); start += ValidationBatchUpsertSize {
+		end := start + ValidationBatchUpsertSize
+		if end > len(records) {
+			end = len(records)
+		}
+		if err := r.batchUpsertWithValidationTx(ctx, tx, records[start:end]); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit validation-aware record transaction: %w", err)
+	}
+	return nil
+}
+
+func normalizeBackfillRecordWrites(did string, records []RecordWrite) ([]normalizedBackfillWrite, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+	if did == "" {
+		return nil, fmt.Errorf("backfill validation-aware batch requires a DID")
+	}
+
+	normalized := make([]normalizedBackfillWrite, 0, len(records))
+	byURI := make(map[string]int, len(records))
+	for index, rec := range records {
+		if err := validateRecordWrite(rec); err != nil {
+			return nil, err
+		}
+		if rec.DID != did {
+			return nil, fmt.Errorf("backfill validation-aware batch for %s contains record %s owned by %s", did, rec.URI, rec.DID)
+		}
+		if existingIndex, ok := byURI[rec.URI]; ok {
+			existing := normalized[existingIndex].write
+			if conflict := backfillDuplicateConflict(existing, rec); conflict != "" {
+				return nil, fmt.Errorf("conflicting duplicate backfill URI %s: %s", rec.URI, conflict)
+			}
+			continue
+		}
+		byURI[rec.URI] = len(normalized)
+		normalized = append(normalized, normalizedBackfillWrite{write: rec, originalIndex: index})
+	}
+	return normalized, nil
+}
+
+func backfillDuplicateConflict(first, duplicate RecordWrite) string {
+	if first.DID != duplicate.DID || first.Collection != duplicate.Collection {
+		return "DID or collection differs"
+	}
+	if first.CID != duplicate.CID {
+		return "CID differs"
+	}
+	if first.ValidationStatus != duplicate.ValidationStatus || first.ValidationError != duplicate.ValidationError || first.LexiconHash != duplicate.LexiconHash {
+		return "validation metadata differs"
+	}
+	if first.CID == "" && first.JSON != duplicate.JSON {
+		return "empty-CID content differs"
+	}
+	return ""
+}
+
+// BatchUpsertWithValidationForBackfill atomically classifies existing content
+// and writes raw records plus validation metadata for one DID. Network fetches
+// and post-commit activity logging belong outside this transaction.
+func (r *RecordsRepository) BatchUpsertWithValidationForBackfill(ctx context.Context, did string, records []RecordWrite) (BackfillBatchResult, error) {
+	var result BackfillBatchResult
+	normalized, err := normalizeBackfillRecordWrites(did, records)
+	if err != nil || len(normalized) == 0 {
+		return result, err
+	}
+
+	release, err := acquireBackfillDIDProcessLock(ctx, did)
+	if err != nil {
+		return result, fmt.Errorf("wait for backfill lock for %s: %w", did, err)
+	}
+	defer release()
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, fmt.Errorf("begin backfill record transaction for %s: %w", did, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", backfillDIDLockKey(did)); err != nil {
+			return result, fmt.Errorf("acquire PostgreSQL backfill advisory transaction lock for %s: %w", did, err)
+		}
+	case database.SQLite:
+		if _, err := tx.ExecContext(ctx, "UPDATE record SET uri = uri WHERE 0"); err != nil {
+			return result, fmt.Errorf("acquire SQLite backfill writer lock for %s: %w", did, err)
+		}
+	}
+
+	uris := make([]string, len(normalized))
+	for i, rec := range normalized {
+		uris[i] = rec.write.URI
+	}
+	existingByURI, err := r.getCIDsByURIsTx(ctx, tx, uris)
+	if err != nil {
+		return result, fmt.Errorf("classify existing repo %s records: %w", did, err)
+	}
+	changed := make([]RecordWrite, 0, len(normalized))
+	repairs := make([]RecordWrite, 0)
+	result.ChangedIndices = make([]int, 0, len(normalized))
+	for _, rec := range normalized {
+		if rec.write.CID != "" && existingByURI[rec.write.URI] == rec.write.CID {
+			repairs = append(repairs, rec.write)
+			result.Skipped++
+			continue
+		}
+		changed = append(changed, rec.write)
+		result.ChangedIndices = append(result.ChangedIndices, rec.originalIndex)
+	}
+
+	for start := 0; start < len(changed); start += ValidationBatchUpsertSize {
+		end := start + ValidationBatchUpsertSize
+		if end > len(changed) {
+			end = len(changed)
+		}
+		if err := r.batchUpsertWithValidationTx(ctx, tx, changed[start:end]); err != nil {
+			return BackfillBatchResult{}, err
+		}
+	}
+	for start := 0; start < len(repairs); start += ValidationBatchUpsertSize {
+		end := start + ValidationBatchUpsertSize
+		if end > len(repairs) {
+			end = len(repairs)
+		}
+		if err := r.batchRepairBackfillValidationTx(ctx, tx, repairs[start:end]); err != nil {
+			return BackfillBatchResult{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return BackfillBatchResult{}, fmt.Errorf("commit backfill record transaction for %s: %w", did, err)
+	}
+	return result, nil
+}
+
+func (r *RecordsRepository) batchRepairBackfillValidationTx(ctx context.Context, tx *sql.Tx, records []RecordWrite) error {
+	valueSets := make([]string, 0, len(records))
+	args := make([]any, 0, len(records)*6)
+	for i, rec := range records {
+		base := i * 6
+		placeholders := make([]string, 6)
+		for j := range placeholders {
+			placeholders[j] = r.db.Placeholder(base + j + 1)
+		}
+		if r.db.Dialect() == database.PostgreSQL {
+			for j := 0; j < 5; j++ {
+				placeholders[j] += "::text"
+			}
+			placeholders[5] += "::timestamptz"
+		}
+		valueSets = append(valueSets, fmt.Sprintf("(%s)", strings.Join(placeholders, ", ")))
+		args = append(args, r.db.ConvertParams([]database.Value{
+			database.Text(rec.URI),
+			database.Text(rec.CID),
+			database.Text(string(rec.ValidationStatus)),
+			nullableTextValue(rec.ValidationError),
+			nullableTextValue(rec.LexiconHash),
+			recordCreatedAtValue(rec.JSON),
+		})...)
+	}
+
+	validatedAtExpr := "datetime('now')"
+	if r.db.Dialect() == database.PostgreSQL {
+		validatedAtExpr = "NOW()"
+	}
+	query := fmt.Sprintf(`WITH incoming(uri, cid, validation_status, validation_error, lexicon_hash, record_created_at) AS (VALUES %s)
+		UPDATE record SET
+			validation_status = (SELECT i.validation_status FROM incoming i WHERE i.uri = record.uri AND i.cid = record.cid),
+			validation_error = (SELECT i.validation_error FROM incoming i WHERE i.uri = record.uri AND i.cid = record.cid),
+			validated_at = %s,
+			lexicon_hash = (SELECT i.lexicon_hash FROM incoming i WHERE i.uri = record.uri AND i.cid = record.cid),
+			record_created_at = COALESCE(record.record_created_at, (SELECT i.record_created_at FROM incoming i WHERE i.uri = record.uri AND i.cid = record.cid))
+		WHERE EXISTS (SELECT 1 FROM incoming i WHERE i.uri = record.uri AND i.cid = record.cid)`, strings.Join(valueSets, ", "), validatedAtExpr)
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("repair %d same-CID backfill records: %w", len(records), err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read repaired backfill row count: %w", err)
+	}
+	if affected != int64(len(records)) {
+		return fmt.Errorf("repair same-CID backfill records affected %d rows, want %d", affected, len(records))
+	}
+	return nil
+}
+
+func (r *RecordsRepository) getCIDsByURIsTx(ctx context.Context, tx *sql.Tx, uris []string) (map[string]string, error) {
+	result := make(map[string]string)
+	for start := 0; start < len(uris); start += SQLParamBatchSize {
+		end := start + SQLParamBatchSize
+		if end > len(uris) {
+			end = len(uris)
+		}
+		batch := uris[start:end]
+		params := make([]database.Value, len(batch))
+		for i, uri := range batch {
+			params[i] = database.Text(uri)
+		}
+		query := fmt.Sprintf("SELECT uri, cid FROM record WHERE uri IN (%s)", r.db.Placeholders(len(batch), 1))
+		if r.db.Dialect() == database.PostgreSQL {
+			query += " FOR UPDATE"
+		}
+		rows, err := tx.QueryContext(ctx, query, r.db.ConvertParams(params)...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var uri, cid string
+			if err := rows.Scan(&uri, &cid); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			result[uri] = cid
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (r *RecordsRepository) batchUpsertWithValidationTx(ctx context.Context, tx *sql.Tx, records []RecordWrite) error {
+	valueSets := make([]string, 0, len(records))
+	args := make([]any, 0, len(records)*9)
+	for i, rec := range records {
+		base := i * 9
+		valueSets = append(valueSets, r.validationValueSetSQL(base))
+		values := recordWriteValues(rec, recordCreatedAtValue(rec.JSON))
+		args = append(args, r.db.ConvertParams(values)...)
+	}
+
+	query := r.validationBatchUpsertSQL(strings.Join(valueSets, ", "))
+	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		return fmt.Errorf("batch upsert %d records with validation: %w", len(records), err)
+	}
+	return nil
+}
+
+func validateRecordWrite(rec RecordWrite) error {
+	if rec.URI == "" || rec.DID == "" || rec.Collection == "" || rec.JSON == "" {
+		return fmt.Errorf("validation-aware record write requires uri, did, collection, and json; got uri=%q did=%q collection=%q", rec.URI, rec.DID, rec.Collection)
+	}
+	switch rec.ValidationStatus {
+	case validation.StatusValid, validation.StatusInvalid, validation.StatusUnknownSchema, validation.StatusValidationError:
+		return nil
+	default:
+		return fmt.Errorf("validation-aware record write for %s has unsupported validation status %q", rec.URI, rec.ValidationStatus)
+	}
+}
+
+func recordWriteValues(rec RecordWrite, createdAt database.Value) []database.Value {
+	return []database.Value{
+		database.Text(rec.URI),
+		database.Text(rec.CID),
+		database.Text(rec.DID),
+		database.Text(rec.Collection),
+		database.Text(rec.JSON),
+		createdAt,
+		database.Text(string(rec.ValidationStatus)),
+		nullableTextValue(rec.ValidationError),
+		nullableTextValue(rec.LexiconHash),
+	}
+}
+
+func (r *RecordsRepository) validationValueSetSQL(base int) string {
+	placeholders := make([]string, 9)
+	for i := range placeholders {
+		placeholders[i] = r.db.Placeholder(base + i + 1)
+	}
+	validatedAtExpr := "datetime('now')"
+	if r.db.Dialect() == database.PostgreSQL {
+		placeholders[4] += "::jsonb"
+		placeholders[5] += "::timestamptz"
+		validatedAtExpr = "NOW()"
+	}
+	values := append([]string{}, placeholders[:8]...)
+	values = append(values, validatedAtExpr, placeholders[8])
+	return fmt.Sprintf("(%s)", strings.Join(values, ", "))
+}
+
+func (r *RecordsRepository) validationUpsertSQL(base int) string {
+	return r.validationBatchUpsertSQL(r.validationValueSetSQL(base))
+}
+
+func (r *RecordsRepository) validationBatchUpsertSQL(valueSets string) string {
+	if r.db.Dialect() == database.PostgreSQL {
+		return fmt.Sprintf(`INSERT INTO record (
+			uri, cid, did, collection, json, record_created_at,
+			validation_status, validation_error, validated_at, lexicon_hash
+		) VALUES %s
+		ON CONFLICT(uri) DO UPDATE SET
+			cid = EXCLUDED.cid,
+			did = EXCLUDED.did,
+			collection = EXCLUDED.collection,
+			json = EXCLUDED.json,
+			indexed_at = CASE
+				WHEN record.cid IS DISTINCT FROM EXCLUDED.cid OR record.json IS DISTINCT FROM EXCLUDED.json THEN NOW()
+				ELSE record.indexed_at
+			END,
+			record_created_at = COALESCE(record.record_created_at, EXCLUDED.record_created_at),
+			validation_status = EXCLUDED.validation_status,
+			validation_error = EXCLUDED.validation_error,
+			validated_at = EXCLUDED.validated_at,
+			lexicon_hash = EXCLUDED.lexicon_hash`, valueSets)
+	}
+	return fmt.Sprintf(`INSERT INTO record (
+		uri, cid, did, collection, json, record_created_at,
+		validation_status, validation_error, validated_at, lexicon_hash
+	) VALUES %s
+	ON CONFLICT(uri) DO UPDATE SET
+		cid = excluded.cid,
+		did = excluded.did,
+		collection = excluded.collection,
+		json = excluded.json,
+		indexed_at = CASE
+			WHEN record.cid != excluded.cid OR record.json != excluded.json THEN datetime('now')
+			ELSE record.indexed_at
+		END,
+		record_created_at = COALESCE(record.record_created_at, excluded.record_created_at),
+		validation_status = excluded.validation_status,
+		validation_error = excluded.validation_error,
+		validated_at = excluded.validated_at,
+		lexicon_hash = excluded.lexicon_hash`, valueSets)
+}
+
+func (r *RecordsRepository) getValidationWriteState(ctx context.Context, uri string) (existingValidationWriteState, error) {
+	columns := "cid, record_created_at, validation_status, validation_error, validated_at, lexicon_hash"
+	if r.db.Dialect() == database.PostgreSQL {
+		columns = "cid, record_created_at::text, validation_status, validation_error, validated_at::text, lexicon_hash"
+	}
+	query := fmt.Sprintf("SELECT %s FROM record WHERE uri = %s", columns, r.db.Placeholder(1))
+	var state existingValidationWriteState
+	var recordCreatedAt, validationError, validatedAt, lexiconHash sql.NullString
+	var status string
+	if err := r.db.QueryRow(ctx, query, []database.Value{database.Text(uri)},
+		&state.cid, &recordCreatedAt, &status, &validationError, &validatedAt, &lexiconHash); err != nil {
+		return existingValidationWriteState{}, err
+	}
+	state.hasRecordCreatedAt = recordCreatedAt.Valid
+	state.status = validation.Status(status)
+	state.validationError = validationError.String
+	state.hasValidatedAt = validatedAt.Valid
+	state.lexiconHash = lexiconHash.String
+	return state, nil
+}
+
+func (r *RecordsRepository) repairSameCIDValidation(ctx context.Context, rec RecordWrite, createdAt database.Value) (bool, error) {
+	validatedAtExpr := "datetime('now')"
+	createdAtPlaceholder := r.db.Placeholder(4)
+	if r.db.Dialect() == database.PostgreSQL {
+		validatedAtExpr = "NOW()"
+		createdAtPlaceholder += "::timestamptz"
+	}
+	query := fmt.Sprintf(`UPDATE record SET
+		validation_status = %s,
+		validation_error = %s,
+		validated_at = %s,
+		lexicon_hash = %s,
+		record_created_at = COALESCE(record_created_at, %s)
+		WHERE uri = %s AND cid = %s`,
+		r.db.Placeholder(1), r.db.Placeholder(2), validatedAtExpr,
+		r.db.Placeholder(3), createdAtPlaceholder, r.db.Placeholder(5), r.db.Placeholder(6))
+	result, err := r.db.Exec(ctx, query, []database.Value{
+		database.Text(string(rec.ValidationStatus)),
+		nullableTextValue(rec.ValidationError),
+		nullableTextValue(rec.LexiconHash),
+		createdAt,
+		database.Text(rec.URI),
+		database.Text(rec.CID),
+	})
+	if err != nil {
+		return false, fmt.Errorf("repair validation metadata for unchanged record %s: %w", rec.URI, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read repaired row count for %s: %w", rec.URI, err)
+	}
+	return affected == 1, nil
+}
+
 // UpdateValidationStatus records the local lexicon validation result for a raw record.
 func (r *RecordsRepository) UpdateValidationStatus(ctx context.Context, uri string, status validation.Status, validationError, lexiconHash string) error {
 	validationErrorValue := nullableTextValue(validationError)
@@ -360,6 +877,51 @@ func (r *RecordsRepository) UpdateValidationStatus(ctx context.Context, uri stri
 	return err
 }
 
+// UpdateValidationStatusIfUnchanged records a refresh result only when the row
+// still has the URI, CID, and JSON observed before validation. A false result is
+// a benign concurrent replacement or deletion; ingestion owns the metadata for
+// the current row.
+func (r *RecordsRepository) UpdateValidationStatusIfUnchanged(ctx context.Context, observed *Record, status validation.Status, validationError, lexiconHash string) (bool, error) {
+	if observed == nil {
+		return false, fmt.Errorf("update validation status conditionally: observed record is nil")
+	}
+
+	validatedAtExpr := "datetime('now')"
+	jsonPredicate := fmt.Sprintf("json = %s", r.db.Placeholder(6))
+	if r.db.Dialect() == database.PostgreSQL {
+		validatedAtExpr = "NOW()"
+		jsonPredicate = fmt.Sprintf("json = %s::jsonb", r.db.Placeholder(6))
+	}
+
+	sqlStr := fmt.Sprintf(`UPDATE record
+		SET validation_status = %s,
+			validation_error = %s,
+			validated_at = %s,
+			lexicon_hash = %s
+		WHERE uri = %s
+		  AND cid = %s
+		  AND %s`,
+		r.db.Placeholder(1), r.db.Placeholder(2), validatedAtExpr, r.db.Placeholder(3),
+		r.db.Placeholder(4), r.db.Placeholder(5), jsonPredicate)
+
+	result, err := r.db.Exec(ctx, sqlStr, []database.Value{
+		database.Text(string(status)),
+		nullableTextValue(validationError),
+		nullableTextValue(lexiconHash),
+		database.Text(observed.URI),
+		database.Text(observed.CID),
+		database.Text(observed.JSON),
+	})
+	if err != nil {
+		return false, fmt.Errorf("conditionally update validation metadata for %s: %w", observed.URI, err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("read conditional validation row count for %s: %w", observed.URI, err)
+	}
+	return affected == 1, nil
+}
+
 // MarkCollectionUnknownSchema marks every record in a collection as hidden from
 // typed GraphQL because Hyperindex has no saved lexicon to validate it against.
 func (r *RecordsRepository) MarkCollectionUnknownSchema(ctx context.Context, collection, reason string) error {
@@ -373,13 +935,21 @@ func (r *RecordsRepository) MarkCollectionUnknownSchema(ctx context.Context, col
 			validation_error = %s,
 			validated_at = %s,
 			lexicon_hash = NULL
-		WHERE collection = %s`,
-		r.db.Placeholder(1), r.db.Placeholder(2), validatedAtExpr, r.db.Placeholder(3))
+		WHERE collection = %s
+		  AND (validation_status != %s
+			OR validation_error IS NULL
+			OR validation_error != %s
+			OR validated_at IS NULL
+			OR lexicon_hash IS NOT NULL)`,
+		r.db.Placeholder(1), r.db.Placeholder(2), validatedAtExpr, r.db.Placeholder(3),
+		r.db.Placeholder(4), r.db.Placeholder(5))
 
 	_, err := r.db.Exec(ctx, sqlStr, []database.Value{
 		database.Text(string(validation.StatusUnknownSchema)),
 		database.Text(reason),
 		database.Text(collection),
+		database.Text(string(validation.StatusUnknownSchema)),
+		database.Text(reason),
 	})
 	return err
 }
@@ -393,15 +963,14 @@ func (r *RecordsRepository) ListRecordsNeedingValidation(ctx context.Context, co
 
 	sqlStr := fmt.Sprintf(`SELECT %s FROM record
 		WHERE collection = %s
-		  AND (validation_status != %s OR lexicon_hash IS NULL OR lexicon_hash != %s)
+		  AND (lexicon_hash IS NULL OR lexicon_hash != %s OR validated_at IS NULL)
 		  AND uri > %s
 		ORDER BY uri
 		LIMIT %d`,
-		r.recordColumns(), r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3), r.db.Placeholder(4), limit)
+		r.recordColumns(), r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3), limit)
 
 	params := []database.Value{
 		database.Text(collection),
-		database.Text(string(validation.StatusValid)),
 		database.Text(currentLexiconHash),
 		database.Text(afterURI),
 	}
@@ -561,8 +1130,34 @@ func (r *RecordsRepository) GetValidByURI(ctx context.Context, uri, collection s
 	return &rec, nil
 }
 
+// ExistsValidByURI reports whether a record is typed-visible for the supplied
+// URI and collection. It is used before deletes, while the row still exists.
+func (r *RecordsRepository) ExistsValidByURI(ctx context.Context, uri, collection string) (bool, error) {
+	query := fmt.Sprintf(`SELECT COUNT(*) FROM record
+		WHERE uri = %s AND collection = %s AND validation_status = %s`,
+		r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3))
+	var count int
+	if err := r.db.QueryRow(ctx, query, []database.Value{
+		database.Text(uri),
+		database.Text(collection),
+		database.Text(string(validation.StatusValid)),
+	}, &count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // GetByURIs retrieves multiple records by their URIs.
 func (r *RecordsRepository) GetByURIs(ctx context.Context, uris []string) ([]*Record, error) {
+	return r.getByURIs(ctx, uris, false)
+}
+
+// GetValidByURIs retrieves only typed-visible records for the supplied URIs.
+func (r *RecordsRepository) GetValidByURIs(ctx context.Context, uris []string) ([]*Record, error) {
+	return r.getByURIs(ctx, uris, true)
+}
+
+func (r *RecordsRepository) getByURIs(ctx context.Context, uris []string, validOnly bool) ([]*Record, error) {
 	if len(uris) == 0 {
 		return nil, nil
 	}
@@ -576,12 +1171,14 @@ func (r *RecordsRepository) GetByURIs(ctx context.Context, uris []string) ([]*Re
 		batch := uris[start:end]
 
 		placeholders := r.db.Placeholders(len(batch), 1)
-		sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE uri IN (%s)",
-			r.recordColumns(), placeholders)
-
-		params := make([]database.Value, len(batch))
-		for i, uri := range batch {
-			params[i] = database.Text(uri)
+		params := make([]database.Value, 0, len(batch)+1)
+		for _, uri := range batch {
+			params = append(params, database.Text(uri))
+		}
+		sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE uri IN (%s)", r.recordColumns(), placeholders)
+		if validOnly {
+			sqlStr += fmt.Sprintf(" AND validation_status = %s", r.db.Placeholder(len(batch)+1))
+			params = append(params, database.Text(string(validation.StatusValid)))
 		}
 
 		rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
@@ -2014,6 +2611,32 @@ func (r *RecordsRepository) GetByDID(ctx context.Context, did string) ([]*Record
 	defer rows.Close()
 
 	return scanRecords(rows)
+}
+
+// DeleteReturning atomically removes a record and returns the deleted row. A
+// missing row returns (nil, nil), allowing duplicate delete deliveries to stay
+// idempotent without reusing stale pre-delete visibility metadata.
+func (r *RecordsRepository) DeleteReturning(ctx context.Context, uri string) (*Record, error) {
+	sqlStr := fmt.Sprintf("DELETE FROM record WHERE uri = %s RETURNING %s", r.db.Placeholder(1), r.recordColumns())
+
+	var rec Record
+	var indexedAtStr string
+	var validationStatus string
+	var validationError, validatedAtStr, lexiconHash sql.NullString
+	err := r.db.QueryRow(ctx, sqlStr, []database.Value{database.Text(uri)},
+		&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey,
+		&validationStatus, &validationError, &validatedAtStr, &lexiconHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rec.IndexedAt = atproto.ParseTimestamp(indexedAtStr)
+	rec.ValidationStatus = validation.Status(validationStatus)
+	applyRecordValidationNulls(&rec, validationError, validatedAtStr, lexiconHash)
+	return &rec, nil
 }
 
 // Delete removes a record by URI.

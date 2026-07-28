@@ -17,7 +17,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/buildinfo"
 	"github.com/GainForest/hyperindex/internal/config"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
-	"github.com/GainForest/hyperindex/internal/lexicon"
+	graphqladmin "github.com/GainForest/hyperindex/internal/graphql/admin"
 	"github.com/GainForest/hyperindex/internal/testutil"
 	"github.com/GainForest/hyperindex/internal/validation"
 )
@@ -312,7 +312,7 @@ func TestSetupGraphQLHashesSavedLexiconsAndClassifiesBeforeServing(t *testing.T)
 	writeTestLexiconFile(t, lexiconDir, "com.example.record.json", setupGraphQLTestLexicon)
 
 	uri := "at://did:plc:test/com.example.record/3jui7kd54zh2y"
-	if _, err := db.Records.Insert(ctx, uri, "cid", "did:plc:test", "com.example.record", `{"name":"ok"}`); err != nil {
+	if _, err := db.Records.Insert(ctx, uri, "cid", "did:plc:test", "com.example.record", `{"$type":"com.example.record","name":"ok"}`); err != nil {
 		t.Fatalf("Insert() error = %v", err)
 	}
 
@@ -324,8 +324,8 @@ func TestSetupGraphQLHashesSavedLexiconsAndClassifiesBeforeServing(t *testing.T)
 	if err != nil {
 		t.Fatalf("setupGraphQL() error = %v", err)
 	}
-	if len(collections) != 0 {
-		t.Fatalf("collections = %v, want none without JetstreamCollections or DB lexicons", collections)
+	if len(collections) != 1 || collections[0] != "com.example.record" {
+		t.Fatalf("collections = %v, want startup record collection", collections)
 	}
 	wantHash := validation.HashLexiconJSON([]byte("com.example.record=" + validation.HashLexiconJSON([]byte(setupGraphQLTestLexicon))))
 	if gotHash, ok := svc.validator.LexiconHash("com.example.record"); !ok || gotHash != wantHash {
@@ -347,7 +347,111 @@ func TestSetupGraphQLHashesSavedLexiconsAndClassifiesBeforeServing(t *testing.T)
 	}
 }
 
-func TestSetupGraphQLSkipsCorruptSavedLexiconFiles(t *testing.T) {
+func TestSetupGraphQLSupportsRecordKeyLexicon(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	lexiconDir := t.TempDir()
+	recordKeyLexicon := strings.Replace(setupGraphQLTestLexicon, `"key": "tid"`, `"key": "record-key"`, 1)
+	writeTestLexiconFile(t, lexiconDir, "com.example.record.json", recordKeyLexicon)
+
+	svc := labelerTestServices(db)
+	collections, err := setupGraphQL(chi.NewRouter(), &config.Config{
+		ExternalBaseURL: "https://example.com",
+		LexiconDir:      lexiconDir,
+	}, svc, nil, nil)
+	if err != nil {
+		t.Fatalf("setupGraphQL(record-key) error = %v", err)
+	}
+	if len(collections) != 1 || collections[0] != "com.example.record" {
+		t.Fatalf("collections = %v, want record-key collection", collections)
+	}
+	result := svc.validator.ValidateRecord("com.example.record", "self", []byte(`{"$type":"com.example.record","name":"ok"}`))
+	if result.Status != validation.StatusValid {
+		t.Fatalf("record-key validation status = %q, want valid (error %q)", result.Status, result.Error)
+	}
+}
+
+func TestSetupGraphQLUsesDatabaseOverrideAndExplicitJetstreamCollections(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.SetupTestDB(t)
+	lexiconDir := t.TempDir()
+	filesystemLexicon := `{"lexicon":1,"id":"com.example.record","defs":{"main":{"type":"record","key":"tid","record":{"type":"object","required":["filesystemField"],"properties":{"filesystemField":{"type":"string"}}}}}}`
+	databaseLexicon := `{"lexicon":1,"id":"com.example.record","defs":{"main":{"type":"record","key":"tid","record":{"type":"object","required":["databaseField"],"properties":{"databaseField":{"type":"string"}}}}}}`
+	writeTestLexiconFile(t, lexiconDir, "com.example.record.json", filesystemLexicon)
+	if err := db.Lexicons.Upsert(ctx, "com.example.record", databaseLexicon); err != nil {
+		t.Fatalf("Upsert database Lexicon error = %v", err)
+	}
+
+	uri := "at://did:plc:test/com.example.record/3jui7kd54zh2y"
+	if _, err := db.Records.Insert(ctx, uri, "cid", "did:plc:test", "com.example.record", `{"$type":"com.example.record","databaseField":"database wins"}`); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+
+	svc := labelerTestServices(db)
+	collections, err := setupGraphQL(chi.NewRouter(), &config.Config{
+		ExternalBaseURL:      "https://example.com",
+		LexiconDir:           lexiconDir,
+		JetstreamCollections: "com.example.explicit,com.example.other",
+	}, svc, nil, nil)
+	if err != nil {
+		t.Fatalf("setupGraphQL() error = %v", err)
+	}
+	if len(collections) != 2 || collections[0] != "com.example.explicit" || collections[1] != "com.example.other" {
+		t.Fatalf("collections = %v, want explicit fixed override", collections)
+	}
+
+	rec, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI() error = %v", err)
+	}
+	if rec.ValidationStatus != validation.StatusValid {
+		t.Fatalf("ValidationStatus = %q, want %q from database override (error %q)", rec.ValidationStatus, validation.StatusValid, rec.ValidationError)
+	}
+}
+
+func TestSetupGraphQLAppliesStagedLexiconDeletionAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.SetupTestDB(t)
+	if err := db.Lexicons.Upsert(ctx, "com.example.record", setupGraphQLTestLexicon); err != nil {
+		t.Fatalf("Upsert database Lexicon error = %v", err)
+	}
+	adminResolver := graphqladmin.NewResolver(&graphqladmin.Repositories{Lexicons: db.Lexicons}, "did:web:example.com", nil)
+	deleted, err := adminResolver.DeleteLexicon(ctx, "com.example.record")
+	if err != nil || !deleted {
+		t.Fatalf("DeleteLexicon() deleted=%v error=%v, want true nil", deleted, err)
+	}
+
+	router := chi.NewRouter()
+	svc := labelerTestServices(db)
+	collections, err := setupGraphQL(router, &config.Config{
+		ExternalBaseURL: "https://example.com",
+		LexiconDir:      t.TempDir(),
+	}, svc, nil, nil)
+	if err != nil {
+		t.Fatalf("setupGraphQL(after deletion) error = %v", err)
+	}
+	if len(collections) != 0 {
+		t.Fatalf("startup collections after deletion = %v, want empty", collections)
+	}
+	if _, ok := svc.validator.GraphQLRegistry().GetRecordDef("com.example.record"); ok {
+		t.Fatal("deleted Lexicon remained in restarted GraphQL registry")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ comExampleRecord(first: 1) { totalCount } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	var body struct {
+		Errors []map[string]interface{} `json:"errors"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode GraphQL response: %v", err)
+	}
+	if len(body.Errors) == 0 {
+		t.Fatalf("deleted typed GraphQL field remained queryable; response=%s", response.Body.String())
+	}
+}
+
+func TestSetupGraphQLRejectsCorruptSavedLexiconFiles(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	lexiconDir := t.TempDir()
 	writeTestLexiconFile(t, lexiconDir, "broken.json", `{"id":"com.example.broken","defs":`)
@@ -356,8 +460,8 @@ func TestSetupGraphQLSkipsCorruptSavedLexiconFiles(t *testing.T) {
 		ExternalBaseURL: "https://example.com",
 		LexiconDir:      lexiconDir,
 	}, labelerTestServices(db), nil, nil)
-	if err != nil {
-		t.Fatalf("setupGraphQL() error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid JSON file") {
+		t.Fatalf("setupGraphQL() error = %v, want corrupt file path error", err)
 	}
 }
 
@@ -408,7 +512,7 @@ func labelerTestServices(db *testutil.TestDB) *services {
 
 func TestLoadLexiconsFromDirSkipsNonLexiconJSON(t *testing.T) {
 	dir := t.TempDir()
-	lexiconJSON := `{"lexicon":1,"id":"app.example.post","defs":{"main":{"type":"record","record":{"type":"object","properties":{}}}}}`
+	lexiconJSON := `{"lexicon":1,"id":"app.example.post","defs":{"main":{"type":"record","key":"any","record":{"type":"object","properties":{}}}}}`
 	if err := os.WriteFile(filepath.Join(dir, "post.json"), []byte(lexiconJSON), 0o644); err != nil {
 		t.Fatalf("write lexicon: %v", err)
 	}
@@ -416,19 +520,28 @@ func TestLoadLexiconsFromDirSkipsNonLexiconJSON(t *testing.T) {
 		t.Fatalf("write metadata: %v", err)
 	}
 
-	registry := lexicon.NewRegistry()
-	hashes, err := loadLexiconsFromDir(dir, registry)
+	saved, err := loadLexiconsFromDir(dir)
 	if err != nil {
 		t.Fatalf("loadLexiconsFromDir() error = %v", err)
 	}
-	if _, ok := registry.GetRecordDef("app.example.post"); !ok {
-		t.Fatal("registered lexicon missing from registry")
+	if len(saved) != 1 {
+		t.Fatalf("saved Lexicon count = %d, want 1", len(saved))
 	}
-	if len(hashes) != 1 {
-		t.Fatalf("hash count = %d, want 1", len(hashes))
+	if got, ok := saved["app.example.post"]; !ok || string(got) != lexiconJSON {
+		t.Fatalf("saved Lexicons missing exact app.example.post bytes: %#v", saved)
 	}
-	if _, ok := hashes["app.example.post"]; !ok {
-		t.Fatalf("hashes missing app.example.post: %#v", hashes)
+}
+
+func TestBundledLexiconsBuildIndigoValidator(t *testing.T) {
+	saved, err := loadLexiconsFromDir(filepath.Join("..", "..", "testdata", "lexicons"))
+	if err != nil {
+		t.Fatalf("loadLexiconsFromDir() error = %v", err)
+	}
+	if len(saved) == 0 {
+		t.Fatal("loadLexiconsFromDir() returned no bundled Lexicons")
+	}
+	if _, err := validation.NewValidatorFromLexiconBytes(saved); err != nil {
+		t.Fatalf("bundled Lexicons do not build an Indigo validator: %v", err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/database/migrations"
 	"github.com/GainForest/hyperindex/internal/database/postgres"
+	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/database/sqlite"
 )
 
@@ -79,6 +80,7 @@ func TestMigrations_Run(t *testing.T) {
 		"idx_record_timeline_collection_created",
 		"idx_record_collection_validation",
 		"idx_record_collection_lexicon_hash",
+		"idx_record_collection_uri",
 	}
 
 	for _, index := range expectedIndexes {
@@ -92,6 +94,10 @@ func TestMigrations_Run(t *testing.T) {
 	}
 
 	assertSQLiteRecordValidationColumns(ctx, t, exec)
+	assertSQLiteLexiconRawJSONColumn(ctx, t, exec)
+	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO lexicon (id, json) VALUES (?, ?)`, "com.example.oldwriter", `{}`); err == nil {
+		t.Fatal("SQLite old-writer Lexicon insert without raw_json succeeded, want NOT NULL failure")
+	}
 
 	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO record (uri, cid, did, collection, json) VALUES (?, ?, ?, ?, ?)`,
 		"at://did:plc:test/com.example.record/default", "cid", "did:plc:test", "com.example.record", `{"name":"default"}`); err != nil {
@@ -119,6 +125,11 @@ func TestMigrations_BackfillsRecordCreatedAtSQLite(t *testing.T) {
 		CREATE TABLE schema_migrations (
 			version TEXT PRIMARY KEY,
 			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+		CREATE TABLE lexicon (
+			id TEXT PRIMARY KEY NOT NULL,
+			json TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		);
 		CREATE TABLE record (
 			uri TEXT PRIMARY KEY NOT NULL,
@@ -229,11 +240,28 @@ func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_indexing_activity_rkey")
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_collection_validation")
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_collection_lexicon_hash")
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_collection_uri")
 	assertPostgresSequenceExists(ctx, t, exec, schemaName, "indexing_activity_id_seq")
 
 	assertPostgresRecordValidationColumns(ctx, t, exec, schemaName)
-	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO record (uri, cid, did, collection, json, rkey) VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
-		"at://did:plc:test/com.example.record/default", "cid", "did:plc:test", "com.example.record", `{"name":"default"}`, "default"); err != nil {
+	assertPostgresLexiconRawJSONColumn(ctx, t, exec, schemaName)
+	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO lexicon (id, json) VALUES ($1, $2::jsonb)`, "com.example.oldwriter", `{}`); err == nil {
+		t.Fatal("PostgreSQL old-writer Lexicon insert without raw_json succeeded, want NOT NULL failure")
+	}
+	const formattedLexicon = "{\n  \"lexicon\": 1,\n  \"id\": \"com.example.formatted\",\n  \"defs\": {}\n}\n"
+	lexiconsRepo := repositories.NewLexiconsRepository(exec)
+	if err := lexiconsRepo.Upsert(ctx, "com.example.formatted", formattedLexicon); err != nil {
+		t.Fatalf("failed to save formatted postgres Lexicon: %v", err)
+	}
+	savedLexicon, err := lexiconsRepo.GetByID(ctx, "com.example.formatted")
+	if err != nil {
+		t.Fatalf("failed to read formatted postgres Lexicon: %v", err)
+	}
+	if savedLexicon.JSON != formattedLexicon {
+		t.Fatalf("postgres raw Lexicon JSON = %q, want exact bytes %q", savedLexicon.JSON, formattedLexicon)
+	}
+	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO record (uri, cid, did, collection, json) VALUES ($1, $2, $3, $4, $5::jsonb)`,
+		"at://did:plc:test/com.example.record/default", "cid", "did:plc:test", "com.example.record", `{"name":"default"}`); err != nil {
 		t.Fatalf("failed to insert postgres record for validation metadata default check: %v", err)
 	}
 	var defaultStatus string
@@ -287,6 +315,11 @@ func TestMigrations_BackfillsRecordCreatedAtPostgres(t *testing.T) {
 		CREATE TABLE schema_migrations (
 			version TEXT PRIMARY KEY,
 			applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+		);
+		CREATE TABLE lexicon (
+			id TEXT PRIMARY KEY NOT NULL,
+			json JSONB NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 		);
 		CREATE TABLE record (
 			uri TEXT PRIMARY KEY NOT NULL,
@@ -420,6 +453,148 @@ func TestMigrations_Rollback(t *testing.T) {
 	}
 }
 
+func TestMigrations_Rollback013Then012PreservesLexiconData(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	const raw = `{"lexicon":1,"id":"com.example.saved","defs":{}}`
+	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO lexicon (id, json, raw_json) VALUES (?, ?, ?)`, "com.example.saved", raw, raw); err != nil {
+		t.Fatalf("insert Lexicon before downgrade: %v", err)
+	}
+
+	if err := migrations.Rollback(ctx, exec); err != nil {
+		t.Fatalf("Rollback(013) error = %v", err)
+	}
+	if sqliteIndexExists(t, exec, "idx_record_collection_uri") || migrationVersionExists(t, exec, "013") {
+		t.Fatal("migration 013 schema/version remained after rollback")
+	}
+	if err := migrations.Rollback(ctx, exec); err != nil {
+		t.Fatalf("Rollback(012) error = %v", err)
+	}
+	if sqliteColumnExists(t, exec, "lexicon", "raw_json") || migrationVersionExists(t, exec, "012") {
+		t.Fatal("migration 012 schema/version remained after rollback")
+	}
+	var saved string
+	if err := exec.DB().QueryRowContext(ctx, `SELECT json FROM lexicon WHERE id = ?`, "com.example.saved").Scan(&saved); err != nil {
+		t.Fatalf("query downgraded Lexicon: %v", err)
+	}
+	if saved != raw {
+		t.Fatalf("downgraded Lexicon json = %q, want %q", saved, raw)
+	}
+}
+
+func TestMigrations_ApplyAndVersionRecordRollbackTogether(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := migrations.Rollback(ctx, exec); err != nil {
+		t.Fatalf("Rollback(013) error = %v", err)
+	}
+	if _, err := exec.DB().ExecContext(ctx, `
+		CREATE TRIGGER fail_migration_013_record
+		BEFORE INSERT ON schema_migrations
+		WHEN NEW.version = '013'
+		BEGIN SELECT RAISE(ABORT, 'forced version record failure'); END;
+	`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	err := migrations.Run(ctx, exec)
+	if err == nil || !strings.Contains(err.Error(), "forced version record failure") {
+		t.Fatalf("Run() error = %v, want forced version record failure", err)
+	}
+	if sqliteIndexExists(t, exec, "idx_record_collection_uri") {
+		t.Fatal("migration 013 index survived failed atomic apply")
+	}
+	if migrationVersionExists(t, exec, "013") {
+		t.Fatal("migration 013 version was recorded after failed atomic apply")
+	}
+}
+
+func TestMigrations_DownAndVersionDeleteRollbackTogether(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := migrations.Rollback(ctx, exec); err != nil {
+		t.Fatalf("Rollback(013) error = %v", err)
+	}
+	const raw = `{"lexicon":1,"id":"com.example.rollback","defs":{}}`
+	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO lexicon (id, json, raw_json) VALUES (?, ?, ?)`, "com.example.rollback", raw, raw); err != nil {
+		t.Fatalf("insert Lexicon before failed rollback: %v", err)
+	}
+	if _, err := exec.DB().ExecContext(ctx, `
+		CREATE TRIGGER fail_migration_012_delete
+		BEFORE DELETE ON schema_migrations
+		WHEN OLD.version = '012'
+		BEGIN SELECT RAISE(ABORT, 'forced version delete failure'); END;
+	`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	err := migrations.Rollback(ctx, exec)
+	if err == nil || !strings.Contains(err.Error(), "forced version delete failure") {
+		t.Fatalf("Rollback(012) error = %v, want forced version delete failure", err)
+	}
+	if !sqliteColumnExists(t, exec, "lexicon", "raw_json") {
+		t.Fatal("raw_json column was not restored after failed atomic rollback")
+	}
+	if !migrationVersionExists(t, exec, "012") {
+		t.Fatal("migration 012 version was removed after failed atomic rollback")
+	}
+	var saved string
+	if err := exec.DB().QueryRowContext(ctx, `SELECT raw_json FROM lexicon WHERE id = ?`, "com.example.rollback").Scan(&saved); err != nil {
+		t.Fatalf("query Lexicon after failed rollback: %v", err)
+	}
+	if saved != raw {
+		t.Fatalf("raw_json after failed rollback = %q, want %q", saved, raw)
+	}
+}
+
+func sqliteIndexExists(t *testing.T, exec *sqlite.Executor, name string) bool {
+	t.Helper()
+	var count int
+	if err := exec.DB().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&count); err != nil {
+		t.Fatalf("check SQLite index %s: %v", name, err)
+	}
+	return count == 1
+}
+
+func sqliteColumnExists(t *testing.T, exec *sqlite.Executor, table, column string) bool {
+	t.Helper()
+	rows, err := exec.DB().Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatalf("inspect SQLite table %s: %v", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("scan SQLite table %s: %v", table, err)
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
+}
+
+func migrationVersionExists(t *testing.T, exec *sqlite.Executor, version string) bool {
+	t.Helper()
+	var count int
+	if err := exec.DB().QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&count); err != nil {
+		t.Fatalf("check migration version %s: %v", version, err)
+	}
+	return count == 1
+}
+
 func assertSQLiteRecordValidationColumns(ctx context.Context, t *testing.T, exec *sqlite.Executor) {
 	t.Helper()
 
@@ -493,6 +668,58 @@ func assertPostgresRecordValidationColumns(ctx context.Context, t *testing.T, ex
 	}
 	if columns["validation_status"] != "NO" {
 		t.Fatalf("postgres validation_status is nullable, want NOT NULL")
+	}
+}
+
+func assertSQLiteLexiconRawJSONColumn(ctx context.Context, t *testing.T, exec *sqlite.Executor) {
+	t.Helper()
+
+	rows, err := exec.DB().QueryContext(ctx, "PRAGMA table_info(lexicon)")
+	if err != nil {
+		t.Fatalf("failed to inspect sqlite lexicon columns: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatalf("failed to scan sqlite lexicon column metadata: %v", err)
+		}
+		if name == "raw_json" {
+			if columnType != "TEXT" || notNull != 1 {
+				t.Fatalf("sqlite lexicon.raw_json type/not-null = %s/%d, want TEXT/1", columnType, notNull)
+			}
+			if defaultValue.Valid {
+				t.Fatalf("sqlite lexicon.raw_json default = %q, want no default", defaultValue.String)
+			}
+			return
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("failed to iterate sqlite lexicon column metadata: %v", err)
+	}
+	t.Fatal("sqlite lexicon.raw_json column missing")
+}
+
+func assertPostgresLexiconRawJSONColumn(ctx context.Context, t *testing.T, exec *postgres.Executor, schemaName string) {
+	t.Helper()
+
+	var dataType, nullable string
+	var columnDefault sql.NullString
+	if err := exec.DB().QueryRowContext(ctx, `
+		SELECT data_type, is_nullable, column_default
+		FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = 'lexicon' AND column_name = 'raw_json'`, schemaName,
+	).Scan(&dataType, &nullable, &columnDefault); err != nil {
+		t.Fatalf("failed to inspect postgres lexicon.raw_json: %v", err)
+	}
+	if dataType != "text" || nullable != "NO" {
+		t.Fatalf("postgres lexicon.raw_json type/nullable = %s/%s, want text/NO", dataType, nullable)
+	}
+	if columnDefault.Valid {
+		t.Fatalf("postgres lexicon.raw_json default = %q, want no default", columnDefault.String)
 	}
 }
 

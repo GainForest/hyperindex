@@ -505,7 +505,7 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 			},
 			"uploadLexicons": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.Int),
-				Description: "Upload lexicons from a base64-encoded ZIP file (admin only)",
+				Description: "Validate and save Lexicons from a base64-encoded ZIP file; restart Hyperindex to apply them (admin only)",
 				Args: graphql.FieldConfigArgument{
 					"zipBase64": &graphql.ArgumentConfig{
 						Type:        graphql.NewNonNull(graphql.String),
@@ -650,7 +650,7 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 			},
 			"registerLexicon": &graphql.Field{
 				Type:        graphql.NewNonNull(LexiconType),
-				Description: "Register a lexicon by NSID (resolves via DNS and fetches from PDS)",
+				Description: "Resolve, validate, and save a Lexicon by NSID; restart Hyperindex to apply it (admin only)",
 				Args: graphql.FieldConfigArgument{
 					"nsid": &graphql.ArgumentConfig{
 						Type:        graphql.NewNonNull(graphql.String),
@@ -667,7 +667,7 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 			},
 			"deleteLexicon": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.Boolean),
-				Description: "Delete a registered lexicon by NSID (admin only)",
+				Description: "Delete a saved Lexicon by NSID; restart Hyperindex to apply the change (admin only)",
 				Args: graphql.FieldConfigArgument{
 					"nsid": &graphql.ArgumentConfig{
 						Type:        graphql.NewNonNull(graphql.String),

@@ -81,7 +81,7 @@ Last updated on 2026-07-01 for pending record validation gate schema changes. Ba
 | `org.hypercerts.funding.receipt` | `orgHypercertsFundingReceipt` | `orgHypercertsFundingReceiptByUri` | `OrgHypercertsFundingReceipt` |
 | `org.hypercerts.workscope.tag` | `orgHypercertsWorkscopeTag` | `orgHypercertsWorkscopeTagByUri` | `OrgHypercertsWorkscopeTag` |
 
-Typed list queries accept Relay-style pagination arguments (`first`, `after`, `last`, `before`), plus `where`, `sortBy`, and `sortDirection` when the collection exposes those inputs. Typed list queries, typed single-record queries, typed collection counts, and typed create/update subscription payloads only expose rows whose saved validation status is `valid`. Typed single-record queries return `null` when a raw row exists but is `invalid`, `unknown_schema`, or `validation_error`.
+Typed list queries accept Relay-style pagination arguments (`first`, `after`, `last`, `before`), plus `where`, `sortBy`, and `sortDirection` when the collection exposes those inputs. Typed list queries, typed single-record queries, typed collection counts, relationship hydration, and typed create/update subscriptions only expose rows whose saved validation status is `valid`. Typed delete subscriptions emit only for rows that were valid before deletion. Typed single-record queries return `null` when a raw row exists but is `invalid`, `unknown_schema`, or `validation_error`.
 
 ## Record validation gate
 
@@ -89,23 +89,25 @@ Hyperindex stores every observed AT Protocol record in the raw `record` table. V
 
 | Status | Typed GraphQL visibility | Meaning |
 | --- | --- | --- |
-| `valid` | Visible | The record conforms to the saved Lexicon used to generate the running schema. |
-| `invalid` | Hidden | A saved Lexicon exists, but the record does not conform to it. |
-| `unknown_schema` | Hidden | No saved Lexicon is available for the collection. |
-| `validation_error` | Hidden | Hyperindex could not complete local validation because of a parsing or internal validation error. |
+| `valid` | Visible | Indigo confirmed that the record conforms to Hyperindex's saved startup Lexicon snapshot, with the record key validated locally against that same snapshot. |
+| `invalid` | Hidden | The startup snapshot contains the collection Lexicon, but the record does not conform to it. |
+| `unknown_schema` | Hidden | The startup snapshot contains no saved Lexicon for the collection. |
+| `validation_error` | Hidden | Hyperindex could not complete validation against the startup snapshot because of malformed data, an incomplete local Lexicon set, or an internal validation error. |
 
 Validation uses saved Lexicons only. Normal ingestion does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or any other remote schema source while classifying records.
 
-The generic `records(collection: ...)` query returns all raw records for the collection, including rows hidden from typed GraphQL. Generic record nodes expose these validation metadata fields:
+The generic `records(collection: ...)` query returns all raw records for the collection, including rows hidden from typed GraphQL. `search(...)` uses the same raw visibility and metadata contract. Generic record nodes expose these validation metadata fields:
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `validationStatus` | `String!` | One of `valid`, `invalid`, `unknown_schema`, or `validation_error`. |
 | `validationError` | `String` | Explanation of the failed or hidden validation state, when available. |
-| `validatedAt` | `String` | Timestamp when Hyperindex last classified the record against a saved Lexicon. |
-| `lexiconHash` | `String` | SHA-256 validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used for classification. |
+| `validatedAt` | `String` | Timestamp when Hyperindex last classified the record against its saved startup Lexicon snapshot. |
+| `lexiconHash` | `String` | SHA-256 validation fingerprint for the exact saved collection Lexicon bytes and transitive referenced Lexicons in that startup snapshot. |
 
-Public typed GraphQL schema shape is generated at startup. Lexicon upload/register/delete updates validation state immediately, but newly added, removed, or structurally changed typed fields require a Hyperindex restart or redeploy before `/graphql` exposes the new schema shape.
+Public typed GraphQL, Indigo record validation, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Lexicon upload/register/delete changes only saved configuration; restart or redeploy Hyperindex to apply the change everywhere together.
+
+Generic `recordEvents` receives all observed raw events. Typed collection subscriptions filter those events to valid create/update records and deletes that were valid before removal.
 
 ## Generic record timeline
 

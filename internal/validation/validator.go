@@ -5,54 +5,135 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math"
-	"net/url"
-	"regexp"
 	"sort"
 	"strings"
-	"sync"
-	"time"
+
+	"github.com/bluesky-social/indigo/atproto/atdata"
+	indigolexicon "github.com/bluesky-social/indigo/atproto/lexicon"
+	"github.com/bluesky-social/indigo/atproto/syntax"
 
 	"github.com/GainForest/hyperindex/internal/lexicon"
 )
 
-// Validator validates records with an in-memory lexicon registry and exact-byte
-// hashes for the saved lexicon JSON documents that populated that registry.
+// Validator validates records against the fixed set of saved Lexicons loaded at
+// startup. Indigo handles AT Protocol data and Lexicon conformance; the local
+// registry is retained for record-key rules and transitive hash calculation.
 type Validator struct {
-	registry *lexicon.Registry
-	mu       sync.RWMutex
-	hashes   map[string]string
+	registry       *lexicon.Registry
+	catalog        *indigolexicon.BaseCatalog
+	hashes         map[string]string
+	referenceGraph map[string][]string
 }
 
-// NewValidator creates a local validator from a lexicon registry and a map of
-// collection NSID to exact saved lexicon JSON hash. The hash map is copied so
-// callers can safely mutate their source map after construction.
-func NewValidator(registry *lexicon.Registry, hashes map[string]string) *Validator {
-	copied := make(map[string]string, len(hashes))
-	for collection, hash := range hashes {
-		copied[collection] = hash
-	}
-	return &Validator{registry: registry, hashes: copied}
-}
-
-// NewValidatorFromLexiconBytes parses saved lexicon JSON bytes into a registry
-// and hashes each document exactly as provided. Use this when the caller has the
-// canonical saved bytes available from the lexicon repository or filesystem.
+// NewValidatorFromLexiconBytes builds a validator from the exact saved Lexicon
+// JSON selected at startup. The map key must match each document's Lexicon NSID.
 func NewValidatorFromLexiconBytes(saved map[string][]byte) (*Validator, error) {
 	registry := lexicon.NewRegistry()
+	catalog := indigolexicon.NewBaseCatalog()
 	hashes := make(map[string]string, len(saved))
-	for collection, raw := range saved {
-		parsed, err := lexicon.ParseBytes(raw)
+
+	ids := make([]string, 0, len(saved))
+	for id := range saved {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		raw := saved[id]
+		parsed, schemaFile, err := parseLexiconBytes(id, raw)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse saved lexicon for collection %s: %w", collection, err)
+			return nil, err
+		}
+		if err := addSchemaFileToIndigoCatalog(&catalog, schemaFile); err != nil {
+			return nil, fmt.Errorf("saved lexicon %s is not valid according to Indigo: %w", id, err)
 		}
 		registry.Register(parsed)
-		hashes[parsed.ID] = HashLexiconJSON(raw)
+		hashes[id] = HashLexiconJSON(raw)
 	}
-	return NewValidator(registry, hashes), nil
+	referenceGraph, err := buildReferenceGraph(saved)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateReferenceClosure(referenceGraph); err != nil {
+		return nil, fmt.Errorf("startup Lexicon set has unresolved references: %w", err)
+	}
+
+	return &Validator{
+		registry:       registry,
+		catalog:        &catalog,
+		hashes:         hashes,
+		referenceGraph: referenceGraph,
+	}, nil
 }
 
-// HashLexiconJSON returns the sha256 hash of the exact saved lexicon JSON bytes.
+// CheckLexiconSet verifies a complete prospective startup Lexicon set,
+// including schema validity and local reference closure.
+func CheckLexiconSet(saved map[string][]byte) error {
+	_, err := NewValidatorFromLexiconBytes(saved)
+	return err
+}
+
+// CheckLexiconBytes verifies one Lexicon document structurally. Call
+// CheckLexiconSet before persistence when the document may reference other
+// saved Lexicons.
+func CheckLexiconBytes(expectedID string, raw []byte) error {
+	_, schemaFile, err := parseLexiconBytes(expectedID, raw)
+	if err != nil {
+		return err
+	}
+	catalog := indigolexicon.NewBaseCatalog()
+	if err := addSchemaFileToIndigoCatalog(&catalog, schemaFile); err != nil {
+		return fmt.Errorf("lexicon %s is not valid according to Indigo: %w", expectedID, err)
+	}
+	return nil
+}
+
+// addSchemaFileToIndigoCatalog adapts the ATProto record-key rule to the
+// pinned Indigo version, which validates record bodies correctly but only
+// accepts the equivalent "any" record key spelling. Hyperindex keeps the
+// original rule in its registry and validates the actual rkey separately.
+func addSchemaFileToIndigoCatalog(catalog *indigolexicon.BaseCatalog, schemaFile indigolexicon.SchemaFile) error {
+	for name, def := range schemaFile.Defs {
+		record, ok := def.Inner.(indigolexicon.SchemaRecord)
+		if !ok || record.Key != "record-key" {
+			continue
+		}
+		record.Key = "any"
+		def.Inner = record
+		schemaFile.Defs[name] = def
+	}
+	return catalog.AddSchemaFile(schemaFile)
+}
+
+func parseLexiconBytes(expectedID string, raw []byte) (*lexicon.Lexicon, indigolexicon.SchemaFile, error) {
+	parsed, err := lexicon.ParseBytes(raw)
+	if err != nil {
+		return nil, indigolexicon.SchemaFile{}, fmt.Errorf("failed to parse lexicon %s for GraphQL: %w", expectedID, err)
+	}
+	if parsed.ID != expectedID {
+		return nil, indigolexicon.SchemaFile{}, fmt.Errorf("lexicon ID mismatch: expected %s, document contains %s", expectedID, parsed.ID)
+	}
+
+	var schemaFile indigolexicon.SchemaFile
+	if err := json.Unmarshal(raw, &schemaFile); err != nil {
+		return nil, indigolexicon.SchemaFile{}, fmt.Errorf("failed to parse lexicon %s for Indigo: %w", expectedID, err)
+	}
+	if schemaFile.ID != expectedID {
+		return nil, indigolexicon.SchemaFile{}, fmt.Errorf("lexicon ID mismatch: expected %s, document contains %s", expectedID, schemaFile.ID)
+	}
+	return parsed, schemaFile, nil
+}
+
+// GraphQLRegistry returns the startup registry built from the same exact saved
+// Lexicon documents as the Indigo validation catalog.
+func (v *Validator) GraphQLRegistry() *lexicon.Registry {
+	if v == nil {
+		return nil
+	}
+	return v.registry
+}
+
+// HashLexiconJSON returns the sha256 hash of the exact saved Lexicon JSON bytes.
 // It intentionally does not canonicalize JSON, so formatting-only changes are
 // treated as a new schema version for validation refresh purposes.
 func HashLexiconJSON(raw []byte) string {
@@ -61,15 +142,12 @@ func HashLexiconJSON(raw []byte) string {
 }
 
 // LexiconHash returns the validation fingerprint for a collection. The
-// fingerprint includes the collection lexicon and every saved lexicon reached
-// through ref or union properties, so changes to helper definitions make
-// previously validated records stale.
+// fingerprint includes the collection Lexicon and every saved Lexicon reached
+// through ref or union properties.
 func (v *Validator) LexiconHash(collection string) (string, bool) {
 	if v == nil {
 		return "", false
 	}
-	v.mu.RLock()
-	defer v.mu.RUnlock()
 	if _, ok := v.hashes[collection]; !ok {
 		return "", false
 	}
@@ -85,32 +163,16 @@ func (v *Validator) LexiconHash(collection string) (string, bool) {
 	return HashLexiconJSON([]byte(strings.Join(parts, "\n"))), true
 }
 
-// SetLexiconHash records the current exact-byte saved lexicon hash for a
-// collection after upload or registration.
-func (v *Validator) SetLexiconHash(collection, hash string) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	v.hashes[collection] = hash
-}
-
-// DeleteLexiconHash removes the saved lexicon hash for a collection after the
-// lexicon is deleted.
-func (v *Validator) DeleteLexiconHash(collection string) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	delete(v.hashes, collection)
-}
-
-// ValidateRecord validates raw record JSON against the saved lexicon for its
-// collection and returns a status suitable for persistence on the record row.
+// ValidateRecord validates raw record JSON against the startup Lexicon set and
+// returns a status suitable for persistence on the record row.
 func (v *Validator) ValidateRecord(collection, rkey string, rawJSON []byte) Result {
-	if v == nil || v.registry == nil {
-		return Result{Status: StatusValidationError, Error: "validator is not configured; initialize it with the saved lexicon registry"}
+	if v == nil || v.registry == nil || v.catalog == nil {
+		return Result{Status: StatusValidationError, Error: "validator is not configured; restart Hyperindex after loading saved Lexicons"}
 	}
 
 	hash, ok := v.LexiconHash(collection)
 	if !ok {
-		return Result{Status: StatusUnknownSchema, Error: fmt.Sprintf("no saved lexicon for collection %s", collection)}
+		return Result{Status: StatusUnknownSchema, Error: fmt.Sprintf("no saved lexicon for collection %s in the startup schema", collection)}
 	}
 
 	def, ok := v.registry.GetRecordDef(collection)
@@ -118,388 +180,185 @@ func (v *Validator) ValidateRecord(collection, rkey string, rawJSON []byte) Resu
 		return Result{Status: StatusValidationError, Error: fmt.Sprintf("saved lexicon for collection %s has no record definition", collection), LexiconHash: hash}
 	}
 
-	var record map[string]any
-	if err := json.Unmarshal(rawJSON, &record); err != nil {
-		return Result{Status: StatusValidationError, Error: fmt.Sprintf("failed to parse record JSON for collection %s: %v", collection, err), LexiconHash: hash}
-	}
-	if record == nil {
-		return Result{Status: StatusInvalid, Error: "record JSON must be an object", LexiconHash: hash}
+	record, err := atdata.UnmarshalJSON(rawJSON)
+	if err != nil {
+		if !json.Valid(rawJSON) {
+			return Result{Status: StatusValidationError, Error: fmt.Sprintf("failed to parse record JSON for collection %s: %v", collection, err), LexiconHash: hash}
+		}
+		return Result{Status: StatusInvalid, Error: fmt.Sprintf("record is not valid AT Protocol data: %v", err), LexiconHash: hash}
 	}
 
 	if err := validateRecordKey(def.Key, rkey); err != nil {
 		return Result{Status: StatusInvalid, Error: err.Error(), LexiconHash: hash}
 	}
 
-	if err := v.validateRecordObject(collection, def, record, "record"); err != nil {
-		return Result{Status: StatusInvalid, Error: err.Error(), LexiconHash: hash}
+	if err := indigolexicon.ValidateRecord(v.catalog, record, collection, 0); err != nil {
+		if isCatalogResolutionError(err) {
+			return Result{Status: StatusValidationError, Error: fmt.Sprintf("startup Lexicon set is incomplete for collection %s: %v", collection, err), LexiconHash: hash}
+		}
+		return Result{Status: StatusInvalid, Error: fmt.Sprintf("record does not conform to lexicon %s: %v", collection, err), LexiconHash: hash}
 	}
 	return Result{Status: StatusValid, LexiconHash: hash}
 }
 
-func (v *Validator) validateRecordObject(collection string, def *lexicon.RecordDef, value map[string]any, path string) error {
-	for _, entry := range def.Properties {
-		fieldValue, exists := value[entry.Name]
-		if entry.Property.Required && !exists {
-			return fmt.Errorf("missing required field: %s", fieldPath(path, entry.Name))
+func isCatalogResolutionError(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "schema not found in catalog") ||
+		strings.Contains(message, "could not resolve known union variant")
+}
+
+type rawReferenceDocument struct {
+	ID   string                     `json:"id"`
+	Defs map[string]json.RawMessage `json:"defs"`
+}
+
+func buildReferenceGraph(saved map[string][]byte) (map[string][]string, error) {
+	graph := make(map[string][]string)
+	ids := make([]string, 0, len(saved))
+	for id := range saved {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, expectedID := range ids {
+		var document rawReferenceDocument
+		if err := json.Unmarshal(saved[expectedID], &document); err != nil {
+			return nil, fmt.Errorf("failed to inspect references in saved lexicon %s: %w", expectedID, err)
 		}
-		if exists {
-			if err := v.validateProperty(collection, entry.Property, fieldValue, fieldPath(path, entry.Name)); err != nil {
-				return err
+		if document.ID != expectedID {
+			return nil, fmt.Errorf("lexicon ID mismatch: expected %s, document contains %s", expectedID, document.ID)
+		}
+
+		defNames := make([]string, 0, len(document.Defs))
+		for name := range document.Defs {
+			defNames = append(defNames, name)
+		}
+		sort.Strings(defNames)
+		for _, name := range defNames {
+			node := definitionRef(expectedID, name)
+			refs, err := collectDefinitionRefs(document.Defs[name], expectedID)
+			if err != nil {
+				return nil, fmt.Errorf("inspect references in %s: %w", node, err)
 			}
+			graph[node] = refs
 		}
 	}
-	return nil
+	return graph, nil
 }
 
-func (v *Validator) validateObject(collection string, def *lexicon.ObjectDef, value map[string]any, path string) error {
-	for _, name := range def.RequiredFields {
-		if _, exists := value[name]; !exists {
-			return fmt.Errorf("missing required field: %s", fieldPath(path, name))
-		}
+func collectDefinitionRefs(raw json.RawMessage, contextID string) ([]string, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
 	}
-	for _, entry := range def.Properties {
-		fieldValue, exists := value[entry.Name]
-		if !exists {
-			continue
-		}
-		if err := v.validateProperty(collection, entry.Property, fieldValue, fieldPath(path, entry.Name)); err != nil {
-			return err
-		}
+	seen := make(map[string]struct{})
+	collectRefs(value, contextID, seen)
+	refs := make([]string, 0, len(seen))
+	for ref := range seen {
+		refs = append(refs, ref)
 	}
-	return nil
+	sort.Strings(refs)
+	return refs, nil
 }
 
-func (v *Validator) validateProperty(collection string, prop lexicon.Property, value any, path string) error {
-	if value == nil {
-		return fmt.Errorf("field %s expected %s, got null", path, describeType(prop.Type))
-	}
-
-	switch prop.Type {
-	case lexicon.TypeString:
-		s, ok := value.(string)
-		if !ok {
-			return typeError(path, "string", value)
+func collectRefs(value any, contextID string, refs map[string]struct{}) {
+	switch value := value.(type) {
+	case map[string]any:
+		if ref, ok := value["ref"].(string); ok && ref != "" {
+			refs[normalizeDefinitionRef(ref, contextID)] = struct{}{}
 		}
-		if err := validateStringFormat(prop.Format, s, path); err != nil {
-			return err
-		}
-		if prop.Const != "" && s != prop.Const {
-			return fmt.Errorf("field %s expected constant %q, got %q", path, prop.Const, s)
-		}
-		if len(prop.Enum) > 0 && !contains(prop.Enum, s) {
-			return fmt.Errorf("field %s expected one of %s, got %q", path, strings.Join(prop.Enum, ", "), s)
-		}
-		if prop.MinLength != nil && len(s) < *prop.MinLength {
-			return fmt.Errorf("field %s expected length >= %d", path, *prop.MinLength)
-		}
-		if prop.MaxLength != nil && len(s) > *prop.MaxLength {
-			return fmt.Errorf("field %s expected length <= %d", path, *prop.MaxLength)
-		}
-	case lexicon.TypeInteger:
-		n, ok := value.(float64)
-		if !ok || math.Trunc(n) != n {
-			return typeError(path, "integer", value)
-		}
-		if prop.Minimum != nil && n < *prop.Minimum {
-			return fmt.Errorf("field %s expected integer >= %v", path, *prop.Minimum)
-		}
-		if prop.Maximum != nil && n > *prop.Maximum {
-			return fmt.Errorf("field %s expected integer <= %v", path, *prop.Maximum)
-		}
-	case lexicon.TypeBoolean:
-		if _, ok := value.(bool); !ok {
-			return typeError(path, "boolean", value)
-		}
-	case lexicon.TypeArray:
-		items, ok := value.([]any)
-		if !ok {
-			return typeError(path, "array", value)
-		}
-		if prop.MaxLength != nil && len(items) > *prop.MaxLength {
-			return fmt.Errorf("field %s expected array length <= %d", path, *prop.MaxLength)
-		}
-		if prop.Items != nil {
-			for i, item := range items {
-				if err := v.validateArrayItem(collection, *prop.Items, item, fmt.Sprintf("%s[%d]", path, i)); err != nil {
-					return err
+		if rawRefs, ok := value["refs"].([]any); ok {
+			for _, rawRef := range rawRefs {
+				if ref, ok := rawRef.(string); ok && ref != "" {
+					refs[normalizeDefinitionRef(ref, contextID)] = struct{}{}
 				}
 			}
 		}
-	case lexicon.TypeRef:
-		return v.validateRef(collection, prop.Ref, value, path)
-	case lexicon.TypeUnion:
-		return v.validateUnion(collection, prop.Refs, value, path)
-	case lexicon.TypeObject:
-		obj, ok := value.(map[string]any)
-		if !ok {
-			return typeError(path, "object", value)
+		for _, child := range value {
+			collectRefs(child, contextID, refs)
 		}
-		if prop.InlineObject != nil {
-			return v.validateObject(collection, prop.InlineObject, obj, path)
+	case []any:
+		for _, child := range value {
+			collectRefs(child, contextID, refs)
 		}
-	case lexicon.TypeBlob, lexicon.TypeCIDLink:
-		if _, ok := value.(map[string]any); !ok {
-			return typeError(path, "object", value)
+	}
+}
+
+func definitionRef(id, name string) string {
+	if name == "main" {
+		return id
+	}
+	return id + "#" + name
+}
+
+func normalizeDefinitionRef(ref, contextID string) string {
+	if strings.HasPrefix(ref, "#") {
+		ref = contextID + ref
+	}
+	return strings.TrimSuffix(ref, "#main")
+}
+
+func validateReferenceClosure(graph map[string][]string) error {
+	nodes := make([]string, 0, len(graph))
+	for node := range graph {
+		nodes = append(nodes, node)
+	}
+	sort.Strings(nodes)
+	for _, node := range nodes {
+		for _, ref := range graph[node] {
+			if _, ok := graph[ref]; !ok {
+				return fmt.Errorf("%s references %s, which is not present in the saved Lexicon set", node, ref)
+			}
 		}
-	case lexicon.TypeBytes:
-		if _, ok := value.(string); !ok {
-			return typeError(path, "string", value)
-		}
-	case "", lexicon.TypeUnknown:
-		return nil
-	default:
-		return fmt.Errorf("field %s uses unsupported lexicon type %q; update the local validator", path, prop.Type)
 	}
 	return nil
 }
 
-func (v *Validator) validateArrayItem(collection string, item lexicon.ArrayItems, value any, path string) error {
-	prop := lexicon.Property{Type: item.Type, Ref: item.Ref, Refs: item.Refs}
-	return v.validateProperty(collection, prop, value, path)
-}
-
-func (v *Validator) validateRef(collection, ref string, value any, path string) error {
-	obj, ok := value.(map[string]any)
-	if !ok {
-		return typeError(path, "object", value)
-	}
-	if ref == "" {
-		return fmt.Errorf("field %s has ref type without a ref target in saved lexicon", path)
-	}
-	resolvedRef := lexicon.ResolveLocalRef(ref, collection)
-	resolved, ok := v.registry.ResolveRef(ref, collection)
-	if !ok {
-		return fmt.Errorf("field %s references unknown saved lexicon type %s", path, resolvedRef)
-	}
-	return v.validateResolvedRef(refCollection(resolvedRef), resolved, obj, path)
-}
-
-func (v *Validator) validateUnion(collection string, refs []string, value any, path string) error {
-	obj, ok := value.(map[string]any)
-	if !ok {
-		return typeError(path, "object", value)
-	}
-	typeValue, ok := obj["$type"].(string)
-	if !ok || typeValue == "" {
-		return fmt.Errorf("field %s union object missing required $type", path)
-	}
-	for _, ref := range refs {
-		resolvedRef := lexicon.ResolveLocalRef(ref, collection)
-		if typeValue != resolvedRef {
-			continue
+func validateRecordKey(rule, rkey string) error {
+	switch {
+	case rule == "any" || rule == "record-key":
+		if _, err := syntax.ParseRecordKey(rkey); err != nil {
+			return fmt.Errorf("record key expected record-key for rule %s, got %q: %w", rule, rkey, err)
 		}
-		resolved, ok := v.registry.ResolveRef(ref, collection)
-		if !ok {
-			return fmt.Errorf("field %s references unknown saved lexicon type %s", path, resolvedRef)
+	case rule == "tid":
+		if _, err := syntax.ParseTID(rkey); err != nil {
+			return fmt.Errorf("record key expected tid, got %q: %w", rkey, err)
 		}
-		return v.validateResolvedRef(refCollection(resolvedRef), resolved, obj, path)
-	}
-	return fmt.Errorf("field %s union type %q is not one of %s", path, typeValue, strings.Join(resolveRefs(collection, refs), ", "))
-}
-
-func (v *Validator) validateResolvedRef(collection string, resolved any, obj map[string]any, path string) error {
-	switch def := resolved.(type) {
-	case *lexicon.ObjectDef:
-		return v.validateObject(collection, def, obj, path)
-	case *lexicon.RecordDef:
-		return v.validateRecordObject(collection, def, obj, path)
-	default:
-		return fmt.Errorf("field %s resolved to unsupported lexicon definition", path)
-	}
-}
-
-var tidRecordKeyPattern = regexp.MustCompile(`^[234567abcdefghijklmnopqrstuvwxyz]{13}$`)
-var didPattern = regexp.MustCompile(`^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$`)
-var nsidPattern = regexp.MustCompile(`^[A-Za-z]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z]([A-Za-z0-9-]*[A-Za-z0-9])?)+$`)
-
-func validateStringFormat(format, value, path string) error {
-	switch format {
-	case "":
-		return nil
-	case lexicon.FormatDatetime:
-		if parsed := parseValidationTimestamp(value); parsed {
-			return nil
+	case rule == "nsid":
+		if _, err := syntax.ParseNSID(rkey); err != nil {
+			return fmt.Errorf("record key expected nsid, got %q: %w", rkey, err)
 		}
-		return fmt.Errorf("field %s expected datetime, got %q", path, value)
-	case lexicon.FormatURI, lexicon.FormatATURI:
-		parsed, err := url.Parse(value)
-		if err != nil || parsed.Scheme == "" {
-			return fmt.Errorf("field %s expected %s, got %q", path, format, value)
-		}
-		if format == lexicon.FormatATURI && parsed.Scheme != "at" {
-			return fmt.Errorf("field %s expected at-uri, got %q", path, value)
-		}
-	case lexicon.FormatDID:
-		if !didPattern.MatchString(value) {
-			return fmt.Errorf("field %s expected did, got %q", path, value)
-		}
-	case lexicon.FormatNSID:
-		if !nsidPattern.MatchString(value) {
-			return fmt.Errorf("field %s expected nsid, got %q", path, value)
-		}
-	case lexicon.FormatRecordKey, lexicon.FormatTID:
-		return validateRecordKey(format, value)
-	}
-	return nil
-}
-
-func parseValidationTimestamp(value string) bool {
-	formats := []string{"2006-01-02T15:04:05.000Z", "2006-01-02T15:04:05Z07:00", "2006-01-02T15:04:05.000Z07:00"}
-	for _, format := range formats {
-		if _, err := time.Parse(format, value); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
-func refCollection(resolvedRef string) string {
-	collection, _, _ := strings.Cut(resolvedRef, "#")
-	return collection
-}
-
-func validateRecordKey(pattern, rkey string) error {
-	switch pattern {
-	case "", "any":
-		return nil
-	case "literal:self":
-		if rkey != "self" {
-			return fmt.Errorf("record key expected literal self, got %q", rkey)
-		}
-	case lexicon.FormatTID:
-		if !tidRecordKeyPattern.MatchString(rkey) {
-			return fmt.Errorf("record key expected tid, got %q", rkey)
-		}
-	case lexicon.FormatRecordKey:
-		if strings.ContainsAny(rkey, "/?#[]@") || rkey == "." || rkey == ".." || rkey == "" {
-			return fmt.Errorf("record key expected valid record-key, got %q", rkey)
+	case strings.HasPrefix(rule, "literal:"):
+		literal := strings.TrimPrefix(rule, "literal:")
+		if rkey != literal {
+			return fmt.Errorf("record key expected literal %q, got %q", literal, rkey)
 		}
 	default:
-		return nil
+		return fmt.Errorf("saved lexicon uses unsupported record key rule %q; update the Lexicon and restart Hyperindex", rule)
 	}
 	return nil
 }
 
 func (v *Validator) referencedLexiconIDs(collection string) []string {
-	seen := map[string]bool{collection: true}
-	v.collectRecordRefLexicons(collection, collection, seen)
-	ids := make([]string, 0, len(seen))
-	for id := range seen {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
-func (v *Validator) collectRecordRefLexicons(collection, refContext string, seen map[string]bool) {
-	def, ok := v.registry.GetRecordDef(collection)
-	if !ok || def == nil {
-		return
-	}
-	v.collectPropertyRefLexicons(def.Properties, refContext, seen)
-}
-
-func (v *Validator) collectObjectRefLexicons(def *lexicon.ObjectDef, refContext string, seen map[string]bool) {
-	if def == nil {
-		return
-	}
-	v.collectPropertyRefLexicons(def.Properties, refContext, seen)
-}
-
-func (v *Validator) collectPropertyRefLexicons(properties []lexicon.PropertyEntry, refContext string, seen map[string]bool) {
-	for _, entry := range properties {
-		v.collectPropertyRefLexicon(entry.Property, refContext, seen)
-	}
-}
-
-func (v *Validator) collectPropertyRefLexicon(prop lexicon.Property, refContext string, seen map[string]bool) {
-	if prop.InlineObject != nil {
-		v.collectObjectRefLexicons(prop.InlineObject, refContext, seen)
-	}
-	if prop.Items != nil {
-		v.collectArrayItemRefLexicon(*prop.Items, refContext, seen)
-	}
-	for _, ref := range prop.GetRefs() {
-		v.collectResolvedRefLexicon(ref, refContext, seen)
-	}
-}
-
-func (v *Validator) collectArrayItemRefLexicon(item lexicon.ArrayItems, refContext string, seen map[string]bool) {
-	prop := lexicon.Property{Type: item.Type, Ref: item.Ref, Refs: item.Refs}
-	v.collectPropertyRefLexicon(prop, refContext, seen)
-}
-
-func (v *Validator) collectResolvedRefLexicon(ref, refContext string, seen map[string]bool) {
-	resolvedRef := lexicon.ResolveLocalRef(ref, refContext)
-	lexiconID := strings.SplitN(resolvedRef, "#", 2)[0]
-	alreadySeen := seen[lexiconID]
-	seen[lexiconID] = true
-	if alreadySeen {
-		return
-	}
-	resolved, ok := v.registry.ResolveRef(ref, refContext)
-	if !ok {
-		return
-	}
-	refContext = lexiconID
-	if obj, ok := resolved.(*lexicon.ObjectDef); ok {
-		v.collectObjectRefLexicons(obj, refContext, seen)
-	}
-	if rec, ok := resolved.(*lexicon.RecordDef); ok {
-		v.collectPropertyRefLexicons(rec.Properties, refContext, seen)
-	}
-}
-
-func typeError(path, expected string, value any) error {
-	return fmt.Errorf("field %s expected %s, got %s", path, expected, jsonType(value))
-}
-
-func jsonType(value any) string {
-	switch value.(type) {
-	case string:
-		return "string"
-	case float64:
-		return "number"
-	case bool:
-		return "boolean"
-	case []any:
-		return "array"
-	case map[string]any:
-		return "object"
-	case nil:
-		return "null"
-	default:
-		return fmt.Sprintf("%T", value)
-	}
-}
-
-func describeType(t string) string {
-	if t == "" {
-		return "value"
-	}
-	return t
-}
-
-func fieldPath(parent, child string) string {
-	if parent == "" {
-		return child
-	}
-	return parent + "." + child
-}
-
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
+	lexiconIDs := make(map[string]struct{})
+	visited := make(map[string]struct{})
+	stack := []string{collection}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := visited[node]; ok {
+			continue
 		}
+		visited[node] = struct{}{}
+		lexiconID, _, _ := strings.Cut(node, "#")
+		lexiconIDs[lexiconID] = struct{}{}
+		stack = append(stack, v.referenceGraph[node]...)
 	}
-	return false
-}
 
-func resolveRefs(collection string, refs []string) []string {
-	resolved := make([]string, len(refs))
-	for i, ref := range refs {
-		resolved[i] = lexicon.ResolveLocalRef(ref, collection)
+	result := make([]string, 0, len(lexiconIDs))
+	for id := range lexiconIDs {
+		result = append(result, id)
 	}
-	return resolved
+	sort.Strings(result)
+	return result
 }

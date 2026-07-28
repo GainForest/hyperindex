@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,7 +26,6 @@ import (
 	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/oauth"
 	"github.com/GainForest/hyperindex/internal/validation"
-	"github.com/GainForest/hyperindex/internal/validationrefresh"
 )
 
 type lexiconResolver interface {
@@ -56,9 +56,6 @@ type BackfillCallback func(ctx context.Context, did string) error
 // FullBackfillCallback is called when full network backfill is triggered.
 type FullBackfillCallback func(ctx context.Context) error
 
-// LexiconChangeCallback is called when lexicons are added or removed.
-type LexiconChangeCallback func(collections []string) error
-
 // Resolver provides methods for resolving admin GraphQL queries and mutations.
 type Resolver struct {
 	repos                       *Repositories
@@ -69,10 +66,8 @@ type Resolver struct {
 	defaultLabelerSubscribeURLs string
 	backfillCallback            BackfillCallback
 	fullBackfillCallback        FullBackfillCallback
-	lexiconChangeCallback       LexiconChangeCallback
-	lexiconRegistry             *lexicon.Registry
-	recordValidator             *validation.Validator
-	validationRefresh           *validationrefresh.Scheduler
+	filesystemLexicons          map[string][]byte
+	lexiconMutationMu           sync.Mutex
 }
 
 // NewResolver creates a new admin resolver.
@@ -82,6 +77,14 @@ func NewResolver(repos *Repositories, domainDID string, adminDIDs []string) *Res
 		adminDIDs: adminDIDs,
 		domainDID: domainDID,
 	}
+}
+
+// SetFilesystemLexicons supplies the immutable filesystem baseline used to
+// verify that staged database Lexicon changes will form a valid startup set.
+func (r *Resolver) SetFilesystemLexicons(saved map[string][]byte) {
+	r.lexiconMutationMu.Lock()
+	defer r.lexiconMutationMu.Unlock()
+	r.filesystemLexicons = cloneLexiconBytes(saved)
 }
 
 // SetLabelerSubscribeConfig sets the environment-derived labeler subscription
@@ -99,61 +102,6 @@ func (r *Resolver) SetBackfillCallback(cb BackfillCallback) {
 // SetFullBackfillCallback sets the callback for full network backfill operations.
 func (r *Resolver) SetFullBackfillCallback(cb FullBackfillCallback) {
 	r.fullBackfillCallback = cb
-}
-
-// SetLexiconChangeCallback sets the callback for lexicon changes.
-func (r *Resolver) SetLexiconChangeCallback(cb LexiconChangeCallback) {
-	r.lexiconChangeCallback = cb
-}
-
-// SetValidationRefresh wires lexicon lifecycle mutations to the local validation
-// gate. The registry and validator are updated in-process before refresh jobs run.
-func (r *Resolver) SetValidationRefresh(registry *lexicon.Registry, validator *validation.Validator, scheduler *validationrefresh.Scheduler) {
-	r.lexiconRegistry = registry
-	r.recordValidator = validator
-	r.validationRefresh = scheduler
-}
-
-// notifyLexiconChange calls the lexicon change callback with current collections.
-func (r *Resolver) notifyLexiconChange(ctx context.Context) {
-	if r.lexiconChangeCallback == nil {
-		return
-	}
-
-	lexicons, err := r.repos.Lexicons.GetAll(ctx)
-	if err != nil {
-		return
-	}
-
-	collections := make([]string, len(lexicons))
-	for i, lex := range lexicons {
-		collections[i] = lex.ID
-	}
-
-	if err := r.lexiconChangeCallback(collections); err != nil {
-		// Log but don't fail the operation
-		slog.Warn("Failed to notify lexicon change", "error", err)
-	}
-}
-
-func (r *Resolver) registerSavedLexiconForValidation(collection string, rawJSON []byte) error {
-	if r.lexiconRegistry != nil {
-		parsed, err := lexicon.ParseBytes(rawJSON)
-		if err != nil {
-			return fmt.Errorf("failed to parse saved lexicon %s for validation: %w", collection, err)
-		}
-		r.lexiconRegistry.Register(parsed)
-	}
-	if r.recordValidator != nil {
-		r.recordValidator.SetLexiconHash(collection, validation.HashLexiconJSON(rawJSON))
-	}
-	return nil
-}
-
-func (r *Resolver) scheduleValidationRefresh(collection, reason string) {
-	if r.validationRefresh != nil {
-		r.validationRefresh.ScheduleValidationRefresh(collection, reason)
-	}
 }
 
 // =============================================================================
@@ -327,9 +275,15 @@ func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, e
 			len(zipReader.File), maxLexiconFileCount)
 	}
 
-	// Process each file
-	count := 0
-	var uploadedCollections []string
+	// Validate every candidate before saving any of them. This prevents one bad
+	// document from being persisted and breaking the next startup.
+	type candidate struct {
+		id   string
+		name string
+		raw  []byte
+	}
+	candidates := make([]candidate, 0, len(zipReader.File))
+	seenIDs := make(map[string]string)
 	for _, file := range zipReader.File {
 		// Skip directories and non-JSON files
 		if file.FileInfo().IsDir() || !strings.HasSuffix(file.Name, ".json") {
@@ -338,23 +292,26 @@ func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, e
 
 		// Check individual uncompressed file size
 		if file.UncompressedSize64 > maxLexiconFileSize {
-			return count, fmt.Errorf("file %s too large: %d bytes exceeds %d byte limit",
+			return 0, fmt.Errorf("file %s too large: %d bytes exceeds %d byte limit",
 				file.Name, file.UncompressedSize64, maxLexiconFileSize)
 		}
 
 		// Open and read file with size limit
 		rc, err := file.Open()
 		if err != nil {
-			continue
+			return 0, fmt.Errorf("failed to open %s in uploaded ZIP: %w", file.Name, err)
 		}
 
 		data, err := io.ReadAll(io.LimitReader(rc, maxLexiconFileSize+1))
-		_ = rc.Close()
+		closeErr := rc.Close()
 		if err != nil {
-			continue
+			return 0, fmt.Errorf("failed to read %s in uploaded ZIP: %w", file.Name, err)
+		}
+		if closeErr != nil {
+			return 0, fmt.Errorf("failed to close %s in uploaded ZIP: %w", file.Name, closeErr)
 		}
 		if len(data) > maxLexiconFileSize {
-			return count, fmt.Errorf("file %s exceeds %d byte limit after decompression",
+			return 0, fmt.Errorf("file %s exceeds %d byte limit after decompression",
 				file.Name, maxLexiconFileSize)
 		}
 
@@ -363,33 +320,47 @@ func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, e
 			ID string `json:"id"`
 		}
 		if err := json.Unmarshal(data, &lexEntry); err != nil {
-			continue
+			return 0, fmt.Errorf("file %s is not valid JSON: %w", file.Name, err)
 		}
-
 		if lexEntry.ID == "" {
-			continue
+			return 0, fmt.Errorf("file %s is missing the required top-level Lexicon id", file.Name)
 		}
-
-		// Upsert lexicon
-		if err := r.repos.Lexicons.Upsert(ctx, lexEntry.ID, string(data)); err != nil {
-			return count, fmt.Errorf("failed to save lexicon %s: %w", lexEntry.ID, err)
+		if firstName, duplicate := seenIDs[lexEntry.ID]; duplicate {
+			return 0, fmt.Errorf("uploaded ZIP contains duplicate Lexicon id %s in %s and %s", lexEntry.ID, firstName, file.Name)
 		}
-		if err := r.registerSavedLexiconForValidation(lexEntry.ID, data); err != nil {
-			return count, err
+		if err := validation.CheckLexiconBytes(lexEntry.ID, data); err != nil {
+			return 0, fmt.Errorf("file %s cannot be activated after restart: %w", file.Name, err)
 		}
-		uploadedCollections = append(uploadedCollections, lexEntry.ID)
-		count++
+		seenIDs[lexEntry.ID] = file.Name
+		candidates = append(candidates, candidate{id: lexEntry.ID, name: file.Name, raw: data})
 	}
 
-	// Notify Jetstream consumer of collection changes
-	if count > 0 {
-		r.notifyLexiconChange(ctx)
-		for _, collection := range uploadedCollections {
-			r.scheduleValidationRefresh(collection, "lexicon_uploaded")
-		}
+	writes := make([]repositories.LexiconWrite, 0, len(candidates))
+	for _, candidate := range candidates {
+		writes = append(writes, repositories.LexiconWrite{ID: candidate.id, JSON: string(candidate.raw)})
 	}
 
-	return count, nil
+	r.lexiconMutationMu.Lock()
+	defer r.lexiconMutationMu.Unlock()
+	if err := r.repos.Lexicons.MutateValidated(ctx,
+		func(_ []*repositories.Lexicon) (repositories.LexiconMutation, error) {
+			return repositories.LexiconMutation{Upserts: writes}, nil
+		},
+		func(prospectiveDB []*repositories.Lexicon) error {
+			if err := validation.CheckLexiconSet(r.lexiconSetWithFilesystem(prospectiveDB)); err != nil {
+				return fmt.Errorf("uploaded Lexicons would make the next startup schema invalid: %w", err)
+			}
+			return nil
+		},
+	); err != nil {
+		return 0, fmt.Errorf("failed to save uploaded Lexicons: %w", err)
+	}
+	if len(candidates) > 0 {
+		slog.Info("Saved Lexicons; restart or redeploy Hyperindex to apply them to GraphQL, validation, and ingestion",
+			"count", len(candidates))
+	}
+
+	return len(candidates), nil
 }
 
 // TriggerBackfill starts a full backfill process.
@@ -624,18 +595,32 @@ func (r *Resolver) RegisterLexicon(ctx context.Context, nsid string) (map[string
 		return nil, fmt.Errorf("failed to resolve lexicon: %w", err)
 	}
 
-	// Store the lexicon schema
+	// Validate before saving so the next startup cannot be broken by a schema
+	// that GraphQL or Indigo cannot load.
 	schemaJSON := string(resolved.Schema)
-	if err := r.repos.Lexicons.Upsert(ctx, nsid, schemaJSON); err != nil {
-		return nil, fmt.Errorf("failed to save lexicon: %w", err)
-	}
-	if err := r.registerSavedLexiconForValidation(nsid, []byte(schemaJSON)); err != nil {
-		return nil, err
+	if err := validation.CheckLexiconBytes(nsid, resolved.Schema); err != nil {
+		return nil, fmt.Errorf("resolved Lexicon %s cannot be activated after restart: %w", nsid, err)
 	}
 
-	// Notify Jetstream consumer of collection changes
-	r.notifyLexiconChange(ctx)
-	r.scheduleValidationRefresh(nsid, "lexicon_registered")
+	r.lexiconMutationMu.Lock()
+	defer r.lexiconMutationMu.Unlock()
+	if err := r.repos.Lexicons.MutateValidated(ctx,
+		func(current []*repositories.Lexicon) (repositories.LexiconMutation, error) {
+			if containsLexicon(current, nsid) {
+				return repositories.LexiconMutation{}, fmt.Errorf("lexicon %s is already registered", nsid)
+			}
+			return repositories.LexiconMutation{Upserts: []repositories.LexiconWrite{{ID: nsid, JSON: schemaJSON}}}, nil
+		},
+		func(prospectiveDB []*repositories.Lexicon) error {
+			if err := validation.CheckLexiconSet(r.lexiconSetWithFilesystem(prospectiveDB)); err != nil {
+				return fmt.Errorf("resolved Lexicon %s would make the next startup schema invalid: %w", nsid, err)
+			}
+			return nil
+		},
+	); err != nil {
+		return nil, fmt.Errorf("failed to save lexicon: %w", err)
+	}
+	slog.Info("Saved Lexicon; restart or redeploy Hyperindex to apply it to GraphQL, validation, and ingestion", "nsid", nsid)
 
 	// Parse schema to extract description
 	var schema struct {
@@ -665,31 +650,53 @@ func (r *Resolver) RegisterLexicon(ctx context.Context, nsid string) (map[string
 
 // DeleteLexicon removes a registered lexicon by NSID.
 func (r *Resolver) DeleteLexicon(ctx context.Context, nsid string) (bool, error) {
-	exists, err := r.repos.Lexicons.Exists(ctx, nsid)
-	if err != nil {
-		return false, fmt.Errorf("failed to check lexicon: %w", err)
-	}
-	if !exists {
-		return false, fmt.Errorf("lexicon %s not found", nsid)
-	}
+	r.lexiconMutationMu.Lock()
+	defer r.lexiconMutationMu.Unlock()
 
-	if err := r.repos.Lexicons.Delete(ctx, nsid); err != nil {
+	if err := r.repos.Lexicons.MutateValidated(ctx,
+		func(current []*repositories.Lexicon) (repositories.LexiconMutation, error) {
+			if !containsLexicon(current, nsid) {
+				return repositories.LexiconMutation{}, fmt.Errorf("lexicon %s not found", nsid)
+			}
+			return repositories.LexiconMutation{DeleteIDs: []string{nsid}}, nil
+		},
+		func(prospectiveDB []*repositories.Lexicon) error {
+			if err := validation.CheckLexiconSet(r.lexiconSetWithFilesystem(prospectiveDB)); err != nil {
+				return fmt.Errorf("deleting Lexicon %s would make the next startup schema invalid: %w", nsid, err)
+			}
+			return nil
+		},
+	); err != nil {
 		return false, fmt.Errorf("failed to delete lexicon: %w", err)
 	}
-	if err := r.repos.Records.MarkCollectionUnknownSchema(ctx, nsid, "lexicon removed for collection"); err != nil {
-		return false, fmt.Errorf("failed to mark collection unknown schema: %w", err)
-	}
-	if r.lexiconRegistry != nil {
-		r.lexiconRegistry.Unregister(nsid)
-	}
-	if r.recordValidator != nil {
-		r.recordValidator.DeleteLexiconHash(nsid)
-	}
-
-	// Notify Jetstream consumer of collection changes
-	r.notifyLexiconChange(ctx)
+	slog.Info("Deleted saved Lexicon; restart or redeploy Hyperindex to apply the change to GraphQL, validation, and ingestion", "nsid", nsid)
 
 	return true, nil
+}
+
+func (r *Resolver) lexiconSetWithFilesystem(dbLexicons []*repositories.Lexicon) map[string][]byte {
+	prospective := cloneLexiconBytes(r.filesystemLexicons)
+	for _, lexicon := range dbLexicons {
+		prospective[lexicon.ID] = []byte(lexicon.JSON)
+	}
+	return prospective
+}
+
+func containsLexicon(lexicons []*repositories.Lexicon, id string) bool {
+	for _, lexicon := range lexicons {
+		if lexicon.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneLexiconBytes(saved map[string][]byte) map[string][]byte {
+	cloned := make(map[string][]byte, len(saved))
+	for id, raw := range saved {
+		cloned[id] = append([]byte(nil), raw...)
+	}
+	return cloned
 }
 
 // ActivityBuckets returns aggregated activity data for the specified time range.

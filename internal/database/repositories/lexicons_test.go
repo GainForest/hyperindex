@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/GainForest/hyperindex/internal/database"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/testutil"
 )
@@ -51,6 +52,74 @@ func TestLexiconsRepository_Upsert(t *testing.T) {
 	}
 	if lex.JSON != updatedJSON {
 		t.Errorf("JSON after upsert = %q, want %q", lex.JSON, updatedJSON)
+	}
+}
+
+func TestLexiconsRepository_UpsertPreservesExactJSON(t *testing.T) {
+	repo := setupLexiconsTest(t)
+	ctx := context.Background()
+	const raw = "{\n  \"lexicon\": 1,\n  \"id\": \"app.example.formatted\",\n  \"defs\": {}\n}\n"
+
+	if err := repo.Upsert(ctx, "app.example.formatted", raw); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	lex, err := repo.GetByID(ctx, "app.example.formatted")
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if lex.JSON != raw {
+		t.Fatalf("GetByID().JSON = %q, want exact saved bytes %q", lex.JSON, raw)
+	}
+}
+
+func TestLexiconsRepository_UpsertMany(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	writes := []repositories.LexiconWrite{
+		{ID: "app.example.first", JSON: `{"lexicon":1,"id":"app.example.first"}`},
+		{ID: "app.example.second", JSON: `{"lexicon":1,"id":"app.example.second"}`},
+	}
+
+	if err := db.Lexicons.UpsertMany(ctx, writes); err != nil {
+		t.Fatalf("UpsertMany() error = %v", err)
+	}
+	for _, write := range writes {
+		lex, err := db.Lexicons.GetByID(ctx, write.ID)
+		if err != nil {
+			t.Fatalf("GetByID(%s) error = %v", write.ID, err)
+		}
+		if lex.JSON != write.JSON {
+			t.Fatalf("GetByID(%s).JSON = %q, want %q", write.ID, lex.JSON, write.JSON)
+		}
+	}
+}
+
+func TestLexiconsRepository_UpsertManyRollsBackOnFailure(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	if db.Executor.Dialect() != database.SQLite {
+		t.Skip("SQLite trigger provides deterministic mid-batch failure coverage")
+	}
+	ctx := context.Background()
+	if _, err := db.Executor.DB().ExecContext(ctx, `
+		CREATE TRIGGER fail_lexicon_batch
+		BEFORE INSERT ON lexicon
+		WHEN NEW.id = 'app.example.fail'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced batch failure');
+		END;
+	`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	err := db.Lexicons.UpsertMany(ctx, []repositories.LexiconWrite{
+		{ID: "app.example.first", JSON: `{"lexicon":1,"id":"app.example.first"}`},
+		{ID: "app.example.fail", JSON: `{"lexicon":1,"id":"app.example.fail"}`},
+	})
+	if err == nil {
+		t.Fatal("UpsertMany() error = nil, want forced failure")
+	}
+	if exists, existsErr := db.Lexicons.Exists(ctx, "app.example.first"); existsErr != nil || exists {
+		t.Fatalf("first Lexicon exists = %v, error = %v; want false after rollback", exists, existsErr)
 	}
 }
 

@@ -7,7 +7,7 @@ package validation
 type Status string
 
 const (
-	// StatusValid means the record conforms to the saved lexicon for its collection.
+	// StatusValid means Indigo accepted the record against the startup Lexicon set.
 	StatusValid Status = "valid"
 	// StatusInvalid means a saved lexicon exists, but the record does not conform to it.
 	StatusInvalid Status = "invalid"
@@ -18,7 +18,7 @@ const (
 )
 
 // Result is the persisted outcome of validating one raw record against the
-// saved lexicon currently known for its collection.
+// fixed startup Lexicon set for its collection.
 type Result struct {
 	Status      Status
 	Error       string
@@ -31,4 +31,16 @@ type Result struct {
 type RecordValidator interface {
 	ValidateRecord(collection string, rkey string, rawJSON []byte) Result
 	LexiconHash(collection string) (string, bool)
+}
+
+// ClassifyRecord invokes the configured validator or returns a fail-closed
+// validation_error result when ingestion was constructed without one.
+func ClassifyRecord(validator RecordValidator, collection, rkey string, rawJSON []byte) Result {
+	if validator == nil {
+		return Result{
+			Status: StatusValidationError,
+			Error:  "record validator is not configured; restart Hyperindex with a valid startup Lexicon snapshot",
+		}
+	}
+	return validator.ValidateRecord(collection, rkey, rawJSON)
 }

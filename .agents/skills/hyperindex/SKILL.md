@@ -161,9 +161,9 @@ If a workflow needs unsupported nested matching, use one of these patterns:
 
 ## Validation gate and generic records
 
-Hyperindex stores every observed AT Protocol record in its raw record table. Typed GraphQL collection fields only expose rows whose `validationStatus` is `valid`, meaning the record conforms to the saved Lexicon used to generate the running schema. Records whose status is `invalid`, `unknown_schema`, or `validation_error` are hidden from typed list queries, typed `ByUri` queries, typed counts, and typed create/update subscription payloads.
+Hyperindex stores every observed AT Protocol record in its raw record table. Typed GraphQL collection fields only expose rows whose `validationStatus` is `valid`, meaning Indigo validated the record against the startup Lexicon set used to generate the running schema. Records whose status is `invalid`, `unknown_schema`, or `validation_error` are hidden from typed list queries, typed `ByUri` queries, typed counts, relationship hydration, and typed create/update subscriptions. Typed delete subscriptions emit only for rows that were valid before deletion.
 
-Use generic `records(collection: ...)` for operational visibility into all raw rows, including records hidden from typed GraphQL. Generic record nodes expose validation metadata:
+Use generic `records(collection: ...)` or `search(...)` for operational visibility into raw rows, including records hidden from typed GraphQL. Generic record nodes expose validation metadata:
 
 ```graphql
 query RawRecords($collection: String!) {
@@ -187,9 +187,11 @@ query RawRecords($collection: String!) {
 }
 ```
 
-Validation is local-only during ingestion. Hyperindex checks records against its saved Lexicons and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources while classifying records. `lexiconHash` is a validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used during classification.
+Validation is local-only during ingestion. Hyperindex uses Indigo to check records against the Lexicons loaded at startup and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources while classifying records. `lexiconHash` is a validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used during classification.
 
-Lexicon upload/register/delete updates validation state immediately, but public typed GraphQL schema shape is generated at startup. After a Lexicon change, restart or redeploy Hyperindex before expecting `/graphql` introspection or typed fields to reflect newly added, removed, or structurally changed collections.
+Public typed GraphQL, record validation, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Lexicon upload/register/delete changes only saved configuration; restart or redeploy Hyperindex to apply the change everywhere together. For multiple backend replicas, coordinate Lexicon-changing rollouts so old and new startup snapshots never serve concurrently against the shared validation metadata.
+
+Generic `recordEvents` receives every observed raw create/update/delete event, including invalid and unknown-schema records. Typed collection subscriptions filter that stream to valid create/update rows and deletes that were valid before removal.
 
 ## Generic record timeline
 

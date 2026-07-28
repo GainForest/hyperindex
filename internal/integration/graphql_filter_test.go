@@ -269,9 +269,18 @@ func TestTypedGraphQLUsesValidationRefreshForCertifiedProfile(t *testing.T) {
 		t.Fatalf("ParseBytes(profile) error = %v", err)
 	}
 	registry.Register(parsed)
-	validator, err := validation.NewValidatorFromLexiconBytes(map[string][]byte{
-		"app.certified.actor.profile": rawLexicon,
-	})
+	validationLexicons := map[string][]byte{"app.certified.actor.profile": rawLexicon}
+	for id, path := range map[string]string{
+		"org.hypercerts.defs":     "../../testdata/lexicons/org/hypercerts/defs.json",
+		"app.bsky.richtext.facet": "../../testdata/lexicons/app/bsky/richtext/facet.json",
+	} {
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("Read %s Lexicon: %v", id, readErr)
+		}
+		validationLexicons[id] = raw
+	}
+	validator, err := validation.NewValidatorFromLexiconBytes(validationLexicons)
 	if err != nil {
 		t.Fatalf("NewValidatorFromLexiconBytes() error = %v", err)
 	}
@@ -279,8 +288,8 @@ func TestTypedGraphQLUsesValidationRefreshForCertifiedProfile(t *testing.T) {
 	validURI := "at://did:plc:valid/app.certified.actor.profile/self"
 	invalidURI := "at://did:plc:invalid/app.certified.actor.profile/self"
 	records := []*repositories.Record{
-		{URI: validURI, CID: "cid-valid", DID: "did:plc:valid", Collection: "app.certified.actor.profile", RKey: "self", JSON: `{"displayName":"Valid Profile","createdAt":"2026-01-01T00:00:00Z"}`},
-		{URI: invalidURI, CID: "cid-invalid", DID: "did:plc:invalid", Collection: "app.certified.actor.profile", RKey: "self", JSON: `{"displayName":"Wrong Created At","createdAt":123}`},
+		{URI: validURI, CID: "cid-valid", DID: "did:plc:valid", Collection: "app.certified.actor.profile", RKey: "self", JSON: `{"$type":"app.certified.actor.profile","displayName":"Valid Profile","createdAt":"2026-01-01T00:00:00Z"}`},
+		{URI: invalidURI, CID: "cid-invalid", DID: "did:plc:invalid", Collection: "app.certified.actor.profile", RKey: "self", JSON: `{"$type":"app.certified.actor.profile","displayName":"Wrong Created At","createdAt":123}`},
 	}
 	for _, rec := range records {
 		if _, err := db.Records.Insert(ctx, rec.URI, rec.CID, rec.DID, rec.Collection, rec.JSON); err != nil {

@@ -61,52 +61,60 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 			slog.Debug("Failed to upsert actor", "did", event.DID, "error", err)
 		}
 
-		// Store record
-		result, err := h.records.Insert(ctx, uri, event.CID, event.DID, event.Collection, string(event.Record))
+		validationResult := validation.ClassifyRecord(h.validator, event.Collection, event.RKey, event.Record)
+		writeResult, err := h.records.UpsertWithValidation(ctx, repositories.RecordWrite{
+			URI:              uri,
+			CID:              event.CID,
+			DID:              event.DID,
+			Collection:       event.Collection,
+			RKey:             event.RKey,
+			JSON:             string(event.Record),
+			ValidationStatus: validationResult.Status,
+			ValidationError:  validationResult.Error,
+			LexiconHash:      validationResult.LexiconHash,
+		})
 		if err != nil {
-			return fmt.Errorf("failed to insert record: %w", err)
+			return fmt.Errorf("failed to store record with validation metadata: %w", err)
 		}
-		if result == repositories.Skipped {
-			slog.Debug("Record insert skipped (unchanged CID)", "uri", uri, "cid", event.CID)
-			return nil
-		}
-
-		// Log activity (if activity repo available)
-		if h.activity != nil {
+		if writeResult == repositories.Skipped {
+			slog.Debug("Record content unchanged; validation metadata is current", "uri", uri, "cid", event.CID)
+		} else if h.activity != nil {
 			activityID, err := h.activity.LogActivity(ctx, time.Now(), string(event.Action), event.Collection, event.DID, event.RKey, string(event.Record))
 			if err != nil {
 				slog.Debug("Failed to log activity", "error", err)
-			} else {
-				if err := h.activity.UpdateStatus(ctx, activityID, "completed", nil); err != nil {
-					slog.Debug("Failed to update activity status", "error", err)
-				}
+			} else if err := h.activity.UpdateStatus(ctx, activityID, "completed", nil); err != nil {
+				slog.Debug("Failed to update activity status", "error", err)
 			}
 		}
 
-		validationStatus := validation.StatusValid
-		if h.validator != nil {
-			result := h.validator.ValidateRecord(event.Collection, event.RKey, event.Record)
-			validationStatus = result.Status
-			if err := h.records.UpdateValidationStatus(ctx, uri, result.Status, result.Error, result.LexiconHash); err != nil {
-				return fmt.Errorf("failed to update record validation metadata: %w", err)
-			}
-		}
-
-		// Publish typed GraphQL subscriptions only for records that validated successfully.
+		// Publish every stored raw event. Typed resolvers apply validation gating.
 		eventType := subscription.EventCreate
 		if event.Action == ActionUpdate {
 			eventType = subscription.EventUpdate
 		}
-		if h.pubsub != nil && validationStatus == validation.StatusValid {
-			h.pubsub.PublishRecord(eventType, uri, event.CID, event.DID, event.Collection, event.Record)
+		if h.pubsub != nil {
+			h.pubsub.PublishRecordWithValidation(eventType, uri, event.CID, event.DID, event.Collection, event.Record, validationResult.Status == validation.StatusValid)
 		}
 
 	case ActionDelete:
-		if err := h.records.Delete(ctx, uri); err != nil {
+		deleted, err := h.records.DeleteReturning(ctx, uri)
+		if err != nil {
 			return fmt.Errorf("failed to delete record: %w", err)
 		}
 		if h.pubsub != nil {
-			h.pubsub.PublishRecord(subscription.EventDelete, uri, "", event.DID, event.Collection, nil)
+			previousCID := ""
+			deleteDID := event.DID
+			deleteCollection := event.Collection
+			var previousJSON []byte
+			wasValid := false
+			if deleted != nil {
+				previousCID = deleted.CID
+				deleteDID = deleted.DID
+				deleteCollection = deleted.Collection
+				previousJSON = []byte(deleted.JSON)
+				wasValid = deleted.ValidationStatus == validation.StatusValid
+			}
+			h.pubsub.PublishDelete(uri, previousCID, deleteDID, deleteCollection, previousJSON, wasValid)
 		}
 		if h.activity != nil {
 			activityID, err := h.activity.LogActivity(ctx, time.Now(), "delete", event.Collection, event.DID, event.RKey, "")

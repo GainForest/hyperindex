@@ -1,12 +1,118 @@
 package backfill
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/bluesky-social/indigo/atproto/atdata"
 	"github.com/ipfs/go-cid"
 )
+
+func TestGetRepoClassifiesUnsupportedAndIntegrityFailures(t *testing.T) {
+	t.Run("unsupported endpoint", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, `{"error":"XRPCNotSupported"}`, http.StatusNotImplemented)
+		}))
+		defer server.Close()
+		client := NewClient("", "")
+		_, err := client.GetRepo(t.Context(), server.URL, "did:plc:test", nil)
+		kind, ok := carFailureKind(err)
+		if !ok || kind != CARFailureUnsupported {
+			t.Fatalf("GetRepo() error = %v kind=%q, want unsupported CAR failure", err, kind)
+		}
+	})
+
+	t.Run("malformed CAR", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("not-a-car"))
+		}))
+		defer server.Close()
+		client := NewClient("", "")
+		_, err := client.GetRepo(t.Context(), server.URL, "did:plc:test", nil)
+		if !isCARIntegrityFailure(err) {
+			t.Fatalf("GetRepo() error = %v, want integrity CAR failure", err)
+		}
+	})
+}
+
+func TestGetRepoStalledBodyUsesRepoTimeoutAsAvailability(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := NewClient("", "")
+	client.httpClient.Timeout = 5 * time.Millisecond
+	client.repoTimeout = 40 * time.Millisecond
+	started := time.Now()
+	_, err := client.GetRepo(t.Context(), server.URL, "did:plc:test", nil)
+	if elapsed := time.Since(started); elapsed < 20*time.Millisecond {
+		t.Fatalf("GetRepo() returned after %s, want repo-specific timeout rather than shorter shared timeout", elapsed)
+	}
+	kind, ok := carFailureKind(err)
+	if !ok || kind != CARFailureAvailability || !isCARFallbackFailure(err) || isCARIntegrityFailure(err) {
+		t.Fatalf("GetRepo() stalled body error = %v kind=%q, want fallback-eligible availability", err, kind)
+	}
+}
+
+func TestGetRepoStalledBodyPropagatesParentCancellation(t *testing.T) {
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := NewClient("", "")
+	client.repoTimeout = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.GetRepo(ctx, server.URL, "did:plc:test", nil)
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("GetRepo did not begin reading stalled body")
+	}
+	cancel()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("GetRepo() error = %v, want context.Canceled", err)
+		}
+		if _, typed := carFailureKind(err); typed {
+			t.Fatalf("parent cancellation was wrapped as CAR failure: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GetRepo did not return after parent cancellation")
+	}
+}
+
+func TestGetRepoPropagatesParentCancellation(t *testing.T) {
+	client := NewClient("", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := client.GetRepo(ctx, "https://pds.example", "did:plc:test", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetRepo() error = %v, want context.Canceled", err)
+	}
+	if _, typed := carFailureKind(err); typed {
+		t.Fatalf("parent cancellation was wrapped as CAR failure: %v", err)
+	}
+}
 
 func TestCBORToJSONPreservesATProtoShapes(t *testing.T) {
 	linkCID := mustParseCID(t, "bafyreia2j6ice4knovcubkcqjoycjyvracpa5x4we7hrcdvjvm3ox5tfue")

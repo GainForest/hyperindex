@@ -5,9 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/GainForest/hyperindex/internal/database"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/testutil"
 	"github.com/GainForest/hyperindex/internal/validation"
@@ -16,6 +19,14 @@ import (
 type recordsTestEnv struct {
 	repo *repositories.RecordsRepository
 	db   *testutil.TestDB
+}
+
+type beginTxFailureExecutor struct {
+	database.Executor
+}
+
+func (e beginTxFailureExecutor) BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error) {
+	return nil, errors.New("forced begin transaction failure")
 }
 
 func setupRecordsTest(t *testing.T) *repositories.RecordsRepository {
@@ -36,6 +47,309 @@ func insertTestRecord(t *testing.T, repo *repositories.RecordsRepository, uri, c
 	_, err := repo.Insert(context.Background(), uri, cid, did, collection, jsonData)
 	if err != nil {
 		t.Fatalf("failed to insert test record %s: %v", uri, err)
+	}
+}
+
+func testRecordWrite(uri, cid string, status validation.Status) repositories.RecordWrite {
+	return repositories.RecordWrite{
+		URI:              uri,
+		CID:              cid,
+		DID:              "did:plc:test",
+		Collection:       "com.example.record",
+		RKey:             strings.TrimPrefix(uri[strings.LastIndex(uri, "/"):], "/"),
+		JSON:             `{"$type":"com.example.record","name":"test"}`,
+		ValidationStatus: status,
+		LexiconHash:      "hash-current",
+	}
+}
+
+func TestRecordsRepository_UpsertWithValidation(t *testing.T) {
+	repo := setupRecordsTest(t)
+	ctx := context.Background()
+	uri := "at://did:plc:test/com.example.record/one"
+
+	invalidWrite := testRecordWrite(uri, "cid-1", validation.StatusInvalid)
+	invalidWrite.ValidationError = "missing required field: name"
+	result, err := repo.UpsertWithValidation(ctx, invalidWrite)
+	if err != nil {
+		t.Fatalf("UpsertWithValidation(insert) error = %v", err)
+	}
+	if result != repositories.Inserted {
+		t.Fatalf("UpsertWithValidation(insert) result = %v, want Inserted", result)
+	}
+	stored, err := repo.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI(insert) error = %v", err)
+	}
+	if stored.ValidationStatus != validation.StatusInvalid || stored.ValidationError != invalidWrite.ValidationError || stored.LexiconHash != "hash-current" || stored.ValidatedAt == nil {
+		t.Fatalf("stored validation = status:%q error:%q hash:%q at:%v", stored.ValidationStatus, stored.ValidationError, stored.LexiconHash, stored.ValidatedAt)
+	}
+
+	updated := testRecordWrite(uri, "cid-2", validation.StatusValid)
+	updated.JSON = `{"$type":"com.example.record","name":"fixed"}`
+	result, err = repo.UpsertWithValidation(ctx, updated)
+	if err != nil {
+		t.Fatalf("UpsertWithValidation(update) error = %v", err)
+	}
+	if result != repositories.Inserted {
+		t.Fatalf("UpsertWithValidation(update) result = %v, want Inserted", result)
+	}
+	stored, err = repo.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI(update) error = %v", err)
+	}
+	if stored.CID != "cid-2" || stored.JSON != updated.JSON || stored.ValidationStatus != validation.StatusValid || stored.ValidationError != "" {
+		t.Fatalf("updated record = cid:%q json:%q status:%q error:%q", stored.CID, stored.JSON, stored.ValidationStatus, stored.ValidationError)
+	}
+}
+
+func TestRecordsRepository_UpsertWithValidationRepairsSameCID(t *testing.T) {
+	repo := setupRecordsTest(t)
+	ctx := context.Background()
+	uri := "at://did:plc:test/com.example.record/same"
+	write := testRecordWrite(uri, "cid-same", validation.StatusInvalid)
+	write.ValidationError = "bad record"
+
+	if _, err := repo.Insert(ctx, uri, write.CID, write.DID, write.Collection, write.JSON); err != nil {
+		t.Fatalf("legacy Insert() error = %v", err)
+	}
+	result, err := repo.UpsertWithValidation(ctx, write)
+	if err != nil {
+		t.Fatalf("UpsertWithValidation(repair) error = %v", err)
+	}
+	if result != repositories.Skipped {
+		t.Fatalf("UpsertWithValidation(repair) result = %v, want Skipped", result)
+	}
+	stored, err := repo.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI(repair) error = %v", err)
+	}
+	if stored.ValidationStatus != validation.StatusInvalid || stored.ValidationError != "bad record" || stored.LexiconHash != "hash-current" || stored.ValidatedAt == nil {
+		t.Fatalf("repaired validation = status:%q error:%q hash:%q at:%v", stored.ValidationStatus, stored.ValidationError, stored.LexiconHash, stored.ValidatedAt)
+	}
+
+	result, err = repo.UpsertWithValidation(ctx, write)
+	if err != nil || result != repositories.Skipped {
+		t.Fatalf("UpsertWithValidation(current same CID) result=%v error=%v, want Skipped nil", result, err)
+	}
+}
+
+func TestRecordsRepository_BatchUpsertWithValidation(t *testing.T) {
+	repo := setupRecordsTest(t)
+	ctx := context.Background()
+	writes := make([]repositories.RecordWrite, 0, repositories.ValidationBatchUpsertSize+1)
+	for i := 0; i <= repositories.ValidationBatchUpsertSize; i++ {
+		uri := fmt.Sprintf("at://did:plc:test/com.example.record/%03d", i)
+		write := testRecordWrite(uri, fmt.Sprintf("cid-%03d", i), validation.StatusValid)
+		writes = append(writes, write)
+	}
+	if err := repo.BatchUpsertWithValidation(ctx, writes); err != nil {
+		t.Fatalf("BatchUpsertWithValidation(insert) error = %v", err)
+	}
+
+	changed := writes[0]
+	changed.CID = "cid-updated"
+	changed.JSON = `{"$type":"com.example.record","name":123}`
+	changed.ValidationStatus = validation.StatusInvalid
+	changed.ValidationError = "name must be a string"
+	if err := repo.BatchUpsertWithValidation(ctx, []repositories.RecordWrite{changed}); err != nil {
+		t.Fatalf("BatchUpsertWithValidation(update) error = %v", err)
+	}
+	stored, err := repo.GetByURI(ctx, changed.URI)
+	if err != nil {
+		t.Fatalf("GetByURI(batch update) error = %v", err)
+	}
+	if stored.CID != changed.CID || stored.JSON != changed.JSON || stored.ValidationStatus != validation.StatusInvalid || stored.ValidationError != changed.ValidationError {
+		t.Fatalf("batch-updated record = cid:%q json:%q status:%q error:%q", stored.CID, stored.JSON, stored.ValidationStatus, stored.ValidationError)
+	}
+}
+
+func TestRecordsRepository_BackfillBatchRepairsSameCIDMetadata(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	uri := "at://did:plc:test/com.example.record/backfill-repair"
+	write := testRecordWrite(uri, "cid-same", validation.StatusValid)
+	const storedJSON = "{\n  \"$type\": \"com.example.record\",\n  \"name\": \"test\"\n}"
+	if _, err := db.Records.Insert(ctx, write.URI, write.CID, write.DID, write.Collection, storedJSON); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+	if _, err := db.Executor.DB().ExecContext(ctx, "UPDATE record SET indexed_at = ? WHERE uri = ?", "2026-01-15T10:00:00.123Z", uri); err != nil {
+		t.Fatalf("set indexed_at: %v", err)
+	}
+	before, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI(before) error = %v", err)
+	}
+
+	result, err := db.Records.BatchUpsertWithValidationForBackfill(ctx, write.DID, []repositories.RecordWrite{write})
+	if err != nil {
+		t.Fatalf("BatchUpsertWithValidationForBackfill() error = %v", err)
+	}
+	if len(result.ChangedIndices) != 0 || result.Skipped != 1 {
+		t.Fatalf("result = changed:%v skipped:%d, want none/1", result.ChangedIndices, result.Skipped)
+	}
+	stored, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI() error = %v", err)
+	}
+	if stored.JSON != storedJSON || !stored.IndexedAt.Equal(before.IndexedAt) {
+		t.Fatalf("repair changed content: JSON=%q indexedAt=%s, want %q/%s", stored.JSON, stored.IndexedAt, storedJSON, before.IndexedAt)
+	}
+	if stored.ValidationStatus != write.ValidationStatus || stored.LexiconHash != write.LexiconHash || stored.ValidatedAt == nil {
+		t.Fatalf("repaired metadata = status:%q hash:%q at:%v", stored.ValidationStatus, stored.LexiconHash, stored.ValidatedAt)
+	}
+}
+
+func TestRecordsRepository_BackfillBatchCoalescesDuplicateURIWithinChunk(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	first := testRecordWrite("at://did:plc:test/com.example.record/duplicate-within", "cid-duplicate", validation.StatusValid)
+	duplicate := first
+	duplicate.JSON = "{\n  \"name\": \"same CID\"\n}"
+
+	result, err := db.Records.BatchUpsertWithValidationForBackfill(ctx, first.DID, []repositories.RecordWrite{first, duplicate})
+	if err != nil {
+		t.Fatalf("BatchUpsertWithValidationForBackfill() error = %v", err)
+	}
+	if len(result.ChangedIndices) != 1 || result.ChangedIndices[0] != 0 || result.Skipped != 0 {
+		t.Fatalf("result = changed:%v skipped:%d, want [0]/0", result.ChangedIndices, result.Skipped)
+	}
+	stored, err := db.Records.GetByURI(ctx, first.URI)
+	if err != nil {
+		t.Fatalf("GetByURI() error = %v", err)
+	}
+	if stored.JSON != first.JSON {
+		t.Fatalf("stored JSON = %q, want stable first occurrence %q", stored.JSON, first.JSON)
+	}
+}
+
+func TestRecordsRepository_BackfillBatchCoalescesDuplicateURIAcrossChunkBoundary(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	first := testRecordWrite("at://did:plc:test/com.example.record/duplicate-boundary", "cid-boundary", validation.StatusValid)
+	writes := []repositories.RecordWrite{first}
+	for i := 1; i < repositories.ValidationBatchUpsertSize; i++ {
+		writes = append(writes, testRecordWrite(fmt.Sprintf("at://did:plc:test/com.example.record/boundary-%03d", i), fmt.Sprintf("cid-%03d", i), validation.StatusValid))
+	}
+	duplicate := first
+	duplicate.JSON = `{"same":"cid"}`
+	writes = append(writes, duplicate)
+
+	result, err := db.Records.BatchUpsertWithValidationForBackfill(ctx, first.DID, writes)
+	if err != nil {
+		t.Fatalf("BatchUpsertWithValidationForBackfill() error = %v", err)
+	}
+	if len(result.ChangedIndices) != repositories.ValidationBatchUpsertSize || result.Skipped != 0 {
+		t.Fatalf("result = changed:%d skipped:%d, want %d/0", len(result.ChangedIndices), result.Skipped, repositories.ValidationBatchUpsertSize)
+	}
+	for i, originalIndex := range result.ChangedIndices {
+		if originalIndex != i {
+			t.Fatalf("ChangedIndices[%d] = %d, want stable original index %d", i, originalIndex, i)
+		}
+	}
+	count, err := db.Records.GetCollectionCount(ctx, first.Collection)
+	if err != nil || count != int64(repositories.ValidationBatchUpsertSize) {
+		t.Fatalf("collection count = %d, %v; want %d, nil", count, err, repositories.ValidationBatchUpsertSize)
+	}
+}
+
+func TestRecordsRepository_BackfillBatchRejectsConflictingDuplicateURI(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	first := testRecordWrite("at://did:plc:test/com.example.record/duplicate-conflict", "cid-first", validation.StatusValid)
+	conflict := first
+	conflict.CID = "cid-second"
+
+	result, err := db.Records.BatchUpsertWithValidationForBackfill(ctx, first.DID, []repositories.RecordWrite{first, conflict})
+	if err == nil || !strings.Contains(err.Error(), first.URI) || !strings.Contains(err.Error(), "CID differs") {
+		t.Fatalf("conflicting duplicate result=%+v error=%v, want URI/CID conflict", result, err)
+	}
+	if _, err := db.Records.GetByURI(ctx, first.URI); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetByURI() after duplicate conflict error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestRecordsRepository_BackfillBatchRejectsDifferentEmptyCIDDuplicateContent(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	first := testRecordWrite("at://did:plc:test/com.example.record/duplicate-empty-cid", "", validation.StatusValid)
+	conflict := first
+	conflict.JSON = `{"name":"different"}`
+
+	_, err := db.Records.BatchUpsertWithValidationForBackfill(ctx, first.DID, []repositories.RecordWrite{first, conflict})
+	if err == nil || !strings.Contains(err.Error(), "empty-CID content differs") {
+		t.Fatalf("empty-CID duplicate error = %v, want explicit content conflict", err)
+	}
+	if _, err := db.Records.GetByURI(ctx, first.URI); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetByURI() after empty-CID conflict error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestRecordsRepository_BackfillBatchBeginFailureRollsBack(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	repo := repositories.NewRecordsRepository(beginTxFailureExecutor{Executor: db.Executor})
+	write := testRecordWrite("at://did:plc:test/com.example.record/begin-failure", "cid", validation.StatusValid)
+
+	result, err := repo.BatchUpsertWithValidationForBackfill(ctx, write.DID, []repositories.RecordWrite{write})
+	if err == nil || !strings.Contains(err.Error(), "begin backfill record transaction") {
+		t.Fatalf("BatchUpsertWithValidationForBackfill() result=%+v error=%v, want begin failure", result, err)
+	}
+	if len(result.ChangedIndices) != 0 || result.Skipped != 0 {
+		t.Fatalf("failed transaction result = %+v, want zero", result)
+	}
+	if _, err := db.Records.GetByURI(ctx, write.URI); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetByURI() after begin failure error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestRecordsRepository_DeleteReturningIsAtomicAndIdempotent(t *testing.T) {
+	repo := setupRecordsTest(t)
+	ctx := context.Background()
+	uri := "at://did:plc:test/com.example.record/delete"
+	write := testRecordWrite(uri, "cid-delete", validation.StatusValid)
+	if _, err := repo.UpsertWithValidation(ctx, write); err != nil {
+		t.Fatalf("UpsertWithValidation() error = %v", err)
+	}
+
+	type result struct {
+		record *repositories.Record
+		err    error
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			record, err := repo.DeleteReturning(ctx, uri)
+			results <- result{record: record, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	deletedRows := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("DeleteReturning() error = %v", result.err)
+		}
+		if result.record == nil {
+			continue
+		}
+		deletedRows++
+		if result.record.CID != write.CID || result.record.JSON != write.JSON || result.record.ValidationStatus != validation.StatusValid {
+			t.Fatalf("deleted row = %#v, want original valid record", result.record)
+		}
+	}
+	if deletedRows != 1 {
+		t.Fatalf("DeleteReturning() returned %d deleted rows, want exactly 1", deletedRows)
+	}
+	if _, err := repo.GetByURI(ctx, uri); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetByURI() after delete error = %v, want sql.ErrNoRows", err)
 	}
 }
 
@@ -81,6 +395,45 @@ func TestRecordsRepository_UpdateValidationStatus(t *testing.T) {
 	}
 	if rec.LexiconHash != "" {
 		t.Fatalf("LexiconHash after valid update = %q, want empty", rec.LexiconHash)
+	}
+}
+
+func TestRecordsRepository_UpdateValidationStatusIfUnchanged(t *testing.T) {
+	repo := setupRecordsTest(t)
+	ctx := context.Background()
+	uri := "at://did:plc:test/com.example.record/conditional"
+	const rawJSON = `{"name":"observed"}`
+	insertTestRecord(t, repo, uri, "", "did:plc:test", "com.example.record", rawJSON)
+
+	observed, err := repo.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI() error = %v", err)
+	}
+
+	wrongCID := *observed
+	wrongCID.CID = "replacement-cid"
+	updated, err := repo.UpdateValidationStatusIfUnchanged(ctx, &wrongCID, validation.StatusInvalid, "stale cid", "hash-stale")
+	if err != nil || updated {
+		t.Fatalf("CID-mismatched update = %v, %v; want false, nil", updated, err)
+	}
+
+	wrongJSON := *observed
+	wrongJSON.JSON = `{"name":"replacement"}`
+	updated, err = repo.UpdateValidationStatusIfUnchanged(ctx, &wrongJSON, validation.StatusInvalid, "stale json", "hash-stale")
+	if err != nil || updated {
+		t.Fatalf("JSON-mismatched update = %v, %v; want false, nil", updated, err)
+	}
+
+	updated, err = repo.UpdateValidationStatusIfUnchanged(ctx, observed, validation.StatusValid, "", "hash-current")
+	if err != nil || !updated {
+		t.Fatalf("unchanged empty-CID update = %v, %v; want true, nil", updated, err)
+	}
+	stored, err := repo.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI(updated) error = %v", err)
+	}
+	if stored.ValidationStatus != validation.StatusValid || stored.LexiconHash != "hash-current" || stored.ValidatedAt == nil {
+		t.Fatalf("conditional validation metadata = status:%q hash:%q at:%v", stored.ValidationStatus, stored.LexiconHash, stored.ValidatedAt)
 	}
 }
 
@@ -136,7 +489,8 @@ func TestRecordsRepository_MarkCollectionUnknownSchema(t *testing.T) {
 }
 
 func TestRecordsRepository_ListRecordsNeedingValidation(t *testing.T) {
-	repo := setupRecordsTest(t)
+	env := setupRecordsTestEnv(t)
+	repo := env.repo
 	ctx := context.Background()
 	collection := "com.example.record"
 	records := []struct {
@@ -147,16 +501,20 @@ func TestRecordsRepository_ListRecordsNeedingValidation(t *testing.T) {
 		{"at://did:plc:test/com.example.record/01-valid-current", validation.StatusValid, "hash-current"},
 		{"at://did:plc:test/com.example.record/02-valid-missing-hash", validation.StatusValid, ""},
 		{"at://did:plc:test/com.example.record/03-valid-stale", validation.StatusValid, "hash-old"},
-		{"at://did:plc:test/com.example.record/04-invalid", validation.StatusInvalid, "hash-current"},
-		{"at://did:plc:test/com.example.record/05-unknown", validation.StatusUnknownSchema, ""},
-		{"at://did:plc:test/com.example.record/06-error", validation.StatusValidationError, "hash-current"},
-		{"at://did:plc:test/com.example.record/07-invalid", validation.StatusInvalid, "hash-current"},
+		{"at://did:plc:test/com.example.record/04-invalid-current", validation.StatusInvalid, "hash-current"},
+		{"at://did:plc:test/com.example.record/05-unknown-missing-hash", validation.StatusUnknownSchema, ""},
+		{"at://did:plc:test/com.example.record/06-error-current", validation.StatusValidationError, "hash-current"},
+		{"at://did:plc:test/com.example.record/07-invalid-current", validation.StatusInvalid, "hash-current"},
+		{"at://did:plc:test/com.example.record/08-valid-missing-date", validation.StatusValid, "hash-current"},
 	}
 	for _, rec := range records {
 		insertTestRecord(t, repo, rec.uri, "cid", "did:plc:test", collection, `{"name":"test"}`)
 		if err := repo.UpdateValidationStatus(ctx, rec.uri, rec.status, "", rec.hash); err != nil {
 			t.Fatalf("UpdateValidationStatus(%s) error = %v", rec.uri, err)
 		}
+	}
+	if _, err := env.db.Executor.DB().ExecContext(ctx, "UPDATE record SET validated_at = NULL WHERE uri = ?", records[7].uri); err != nil {
+		t.Fatalf("clear validated_at: %v", err)
 	}
 	insertTestRecord(t, repo, "at://did:plc:test/com.example.other/01-invalid", "cid", "did:plc:test", "com.example.other", `{"name":"test"}`)
 
@@ -171,10 +529,8 @@ func TestRecordsRepository_ListRecordsNeedingValidation(t *testing.T) {
 	wantURIs := []string{
 		"at://did:plc:test/com.example.record/02-valid-missing-hash",
 		"at://did:plc:test/com.example.record/03-valid-stale",
-		"at://did:plc:test/com.example.record/04-invalid",
-		"at://did:plc:test/com.example.record/05-unknown",
-		"at://did:plc:test/com.example.record/06-error",
-		"at://did:plc:test/com.example.record/07-invalid",
+		"at://did:plc:test/com.example.record/05-unknown-missing-hash",
+		"at://did:plc:test/com.example.record/08-valid-missing-date",
 	}
 	if fmt.Sprint(gotURIs) != fmt.Sprint(wantURIs) {
 		t.Fatalf("URIs = %v, want %v", gotURIs, wantURIs)
@@ -185,8 +541,8 @@ func TestRecordsRepository_ListRecordsNeedingValidation(t *testing.T) {
 		t.Fatalf("ListRecordsNeedingValidation(afterURI, limit) error = %v", err)
 	}
 	assertRecordURIs(t, page, []string{
-		"at://did:plc:test/com.example.record/04-invalid",
-		"at://did:plc:test/com.example.record/05-unknown",
+		"at://did:plc:test/com.example.record/05-unknown-missing-hash",
+		"at://did:plc:test/com.example.record/08-valid-missing-date",
 	})
 }
 
@@ -224,6 +580,20 @@ func TestRecordsRepository_ValidOnlyQueries(t *testing.T) {
 	if _, err := repo.GetValidByURI(ctx, invalidURI, collection); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("GetValidByURI(invalid) error = %v, want sql.ErrNoRows", err)
 	}
+	if exists, err := repo.ExistsValidByURI(ctx, validURI, collection); err != nil || !exists {
+		t.Fatalf("ExistsValidByURI(valid) = %v, %v; want true, nil", exists, err)
+	}
+	if exists, err := repo.ExistsValidByURI(ctx, invalidURI, collection); err != nil || exists {
+		t.Fatalf("ExistsValidByURI(invalid) = %v, %v; want false, nil", exists, err)
+	}
+	if exists, err := repo.ExistsValidByURI(ctx, validURI, "com.example.other"); err != nil || exists {
+		t.Fatalf("ExistsValidByURI(collection mismatch) = %v, %v; want false, nil", exists, err)
+	}
+	validByURIs, err := repo.GetValidByURIs(ctx, []string{validURI, invalidURI, unknownURI})
+	if err != nil {
+		t.Fatalf("GetValidByURIs() error = %v", err)
+	}
+	assertRecordURIs(t, validByURIs, []string{validURI})
 
 	records, err := repo.GetValidByCollectionSortedWithKeysetCursorAndExternalLabelFilters(ctx, collection, nil, repositories.DIDFilter{}, repositories.ExternalLabelFilterSet{}, nil, 10, nil)
 	if err != nil {
@@ -1874,6 +2244,43 @@ func TestRecordsRepository_Search(t *testing.T) {
 	}
 }
 
+func TestRecordsRepository_SearchReturnsRawArraysAndScalars(t *testing.T) {
+	repo := setupRecordsTest(t)
+	ctx := context.Background()
+	collection := "com.example.raw"
+	writes := []repositories.RecordWrite{
+		{URI: "at://did:plc:test/com.example.raw/array", CID: "cid-array", DID: "did:plc:test", Collection: collection, JSON: `["raw-match-array"]`, ValidationStatus: validation.StatusInvalid, ValidationError: "record must be an object", LexiconHash: "hash"},
+		{URI: "at://did:plc:test/com.example.raw/scalar", CID: "cid-scalar", DID: "did:plc:test", Collection: collection, JSON: `"raw-match-scalar"`, ValidationStatus: validation.StatusInvalid, ValidationError: "record must be an object", LexiconHash: "hash"},
+	}
+	if err := repo.BatchUpsertWithValidation(ctx, writes); err != nil {
+		t.Fatalf("BatchUpsertWithValidation() error = %v", err)
+	}
+
+	records, err := repo.Search(ctx, "raw-match", collection, 10, "", "")
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("Search() returned %d raw records, want 2", len(records))
+	}
+	gotJSON := map[string]string{}
+	for _, record := range records {
+		gotJSON[record.URI] = record.JSON
+		if record.ValidationStatus != validation.StatusInvalid || record.ValidationError == "" {
+			t.Fatalf("raw search metadata = status:%q error:%q", record.ValidationStatus, record.ValidationError)
+		}
+	}
+	for _, write := range writes {
+		if gotJSON[write.URI] != write.JSON {
+			t.Fatalf("Search() JSON for %s = %q, want %q", write.URI, gotJSON[write.URI], write.JSON)
+		}
+	}
+	count, err := repo.GetCollectionCount(ctx, collection)
+	if err != nil || count != 2 {
+		t.Fatalf("GetCollectionCount() count=%d error=%v, want 2 nil", count, err)
+	}
+}
+
 func TestRecordsRepository_Search_Pagination(t *testing.T) {
 	env := setupRecordsTestEnv(t)
 	repo := env.repo
@@ -1922,6 +2329,32 @@ func TestRecordsRepository_Search_Pagination(t *testing.T) {
 			t.Errorf("record URI = %q, want pg1", records[0].URI)
 		}
 	})
+}
+
+func TestRecordsRepository_SearchCursorPreservesFractionalSeconds(t *testing.T) {
+	env := setupRecordsTestEnv(t)
+	repo := env.repo
+	ctx := context.Background()
+	newerURI := "at://did:plc:test/com.example.search/newer"
+	olderURI := "at://did:plc:test/com.example.search/older"
+	insertTestRecord(t, repo, newerURI, "cid-newer", "did:plc:test", "com.example.search", `{"text":"fractional search"}`)
+	insertTestRecord(t, repo, olderURI, "cid-older", "did:plc:test", "com.example.search", `{"text":"fractional search"}`)
+	if _, err := env.db.Executor.DB().ExecContext(ctx, `UPDATE record SET indexed_at = ? WHERE uri = ?`, "2026-01-15T10:00:00.900Z", newerURI); err != nil {
+		t.Fatalf("set newer indexed_at: %v", err)
+	}
+	if _, err := env.db.Executor.DB().ExecContext(ctx, `UPDATE record SET indexed_at = ? WHERE uri = ?`, "2026-01-15T10:00:00.100Z", olderURI); err != nil {
+		t.Fatalf("set older indexed_at: %v", err)
+	}
+
+	first, err := repo.Search(ctx, "fractional", "com.example.search", 1, "", "")
+	if err != nil || len(first) != 1 || first[0].URI != newerURI {
+		t.Fatalf("first Search() = records:%v error:%v, want newer", first, err)
+	}
+	cursorTime := first[0].IndexedAt.UTC().Format(time.RFC3339Nano)
+	second, err := repo.Search(ctx, "fractional", "com.example.search", 1, cursorTime, first[0].URI)
+	if err != nil || len(second) != 1 || second[0].URI != olderURI {
+		t.Fatalf("second Search() = records:%v error:%v cursor:%s, want older", second, err, cursorTime)
+	}
 }
 
 func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T) {

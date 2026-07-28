@@ -311,7 +311,7 @@ export default function OnboardingPage() {
                         Lexicons uploaded successfully
                       </div>
                       <div className="text-sm" style={{ color: "var(--muted-foreground)" }}>
-                        You can upload more lexicons later from the Lexicons page
+                        Restart or redeploy Hyperindex after onboarding to apply them
                       </div>
                     </div>
                   </div>
@@ -344,8 +344,8 @@ export default function OnboardingPage() {
                   </div>
                 )}
                 <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
-                  You can skip this step and upload lexicons later. Your AppView will only
-                  index records matching your installed lexicons.
+                  You can skip this step and upload Lexicons later. Saved changes take effect
+                  after the Hyperindex backend restarts.
                 </p>
               </div>
             </div>

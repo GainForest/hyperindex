@@ -3,11 +3,15 @@ package repositories_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,7 +63,7 @@ func TestRecordsRepository_ValidationMetadataPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListRecordsNeedingValidation() error = %v", err)
 	}
-	assertRecordURIs(t, needingValidation, []string{staleURI, invalidURI})
+	assertRecordURIs(t, needingValidation, []string{staleURI})
 
 	if err := repo.MarkCollectionUnknownSchema(ctx, collection, "lexicon removed for collection"); err != nil {
 		t.Fatalf("MarkCollectionUnknownSchema() error = %v", err)
@@ -80,6 +84,293 @@ func TestRecordsRepository_ValidationMetadataPostgres(t *testing.T) {
 	if other.ValidationStatus != validation.StatusValid || other.LexiconHash != "hash-other" {
 		t.Fatalf("other collection metadata changed: status=%q hash=%q", other.ValidationStatus, other.LexiconHash)
 	}
+}
+
+func TestRecordsRepository_UpdateValidationStatusIfUnchangedPostgres(t *testing.T) {
+	exec := newPostgresRecordsTestExecutor(t)
+	repo := repositories.NewRecordsRepository(exec)
+	ctx := context.Background()
+	const collection = "com.example.record"
+	const observedJSON = `{"name":"observed"}`
+
+	t.Run("matching URI CID and JSON updates metadata", func(t *testing.T) {
+		uri := "at://did:plc:test/com.example.record/conditional-match"
+		if _, err := repo.Insert(ctx, uri, "cid-observed", "did:plc:test", collection, observedJSON); err != nil {
+			t.Fatalf("Insert() error = %v", err)
+		}
+		observed, err := repo.GetByURI(ctx, uri)
+		if err != nil {
+			t.Fatalf("GetByURI() error = %v", err)
+		}
+		updated, err := repo.UpdateValidationStatusIfUnchanged(ctx, observed, validation.StatusInvalid, "observed invalid", "hash-observed")
+		if err != nil || !updated {
+			t.Fatalf("conditional update = %v, %v; want true, nil", updated, err)
+		}
+		assertPostgresConditionalValidationMetadata(t, repo, uri, "cid-observed", observedJSON, validation.StatusInvalid, "observed invalid", "hash-observed")
+	})
+
+	t.Run("changed CID preserves current metadata", func(t *testing.T) {
+		uri := "at://did:plc:test/com.example.record/conditional-cid"
+		if _, err := repo.Insert(ctx, uri, "cid-observed", "did:plc:test", collection, observedJSON); err != nil {
+			t.Fatalf("Insert() error = %v", err)
+		}
+		observed, err := repo.GetByURI(ctx, uri)
+		if err != nil {
+			t.Fatalf("GetByURI() error = %v", err)
+		}
+		if err := repo.BatchUpsertWithValidation(ctx, []repositories.RecordWrite{{
+			URI: uri, CID: "cid-current", DID: "did:plc:test", Collection: collection, RKey: "conditional-cid", JSON: observedJSON,
+			ValidationStatus: validation.StatusValid, LexiconHash: "hash-current",
+		}}); err != nil {
+			t.Fatalf("BatchUpsertWithValidation() error = %v", err)
+		}
+		updated, err := repo.UpdateValidationStatusIfUnchanged(ctx, observed, validation.StatusInvalid, "stale invalid", "hash-stale")
+		if err != nil || updated {
+			t.Fatalf("conditional update after CID replacement = %v, %v; want false, nil", updated, err)
+		}
+		assertPostgresConditionalValidationMetadata(t, repo, uri, "cid-current", observedJSON, validation.StatusValid, "", "hash-current")
+	})
+
+	t.Run("changed JSON preserves current metadata", func(t *testing.T) {
+		uri := "at://did:plc:test/com.example.record/conditional-json"
+		if _, err := repo.Insert(ctx, uri, "cid-observed", "did:plc:test", collection, observedJSON); err != nil {
+			t.Fatalf("Insert() error = %v", err)
+		}
+		observed, err := repo.GetByURI(ctx, uri)
+		if err != nil {
+			t.Fatalf("GetByURI() error = %v", err)
+		}
+		const currentJSON = `{"name":"current"}`
+		if err := repo.BatchUpsertWithValidation(ctx, []repositories.RecordWrite{{
+			URI: uri, CID: "cid-observed", DID: "did:plc:test", Collection: collection, RKey: "conditional-json", JSON: currentJSON,
+			ValidationStatus: validation.StatusValid, LexiconHash: "hash-current",
+		}}); err != nil {
+			t.Fatalf("BatchUpsertWithValidation() error = %v", err)
+		}
+		updated, err := repo.UpdateValidationStatusIfUnchanged(ctx, observed, validation.StatusInvalid, "stale invalid", "hash-stale")
+		if err != nil || updated {
+			t.Fatalf("conditional update after JSON replacement = %v, %v; want false, nil", updated, err)
+		}
+		assertPostgresConditionalValidationMetadata(t, repo, uri, "cid-observed", currentJSON, validation.StatusValid, "", "hash-current")
+	})
+}
+
+func assertPostgresConditionalValidationMetadata(t *testing.T, repo *repositories.RecordsRepository, uri, cid, rawJSON string, status validation.Status, validationError, lexiconHash string) {
+	t.Helper()
+	stored, err := repo.GetByURI(context.Background(), uri)
+	if err != nil {
+		t.Fatalf("GetByURI(%s) error = %v", uri, err)
+	}
+	if stored.CID != cid || stored.ValidationStatus != status || stored.ValidationError != validationError || stored.LexiconHash != lexiconHash || stored.ValidatedAt == nil {
+		t.Fatalf("record = cid:%q json:%s status:%q error:%q hash:%q at:%v", stored.CID, stored.JSON, stored.ValidationStatus, stored.ValidationError, stored.LexiconHash, stored.ValidatedAt)
+	}
+	var gotJSON, wantJSON interface{}
+	if err := json.Unmarshal([]byte(stored.JSON), &gotJSON); err != nil {
+		t.Fatalf("stored JSON is invalid: %v", err)
+	}
+	if err := json.Unmarshal([]byte(rawJSON), &wantJSON); err != nil {
+		t.Fatalf("expected JSON is invalid: %v", err)
+	}
+	if !reflect.DeepEqual(gotJSON, wantJSON) {
+		t.Fatalf("stored JSON = %s, want semantic value %s", stored.JSON, rawJSON)
+	}
+}
+
+func TestRecordsRepository_BackfillBatchDuplicateURIsPostgres(t *testing.T) {
+	exec := newPostgresRecordsTestExecutor(t)
+	repo := repositories.NewRecordsRepository(exec)
+	ctx := context.Background()
+
+	t.Run("identical duplicate within chunk", func(t *testing.T) {
+		first := repositories.RecordWrite{
+			URI: "at://did:plc:duplicate/com.example.duplicate/within", CID: "cid-within", DID: "did:plc:duplicate", Collection: "com.example.duplicate", RKey: "within", JSON: `{"name":"first"}`,
+			ValidationStatus: validation.StatusValid, LexiconHash: "hash-current",
+		}
+		duplicate := first
+		duplicate.JSON = "{\n  \"name\": \"same CID\"\n}"
+		result, err := repo.BatchUpsertWithValidationForBackfill(ctx, first.DID, []repositories.RecordWrite{first, duplicate})
+		if err != nil || len(result.ChangedIndices) != 1 || result.ChangedIndices[0] != 0 || result.Skipped != 0 {
+			t.Fatalf("duplicate result=%+v error=%v, want [0]/0 nil", result, err)
+		}
+		assertPostgresRecordJSON(t, repo, first.URI, first.JSON)
+	})
+
+	t.Run("identical duplicate across chunk boundary", func(t *testing.T) {
+		const did = "did:plc:duplicate-boundary"
+		const collection = "com.example.duplicateboundary"
+		first := repositories.RecordWrite{
+			URI: "at://did:plc:duplicate-boundary/com.example.duplicateboundary/first", CID: "cid-first", DID: did, Collection: collection, RKey: "first", JSON: `{"name":"first"}`,
+			ValidationStatus: validation.StatusValid, LexiconHash: "hash-current",
+		}
+		writes := []repositories.RecordWrite{first}
+		for i := 1; i < repositories.ValidationBatchUpsertSize; i++ {
+			writes = append(writes, repositories.RecordWrite{
+				URI: fmt.Sprintf("at://%s/%s/item-%03d", did, collection, i), CID: fmt.Sprintf("cid-%03d", i), DID: did, Collection: collection, RKey: fmt.Sprintf("item-%03d", i), JSON: `{"name":"item"}`,
+				ValidationStatus: validation.StatusValid, LexiconHash: "hash-current",
+			})
+		}
+		duplicate := first
+		duplicate.JSON = `{"name":"same CID"}`
+		writes = append(writes, duplicate)
+		result, err := repo.BatchUpsertWithValidationForBackfill(ctx, did, writes)
+		if err != nil || len(result.ChangedIndices) != repositories.ValidationBatchUpsertSize || result.Skipped != 0 {
+			t.Fatalf("boundary duplicate result=%+v error=%v", result, err)
+		}
+		count, err := repo.GetCollectionCount(ctx, collection)
+		if err != nil || count != int64(repositories.ValidationBatchUpsertSize) {
+			t.Fatalf("boundary collection count=%d error=%v, want %d nil", count, err, repositories.ValidationBatchUpsertSize)
+		}
+	})
+
+	t.Run("conflicting duplicate writes nothing", func(t *testing.T) {
+		first := repositories.RecordWrite{
+			URI: "at://did:plc:duplicate-conflict/com.example.duplicate/conflict", CID: "cid-first", DID: "did:plc:duplicate-conflict", Collection: "com.example.duplicate", RKey: "conflict", JSON: `{"name":"first"}`,
+			ValidationStatus: validation.StatusValid, LexiconHash: "hash-current",
+		}
+		conflict := first
+		conflict.CID = "cid-second"
+		result, err := repo.BatchUpsertWithValidationForBackfill(ctx, first.DID, []repositories.RecordWrite{first, conflict})
+		if err == nil || !strings.Contains(err.Error(), first.URI) || !strings.Contains(err.Error(), "CID differs") {
+			t.Fatalf("conflicting duplicate result=%+v error=%v, want explicit conflict", result, err)
+		}
+		if _, err := repo.GetByURI(ctx, first.URI); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("GetByURI() after conflict error=%v, want sql.ErrNoRows", err)
+		}
+	})
+}
+
+func TestRecordsRepository_BackfillBatchSameCIDRepairPreservesContentPostgres(t *testing.T) {
+	exec := newPostgresRecordsTestExecutor(t)
+	repo := repositories.NewRecordsRepository(exec)
+	ctx := context.Background()
+	const uri = "at://did:plc:repair/com.example.record/one"
+	const storedJSON = `{"name":"stored"}`
+	if _, err := repo.Insert(ctx, uri, "cid-same", "did:plc:repair", "com.example.record", storedJSON); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+	if _, err := exec.DB().ExecContext(ctx, "UPDATE record SET indexed_at = $1::timestamptz WHERE uri = $2", "2026-01-15T10:00:00.123Z", uri); err != nil {
+		t.Fatalf("set indexed_at: %v", err)
+	}
+	before, err := repo.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI(before) error = %v", err)
+	}
+	write := repositories.RecordWrite{
+		URI: uri, CID: "cid-same", DID: "did:plc:repair", Collection: "com.example.record", RKey: "one", JSON: `{"name":"incoming"}`,
+		ValidationStatus: validation.StatusValid, LexiconHash: "hash-current",
+	}
+	result, err := repo.BatchUpsertWithValidationForBackfill(ctx, write.DID, []repositories.RecordWrite{write})
+	if err != nil || len(result.ChangedIndices) != 0 || result.Skipped != 1 {
+		t.Fatalf("repair result=%+v error=%v, want none/1 nil", result, err)
+	}
+	after, err := repo.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI(after) error = %v", err)
+	}
+	if !after.IndexedAt.Equal(before.IndexedAt) || after.ValidationStatus != validation.StatusValid || after.LexiconHash != "hash-current" || after.ValidatedAt == nil {
+		t.Fatalf("repair changed indexed/content metadata: before=%s after=%s status=%q hash=%q at=%v", before.IndexedAt, after.IndexedAt, after.ValidationStatus, after.LexiconHash, after.ValidatedAt)
+	}
+	assertPostgresRecordJSON(t, repo, uri, storedJSON)
+}
+
+func assertPostgresRecordJSON(t *testing.T, repo *repositories.RecordsRepository, uri, wantJSON string) {
+	t.Helper()
+	stored, err := repo.GetByURI(context.Background(), uri)
+	if err != nil {
+		t.Fatalf("GetByURI(%s) error = %v", uri, err)
+	}
+	var got, want interface{}
+	if err := json.Unmarshal([]byte(stored.JSON), &got); err != nil {
+		t.Fatalf("stored JSON invalid: %v", err)
+	}
+	if err := json.Unmarshal([]byte(wantJSON), &want); err != nil {
+		t.Fatalf("wanted JSON invalid: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("stored JSON=%s, want semantic value %s", stored.JSON, wantJSON)
+	}
+}
+
+func TestRecordsRepository_BackfillBatchConstrainedPoolPostgres(t *testing.T) {
+	exec := newPostgresRecordsTestExecutor(t)
+	exec.DB().SetMaxOpenConns(1)
+	exec.DB().SetMaxIdleConns(1)
+	repo := repositories.NewRecordsRepository(exec)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	const operationCount = 4
+	start := make(chan struct{})
+	errs := make(chan error, operationCount)
+	var wg sync.WaitGroup
+	for i := 0; i < operationCount; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			did := fmt.Sprintf("did:plc:pool-%d", index)
+			uri := fmt.Sprintf("at://%s/com.example.record/one", did)
+			result, err := repo.BatchUpsertWithValidationForBackfill(ctx, did, []repositories.RecordWrite{{
+				URI: uri, CID: fmt.Sprintf("cid-%d", index), DID: did, Collection: "com.example.record", RKey: "one", JSON: `{"name":"pool"}`,
+				ValidationStatus: validation.StatusValid, LexiconHash: "hash-current",
+			}})
+			if err == nil && (len(result.ChangedIndices) != 1 || result.ChangedIndices[0] != 0 || result.Skipped != 0) {
+				err = fmt.Errorf("unexpected result: %+v", result)
+			}
+			errs <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("constrained-pool backfill error = %v", err)
+		}
+	}
+}
+
+func TestRecordsRepository_BackfillBatchAdvisoryLockCancellationPostgres(t *testing.T) {
+	exec := newPostgresRecordsTestExecutor(t)
+	exec.DB().SetMaxOpenConns(2)
+	repo := repositories.NewRecordsRepository(exec)
+	ctx := context.Background()
+	did := "did:plc:advisory-blocked"
+	uri := "at://did:plc:advisory-blocked/com.example.record/one"
+
+	holder, err := exec.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx(holder) error = %v", err)
+	}
+	defer func() { _ = holder.Rollback() }()
+	if _, err := holder.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", postgresBackfillLockKey(did)); err != nil {
+		t.Fatalf("acquire holder advisory lock: %v", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	result, err := repo.BatchUpsertWithValidationForBackfill(waitCtx, did, []repositories.RecordWrite{{
+		URI: uri, CID: "cid", DID: did, Collection: "com.example.record", RKey: "one", JSON: `{"name":"blocked"}`,
+		ValidationStatus: validation.StatusValid, LexiconHash: "hash-current",
+	}})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked advisory result=%+v error=%v, want context deadline", result, err)
+	}
+	if len(result.ChangedIndices) != 0 || result.Skipped != 0 {
+		t.Fatalf("blocked advisory result = %+v, want zero", result)
+	}
+	if err := holder.Rollback(); err != nil {
+		t.Fatalf("Rollback(holder) error = %v", err)
+	}
+	if _, err := repo.GetByURI(ctx, uri); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetByURI() after advisory cancellation error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func postgresBackfillLockKey(did string) int64 {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(did))
+	return int64(hasher.Sum64())
 }
 
 func TestRecordsRepository_ValidOnlyQueriesPostgres(t *testing.T) {

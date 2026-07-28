@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/tap"
@@ -14,12 +13,15 @@ import (
 	"github.com/GainForest/hyperindex/internal/validation"
 )
 
-func assertNoPubSubEvent(t *testing.T, sub *subscription.Subscriber, reason string) {
+func assertRawPubSubEvent(t *testing.T, sub *subscription.Subscriber, wantType subscription.EventType, reason string) {
 	t.Helper()
 	select {
 	case event := <-sub.Events:
-		t.Fatalf("unexpected pubsub event for %s: %#v", reason, event)
-	case <-time.After(50 * time.Millisecond):
+		if event.Type != wantType {
+			t.Fatalf("pubsub event type for %s = %q, want %q", reason, event.Type, wantType)
+		}
+	default:
+		t.Fatalf("missing raw pubsub event for %s", reason)
 	}
 }
 
@@ -79,6 +81,9 @@ func TestIndexHandler_HandleRecord_Create(t *testing.T) {
 	if rec.CID != "bafyrei123" {
 		t.Errorf("expected CID %q, got %q", "bafyrei123", rec.CID)
 	}
+	if rec.ValidationStatus != validation.StatusValidationError || rec.ValidationError == "" || rec.ValidatedAt == nil {
+		t.Fatalf("nil-validator record did not fail closed: status=%q error=%q validatedAt=%v", rec.ValidationStatus, rec.ValidationError, rec.ValidatedAt)
+	}
 
 	// Verify actor was upserted
 	actor, err := db.Actors.GetByDID(ctx, "did:plc:alice")
@@ -106,7 +111,7 @@ func TestIndexHandler_HandleRecord_Create(t *testing.T) {
 	}
 }
 
-func TestIndexHandler_HandleRecord_InvalidRecordStoresMetadataWithoutPublishing(t *testing.T) {
+func TestIndexHandler_HandleRecord_InvalidRecordStoresMetadataAndPublishesRawEvent(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	pubsub := subscription.NewPubSub()
 	handler := tap.NewIndexHandler(db.Records, db.Actors, db.Activity, pubsub, fakeRecordValidator{result: validation.Result{
@@ -146,10 +151,10 @@ func TestIndexHandler_HandleRecord_InvalidRecordStoresMetadataWithoutPublishing(
 		t.Fatalf("LexiconHash = %q, want hash-1", rec.LexiconHash)
 	}
 
-	assertNoPubSubEvent(t, sub, "invalid record")
+	assertRawPubSubEvent(t, sub, subscription.EventCreate, "invalid record")
 }
 
-func TestIndexHandler_HandleRecord_UnknownSchemaStoresMetadataWithoutPublishing(t *testing.T) {
+func TestIndexHandler_HandleRecord_UnknownSchemaStoresMetadataAndPublishesRawEvent(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	pubsub := subscription.NewPubSub()
 	handler := tap.NewIndexHandler(db.Records, db.Actors, nil, pubsub, fakeRecordValidator{result: validation.Result{
@@ -185,7 +190,44 @@ func TestIndexHandler_HandleRecord_UnknownSchemaStoresMetadataWithoutPublishing(
 		t.Fatalf("LexiconHash = %q, want empty", rec.LexiconHash)
 	}
 
-	assertNoPubSubEvent(t, sub, "unknown-schema record")
+	assertRawPubSubEvent(t, sub, subscription.EventCreate, "unknown-schema record")
+}
+
+func TestIndexHandler_HandleRecord_SameCIDRepairsValidationMetadata(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	pubsub := subscription.NewPubSub()
+	handler := tap.NewIndexHandler(db.Records, db.Actors, nil, pubsub, fakeRecordValidator{result: validation.Result{
+		Status:      validation.StatusValid,
+		LexiconHash: "hash-current",
+	}})
+	ctx := context.Background()
+	uri := "at://did:plc:alice/app.bsky.feed.post/post-repair"
+	recordJSON := `{"text":"same content"}`
+	if _, err := db.Records.Insert(ctx, uri, "cid-same", "did:plc:alice", "app.bsky.feed.post", recordJSON); err != nil {
+		t.Fatalf("legacy Insert() error = %v", err)
+	}
+	sub := pubsub.Subscribe("app.bsky.feed.post")
+	defer pubsub.Unsubscribe(sub)
+
+	event := &tap.RecordEvent{
+		DID:        "did:plc:alice",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post-repair",
+		Action:     tap.ActionUpdate,
+		CID:        "cid-same",
+		Record:     json.RawMessage(recordJSON),
+	}
+	if err := handler.HandleRecord(ctx, event); err != nil {
+		t.Fatalf("HandleRecord() error = %v", err)
+	}
+	stored, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI() error = %v", err)
+	}
+	if stored.ValidationStatus != validation.StatusValid || stored.LexiconHash != "hash-current" || stored.ValidatedAt == nil {
+		t.Fatalf("same-CID validation repair = status:%q hash:%q at:%v", stored.ValidationStatus, stored.LexiconHash, stored.ValidatedAt)
+	}
+	assertRawPubSubEvent(t, sub, subscription.EventUpdate, "same-CID repair")
 }
 
 func TestIndexHandler_HandleRecord_Update(t *testing.T) {
@@ -249,7 +291,12 @@ func TestIndexHandler_HandleRecord_Update(t *testing.T) {
 }
 
 func TestIndexHandler_HandleRecord_Delete(t *testing.T) {
-	handler, db, pubsub := setupHandler(t)
+	db := testutil.SetupTestDB(t)
+	pubsub := subscription.NewPubSub()
+	handler := tap.NewIndexHandler(db.Records, db.Actors, db.Activity, pubsub, fakeRecordValidator{result: validation.Result{
+		Status:      validation.StatusValid,
+		LexiconHash: "hash-current",
+	}})
 	ctx := context.Background()
 
 	// Subscribe to capture published events
@@ -297,6 +344,9 @@ func TestIndexHandler_HandleRecord_Delete(t *testing.T) {
 		}
 		if pubEvent.URI != uri {
 			t.Errorf("expected URI %q, got %q", uri, pubEvent.URI)
+		}
+		if !pubEvent.WasValid || pubEvent.TypedRecord == nil {
+			t.Fatalf("delete visibility metadata = wasValid:%v typedRecord:%v, want true/non-nil", pubEvent.WasValid, pubEvent.TypedRecord)
 		}
 	default:
 		t.Error("expected pubsub event to be published for delete")
@@ -467,6 +517,9 @@ func TestIndexHandler_HandleRecord_DeleteNonExistent(t *testing.T) {
 	case pubEvent := <-sub.Events:
 		if pubEvent.Type != subscription.EventDelete {
 			t.Errorf("expected EventDelete, got %q", pubEvent.Type)
+		}
+		if pubEvent.WasValid || pubEvent.TypedRecord != nil {
+			t.Fatalf("nonexistent delete visibility = wasValid:%v typedRecord:%v, want false/nil", pubEvent.WasValid, pubEvent.TypedRecord)
 		}
 	default:
 		t.Error("expected pubsub event to be published for delete of non-existent record")

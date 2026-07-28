@@ -78,9 +78,9 @@ Hyperindex dynamically builds its public GraphQL schema from AT Protocol Lexicon
 | `app.certified.actor.profile` | `appCertifiedActorProfile` | `appCertifiedActorProfileByUri` |
 | `app.certified.link.evm` | `appCertifiedLinkEvm` | `appCertifiedLinkEvmByUri` |
 
-Use typed queries first. They provide typed fields, filters, sorting, and pagination. Typed collection queries only expose records that Hyperindex has validated against the saved Lexicon used to generate the running schema. If an observed record is malformed for that saved schema, or if Hyperindex has no saved Lexicon for its collection, it is hidden from typed collection list queries, typed `ByUri` queries, typed counts, and typed create/update subscription payloads.
+Use typed queries first. They provide typed fields, filters, sorting, and pagination. Typed collection queries only expose records that Indigo has validated against the startup Lexicon set used to generate the running schema. If an observed record is malformed for that saved schema, or if Hyperindex has no saved Lexicon for its collection, it is hidden from typed collection list queries, typed `ByUri` queries, typed counts, relationship hydration, and typed create/update subscriptions. Typed delete subscriptions emit only when the deleted row was valid before deletion.
 
-Use the generic `records(collection: ...)` query when you need raw JSON, debugging visibility, or access to records that are hidden from typed GraphQL. Hyperindex stores every observed record in the raw record table even when validation fails or no saved Lexicon is available. Generic record results include validation metadata:
+Use the generic `records(collection: ...)` query or `search(...)` when you need raw JSON, debugging visibility, or access to records hidden from typed GraphQL. Hyperindex stores every observed record in the raw record table even when validation fails or no saved Lexicon is available. Generic record and search results include validation metadata:
 
 | Field | Meaning |
 | --- | --- |
@@ -89,9 +89,11 @@ Use the generic `records(collection: ...)` query when you need raw JSON, debuggi
 | `validatedAt` | Timestamp of the most recent local validation classification |
 | `lexiconHash` | SHA-256 validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used for classification |
 
-Validation is local-only. During normal ingestion Hyperindex validates against its saved Lexicons and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources.
+Validation is local-only. During normal ingestion Hyperindex uses Indigo to validate against the Lexicons loaded at startup and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources.
 
-Public typed GraphQL schema shape is generated at startup. Uploading, registering, or deleting a Lexicon updates validation state immediately, but newly added, removed, or structurally changed typed GraphQL fields require a Hyperindex restart or redeploy before `/graphql` exposes the new schema shape.
+Public typed GraphQL, record validation, startup record refresh, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Uploading, registering, or deleting a Lexicon changes only the saved configuration; restart or redeploy Hyperindex to apply the change to all of those runtime surfaces together. In a multi-replica deployment, coordinate a Lexicon-changing rollout so old-snapshot and new-snapshot backend replicas never serve concurrently against the shared validation metadata.
+
+The generic `recordEvents` subscription receives all observed raw create/update/delete events, including events for invalid or unknown-schema records. Typed collection subscriptions filter that stream to valid create/update rows and deletes that were valid before removal.
 
 ### Relationships between records
 

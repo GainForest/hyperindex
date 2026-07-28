@@ -4,9 +4,11 @@ package backfill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -34,9 +36,11 @@ const (
 
 // Client handles HTTP requests to AT Protocol services.
 type Client struct {
-	httpClient *http.Client
-	relayURL   string
-	plcURL     string
+	httpClient     *http.Client
+	repoHTTPClient *http.Client
+	relayURL       string
+	plcURL         string
+	repoTimeout    time.Duration
 }
 
 // newTransport creates a connection-pooling HTTP transport with dynamic limits.
@@ -138,23 +142,24 @@ func NewClient(relayURL, plcURL string, maxConcurrent ...int) *Client {
 		transport = newTransport(maxConcurrent[0])
 	}
 
-	// Create retryable client with exponential backoff
+	return &Client{
+		httpClient:     newRetryingHTTPClient(transport, DefaultTimeout),
+		repoHTTPClient: newRetryingHTTPClient(transport, 0),
+		relayURL:       relayURL,
+		plcURL:         plcURL,
+		repoTimeout:    DefaultRepoTimeout,
+	}
+}
+
+func newRetryingHTTPClient(transport http.RoundTripper, timeout time.Duration) *http.Client {
 	retryClient := retryablehttp.NewClient()
 	retryClient.RetryMax = 3
 	retryClient.RetryWaitMin = 100 * time.Millisecond
 	retryClient.RetryWaitMax = 2 * time.Second
 	retryClient.CheckRetry = retryPolicy
 	retryClient.Logger = leveledLogger{}
-	retryClient.HTTPClient = &http.Client{
-		Timeout:   DefaultTimeout,
-		Transport: transport,
-	}
-
-	return &Client{
-		httpClient: retryClient.StandardClient(),
-		relayURL:   relayURL,
-		plcURL:     plcURL,
-	}
+	retryClient.HTTPClient = &http.Client{Timeout: timeout, Transport: transport}
+	return retryClient.StandardClient()
 }
 
 // RepoInfo contains basic repository information.
@@ -382,6 +387,119 @@ func (c *Client) listRecordsPage(ctx context.Context, pdsURL, repoDID, collectio
 	return result.Records, result.Cursor, nil
 }
 
+// CARFailureKind classifies whether CAR failure may use listRecords fallback.
+type CARFailureKind string
+
+const (
+	CARFailureAvailability CARFailureKind = "availability"
+	CARFailureUnsupported  CARFailureKind = "unsupported"
+	CARFailureIntegrity    CARFailureKind = "integrity"
+)
+
+// CARFailure is a typed, bounded aggregate from fetching or extracting a CAR.
+type CARFailure struct {
+	Kind   CARFailureKind
+	Total  int
+	Errors []error
+}
+
+func (e *CARFailure) Error() string {
+	if e == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(e.Errors))
+	for _, err := range e.Errors {
+		parts = append(parts, err.Error())
+	}
+	summary := strings.Join(parts, "; ")
+	if e.Total > len(e.Errors) {
+		summary += fmt.Sprintf("; and %d more", e.Total-len(e.Errors))
+	}
+	return fmt.Sprintf("CAR %s failure (%d): %s", e.Kind, e.Total, summary)
+}
+
+func (e *CARFailure) Unwrap() []error { return e.Errors }
+
+func newCARFailure(kind CARFailureKind, errs ...error) error {
+	filtered := make([]error, 0, len(errs))
+	for _, err := range errs {
+		if err != nil {
+			filtered = append(filtered, err)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return &CARFailure{Kind: kind, Total: len(filtered), Errors: filtered}
+}
+
+func carFailureKind(err error) (CARFailureKind, bool) {
+	var failure *CARFailure
+	if errors.As(err, &failure) {
+		return failure.Kind, true
+	}
+	return "", false
+}
+
+func isCARFallbackFailure(err error) bool {
+	kind, ok := carFailureKind(err)
+	return ok && (kind == CARFailureAvailability || kind == CARFailureUnsupported)
+}
+
+func isCARIntegrityFailure(err error) bool {
+	kind, ok := carFailureKind(err)
+	return ok && kind == CARFailureIntegrity
+}
+
+func combineCARIntegrityFailures(errs ...error) error {
+	combined := &CARFailure{Kind: CARFailureIntegrity}
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		var failure *CARFailure
+		if errors.As(err, &failure) && failure.Kind == CARFailureIntegrity {
+			combined.Total += failure.Total
+			for _, detail := range failure.Errors {
+				if len(combined.Errors) < 20 {
+					combined.Errors = append(combined.Errors, detail)
+				}
+			}
+			continue
+		}
+		combined.Total++
+		if len(combined.Errors) < 20 {
+			combined.Errors = append(combined.Errors, err)
+		}
+	}
+	if combined.Total == 0 {
+		return nil
+	}
+	return combined
+}
+
+type boundedCARFailures struct {
+	total int
+	errs  []error
+}
+
+func (f *boundedCARFailures) add(err error) {
+	if err == nil {
+		return
+	}
+	f.total++
+	if len(f.errs) < 20 {
+		f.errs = append(f.errs, err)
+	}
+}
+
+func (f *boundedCARFailures) err() error {
+	if f.total == 0 {
+		return nil
+	}
+	return &CARFailure{Kind: CARFailureIntegrity, Total: f.total, Errors: f.errs}
+}
+
 // CARRecord represents a record extracted from a CAR file.
 type CARRecord struct {
 	URI        string
@@ -395,8 +513,12 @@ type CARRecord struct {
 // This is much more efficient than calling listRecords per collection.
 // Uses a longer timeout (DefaultRepoTimeout) for large repos.
 func (c *Client) GetRepo(ctx context.Context, pdsURL, did string, collections []string) ([]CARRecord, error) {
-	// Use longer timeout for repo fetches (large repos can take a while)
-	ctx, cancel := context.WithTimeout(ctx, DefaultRepoTimeout)
+	parentCtx := ctx
+	repoTimeout := c.repoTimeout
+	if repoTimeout <= 0 {
+		repoTimeout = DefaultRepoTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, repoTimeout)
 	defer cancel()
 
 	// Build collection filter set
@@ -413,31 +535,49 @@ func (c *Client) GetRepo(ctx context.Context, pdsURL, did string, collections []
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	// Repo fetches use a retrying client without the shorter ordinary-request
+	// timeout and rely on their dedicated context deadline instead. Both clients
+	// share the same connection pool and retry policy.
+	resp, err := c.repoHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		if ok, contextErr := classifyRepoContextFailure(parentCtx, ctx, "fetch CAR", err); ok {
+			return nil, contextErr
+		}
+		return nil, newCARFailure(CARFailureAvailability, fmt.Errorf("request failed: %w", err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+		failure := fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
+		switch resp.StatusCode {
+		case http.StatusBadRequest, http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+			return nil, newCARFailure(CARFailureUnsupported, failure)
+		default:
+			return nil, newCARFailure(CARFailureAvailability, failure)
+		}
 	}
 
 	// Read the CAR file using indigo's repo package
 	r, err := repo.ReadRepoFromCar(ctx, resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse CAR: %w", err)
+		if ok, contextErr := classifyRepoContextFailure(parentCtx, ctx, "read CAR body", err); ok {
+			return nil, contextErr
+		}
+		return nil, newCARFailure(CARFailureIntegrity, fmt.Errorf("failed to parse CAR: %w", err))
 	}
 
-	// Extract records from the repo
+	// Extract every safe record while retaining a bounded aggregate of integrity
+	// failures for invalid paths, missing blocks, and iteration failures.
 	var records []CARRecord
+	var failures boundedCARFailures
 
-	err = r.ForEach(ctx, "", func(path string, recordCid cid.Cid) error {
+	err = r.ForEach(ctx, "", func(path string, recordCID cid.Cid) error {
 		// Path format: "collection/rkey"
 		parts := strings.SplitN(path, "/", 2)
-		if len(parts) != 2 {
-			return nil // Skip invalid paths
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			failures.add(fmt.Errorf("invalid record path %q", path))
+			return nil
 		}
 
 		collection := parts[0]
@@ -449,17 +589,23 @@ func (c *Client) GetRepo(ctx context.Context, pdsURL, did string, collections []
 		}
 
 		// Get record bytes
-		recCid, recordBytes, err := r.GetRecordBytes(ctx, path)
+		recCID, recordBytes, err := r.GetRecordBytes(ctx, path)
 		if err != nil {
-			return nil //nolint:nilerr // skip unreadable records, continue iteration
+			failures.add(fmt.Errorf("read record block %s: %w", path, err))
+			return nil
 		}
 		if recordBytes == nil {
+			failures.add(fmt.Errorf("record block %s has no bytes", path))
+			return nil
+		}
+		if !recordCID.Equals(recCID) {
+			failures.add(fmt.Errorf("record block CID mismatch for %s: tree=%s block=%s", path, recordCID, recCID))
 			return nil
 		}
 
 		records = append(records, CARRecord{
 			URI:        "at://" + did + "/" + collection + "/" + rkey,
-			CID:        recCid.String(),
+			CID:        recCID.String(),
 			Collection: collection,
 			RKey:       rkey,
 			Value:      *recordBytes,
@@ -469,10 +615,27 @@ func (c *Client) GetRepo(ctx context.Context, pdsURL, did string, collections []
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to iterate repo: %w", err)
+		if ok, contextErr := classifyRepoContextFailure(parentCtx, ctx, "iterate CAR", err); ok {
+			return records, contextErr
+		}
+		failures.add(fmt.Errorf("failed to iterate repo: %w", err))
 	}
 
-	return records, nil
+	return records, failures.err()
+}
+
+func classifyRepoContextFailure(parentCtx, repoCtx context.Context, operation string, err error) (bool, error) {
+	if parentErr := parentCtx.Err(); parentErr != nil {
+		return true, parentErr
+	}
+	if repoErr := repoCtx.Err(); repoErr != nil {
+		return true, newCARFailure(CARFailureAvailability, fmt.Errorf("%s timed out: %w", operation, repoErr))
+	}
+	var timeoutErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeoutErr) && timeoutErr.Timeout()) {
+		return true, newCARFailure(CARFailureAvailability, fmt.Errorf("%s timed out: %w", operation, err))
+	}
+	return false, nil
 }
 
 // CBORToJSON converts AT Protocol DAG-CBOR record bytes to their canonical JSON shape.

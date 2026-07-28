@@ -2,45 +2,47 @@
 
 ## Summary
 
-Record Validation Gate keeps Hyperindex's raw indexing layer complete while preventing schema-divergent records from breaking typed GraphQL queries.
+Record Validation Gate keeps Hyperindex's raw index complete while preventing schema-divergent records from breaking typed GraphQL.
 
-Hyperindex should continue storing every observed AT Protocol record in the generic `record` table. Validation metadata on that row determines whether the record is safe to serve through lexicon-generated, typed GraphQL collection fields.
+The core contract is:
 
-The core rule is:
+> A row in `record` means Hyperindex observed the record. Typed GraphQL visibility means Indigo validated that row against the immutable Lexicon snapshot used to build the running schema.
 
-> The `record` table means “Hyperindex observed this record.” Typed GraphQL visibility means “this record conforms to the saved lexicon used to generate this API shape.”
+Hyperindex builds the public GraphQL registry and validator from one saved Lexicon set at startup. Admin Lexicon upload, register, and delete operations stage configuration for the next restart or redeploy; they do not partially hot-reload the running schema or validator.
 
 ## Goals
 
-- Store all observed records, including records that are invalid under the saved lexicon or whose collection has no saved lexicon.
-- Validate records against Hyperindex's saved lexicons only. Normal record ingestion must not perform DNS, PLC, PDS, or remote schema resolution.
-- Exclude invalid and unknown-schema records from typed GraphQL collection queries.
-- Keep generic/raw record access available for debugging and operational visibility.
-- Handle the current lexicon update workflow: delete the old lexicon through the UI, then upload or register the replacement lexicon.
-- Reclassify existing records when a lexicon becomes available again.
+- Store every observed raw record, including invalid records and records with unknown schemas.
+- Validate create and update events in memory before persistence.
+- Persist raw content and validation metadata together.
+- Expose only `valid` rows through typed GraphQL queries and subscriptions.
+- Keep generic queries, search, and raw subscriptions complete and diagnostic.
+- Use Indigo for AT Protocol data and Lexicon conformance.
+- Validate only against saved local Lexicons during ingestion.
+- Keep SQLite and PostgreSQL behavior equivalent.
+- Reclassify missing or stale rows synchronously before serving after startup.
 
 ## Non-goals
 
-- Do not reject observed records before storage.
-- Do not introduce a full ORM.
-- Do not add a durable job queue in the first implementation.
-- Do not add a new admin UI for validation inspection in the first implementation.
-- Do not auto-resolve unknown lexicons remotely during ingestion.
+- Runtime GraphQL schema hot reload.
+- Remote DNS, DID, PLC, or PDS Lexicon discovery during ingestion.
+- Rejection of invalid observed records before raw storage.
+- A durable validation queue or persisted Lexicon dependency graph.
+- Canonical JSON hashing.
+- A validation repair UI.
 
-## Data model
+## Persisted schema
 
-Extend the generic `record` table. Do not create per-lexicon record tables.
-
-Suggested columns:
+Migration 011 adds record validation metadata:
 
 ```sql
-ALTER TABLE record ADD COLUMN validation_status TEXT NOT NULL DEFAULT 'unknown_schema';
-ALTER TABLE record ADD COLUMN validation_error TEXT;
-ALTER TABLE record ADD COLUMN validated_at TEXT;
-ALTER TABLE record ADD COLUMN lexicon_hash TEXT;
+validation_status TEXT NOT NULL DEFAULT 'unknown_schema'
+validation_error  TEXT NULL
+validated_at      TIMESTAMP/TEXT NULL
+lexicon_hash      TEXT NULL
 ```
 
-Suggested indexes for both SQLite and PostgreSQL:
+Indexes:
 
 ```sql
 CREATE INDEX idx_record_collection_validation
@@ -50,367 +52,229 @@ CREATE INDEX idx_record_collection_lexicon_hash
   ON record(collection, lexicon_hash);
 ```
 
-`lexicon_hash` is a validation fingerprint of the exact saved lexicon JSON bytes used to classify the record. It includes the collection lexicon and every saved lexicon reached through transitive `ref` or `union` properties. If any saved lexicon in that dependency graph changes, records with an old hash are stale and should be classified against the current schema graph.
+Migration 012 adds `lexicon.raw_json TEXT`. New admin writes save both:
+
+- `lexicon.json`, retained as JSON/JSONB for existing behavior
+- `lexicon.raw_json`, the exact uploaded or resolved bytes used for hashing
+
+Existing PostgreSQL JSONB rows can only be backfilled from PostgreSQL's normalized `json::text`; their pre-migration formatting cannot be recovered. After migration, new writes preserve exact bytes in both dialects.
+
+Migration 013 adds the startup refresh paging index:
+
+```sql
+CREATE INDEX idx_record_collection_uri
+  ON record(collection, uri);
+```
 
 ## Validation statuses
 
-Use a small explicit status set:
-
-| Status | Meaning | Typed GraphQL visibility |
+| Status | Meaning | Typed visibility |
 | --- | --- | --- |
-| `valid` | The record conforms to the saved lexicon for its collection. | Visible |
-| `invalid` | A saved lexicon exists, but the record does not conform to it. | Hidden |
-| `unknown_schema` | No saved lexicon is available for the collection. | Hidden |
-| `validation_error` | Hyperindex could not complete validation because of an internal validation/parsing error. | Hidden |
+| `valid` | Indigo accepted the record against the startup Lexicon snapshot. | Visible |
+| `invalid` | A collection Lexicon exists, but the record does not conform to it. | Hidden |
+| `unknown_schema` | No collection Lexicon exists in the startup snapshot. | Hidden |
+| `validation_error` | Validation could not complete because of malformed JSON, an incomplete validator, or another operational validation failure. | Hidden |
 
-`validation_error` should describe what went wrong and what to do next where possible. Example messages:
+Every attempted classification sets `validated_at`, including invalid, unknown-schema, and validation-error outcomes.
 
-- `no saved lexicon for collection org.example.foo`
-- `missing required field: name`
-- `field amount expected integer, got string`
-- `lexicon removed for collection`
-- `failed to parse saved lexicon: <details>`
+## Startup Lexicon snapshot
 
-## Ingestion behavior
+Startup performs these steps before serving HTTP or starting ingestion consumers:
 
-All ingestion paths should follow the same flow:
+1. Run database migrations.
+2. Load filesystem Lexicons.
+3. Load database Lexicons, overriding filesystem documents with the same NSID.
+4. Parse the selected documents into the internal registry used by GraphQL.
+5. Add the same documents to an Indigo catalog.
+6. Validate complete local reference closure.
+7. Compute exact per-Lexicon hashes and transitive collection fingerprints.
+8. Mark stored collections absent from the snapshot as `unknown_schema`.
+9. Refresh missing or stale validation metadata for active collections.
+10. Build and expose GraphQL from the snapshot registry.
+11. Start Tap or Jetstream using the same startup collection set unless configuration provides an explicit collection override.
 
-1. Receive a record event from Tap, Jetstream, or backfill.
-2. Save the raw record into the generic `record` table.
-3. Classify the stored record against the saved lexicon registry.
-4. Update validation metadata on the record row.
-5. Publish typed subscription events only if the record is `valid`.
+The registry, Indigo catalog, hashes, and generated schema remain fixed for the process lifetime.
 
-Relevant entry points:
+Filesystem JSON files that do not declare a Lexicon are ignored. Malformed JSON or malformed Lexicon documents fail startup with the file path rather than silently disappearing from the active schema.
 
-- Tap: `internal/tap/handler.go`
-- Jetstream: `internal/jetstream/consumer.go`
-- Backfill: `internal/backfill/`
-- Record repository: `internal/database/repositories/records.go`
+## Indigo-backed validation
 
-For create/update events, storage should happen before classification so invalid data remains available for debugging.
+`internal/validation.Validator` wraps Indigo's `lexicon.ValidateRecord` and uses `atdata.UnmarshalJSON` for AT Protocol data conversion.
 
-For delete events, delete the raw row as today. No validation is needed for a deleted record.
+For each create or update:
 
-## Local validator service
+1. Resolve the collection fingerprint from the startup snapshot.
+2. Decode the raw JSON as AT Protocol data.
+3. Validate the record key using the collection's record key rule.
+4. Validate `$type`, required fields, formats, limits, refs, unions, blobs, CID links, bytes, and other Lexicon constraints through Indigo.
+5. Return a persistence-ready `validation.Result`.
 
-Add a local validator service, likely under `internal/validation/` or `internal/lexicon/validation/`.
+Supported Lexicon record key rules are `any`, `tid`, `record-key`, `nsid`, and `literal:<value>`. Hyperindex validates `record-key` locally while using Indigo for the record body; unsupported custom rules fail schema validation or fail closed.
 
-Suggested API shape:
+If an ingestion component is constructed without a validator, it stores the event as `validation_error`; nil validation never implies `valid`.
 
-```go
-type ValidationStatus string
+## Validation fingerprints
 
-const (
-    ValidationStatusValid          ValidationStatus = "valid"
-    ValidationStatusInvalid        ValidationStatus = "invalid"
-    ValidationStatusUnknownSchema  ValidationStatus = "unknown_schema"
-    ValidationStatusValidationError ValidationStatus = "validation_error"
+Each saved Lexicon document has an exact-byte hash:
+
+```text
+sha256(raw_json)
+```
+
+Each collection has a transitive fingerprint:
+
+```text
+sha256(
+  sorted lines:
+    <lexicon-nsid>=<exact-byte-hash>
 )
-
-type ValidationResult struct {
-    Status      ValidationStatus
-    Error       string
-    LexiconHash string
-}
-
-type RecordValidator interface {
-    ValidateRecord(collection string, rkey string, rawJSON []byte) ValidationResult
-    LexiconHash(collection string) (string, bool)
-}
 ```
 
-The validator should use the same saved lexicon registry that drives generated GraphQL types. That keeps validation and serving behavior aligned.
+The dependency walk starts at the collection's `main` definition and follows every reachable `ref` and `union.refs`, including references nested in arrays, objects, and non-main definitions. A helper Lexicon change therefore makes every dependent collection's old rows stale.
 
-The validator must not:
+Formatting-only saved Lexicon changes intentionally produce a new fingerprint and trigger refresh. Canonicalization is out of scope.
 
-- query `_lexicon` DNS records,
-- resolve DID documents,
-- fetch `com.atproto.lexicon.schema` from a PDS,
-- mutate the lexicon registry during record ingestion.
+## Validate first, write once
 
-## Repository methods
+Tap, Jetstream, and both backfill paths use the same create/update flow:
 
-Add repository methods instead of writing SQL in handlers.
-
-Suggested methods:
-
-```go
-func (r *RecordsRepository) UpdateValidationStatus(
-    ctx context.Context,
-    uri string,
-    status ValidationStatus,
-    validationError string,
-    lexiconHash string,
-) error
+```text
+receive event
+classify against startup snapshot
+UpsertWithValidation(raw content + validation result)
+publish raw event
 ```
 
-```go
-func (r *RecordsRepository) MarkCollectionUnknownSchema(
-    ctx context.Context,
-    collection string,
-    reason string,
-) error
-```
+`RecordsRepository.UpsertWithValidation` writes raw content and validation metadata in one upsert. A changed record cannot retain a previous row's `valid` metadata if a second update fails.
 
-`MarkCollectionUnknownSchema` should execute a collection-wide update:
+`BatchUpsertWithValidation` provides the equivalent transaction/batch path for backfill while staying under SQLite's aggregate parameter limit.
 
-```sql
-UPDATE record
-SET validation_status = 'unknown_schema',
-    validation_error = ?,
-    validated_at = CURRENT_TIMESTAMP,
-    lexicon_hash = NULL
-WHERE collection = ?;
-```
+### Same-CID replay
 
-Use `NOW()` for PostgreSQL and the existing repository dialect helpers/placeholders where needed.
+A non-empty incoming CID equal to the existing CID means content is unchanged. The repository returns `Skipped`, preserving ingestion counters, but first repairs:
 
-Add a batch listing method for schema-available classification after lexicon upload/register:
+- missing or stale validation status/error/hash
+- missing `validated_at`
+- missing `record_created_at` when the incoming JSON supplies one
 
-```go
-func (r *RecordsRepository) ListRecordsNeedingValidation(
-    ctx context.Context,
-    collection string,
-    currentLexiconHash string,
-    afterURI string,
-    limit int,
-) ([]Record, error)
-```
+The repair update includes the existing CID in its predicate so a concurrent content change cannot receive metadata for the old content.
 
-Suggested predicate:
+An empty CID is never treated as unchanged merely because the stored CID is also empty.
+
+### Backfill CID handling
+
+Backfill only treats the same URI with the same non-empty CID as unchanged content. It does not drop a record because the same CID exists at a different URI; identical content at distinct AT-URIs remains distinct indexed data.
+
+## Startup validation refresh
+
+Startup selects rows with missing or stale metadata:
 
 ```sql
 WHERE collection = ?
   AND (
-    validation_status != 'valid'
-    OR lexicon_hash IS NULL
+    lexicon_hash IS NULL
     OR lexicon_hash != ?
+    OR validated_at IS NULL
   )
   AND uri > ?
 ORDER BY uri
-LIMIT ?;
+LIMIT 500;
 ```
 
-The `uri > ?` keyset predicate avoids offset pagination over large tables.
+Status is not part of the predicate. A current-hash `invalid` or `validation_error` row is already classified and is not revalidated on every boot.
 
-## Typed GraphQL serving
+Refresh uses keyset paging and logs processed, valid, invalid, hidden, and elapsed counts. Startup fails rather than serving typed GraphQL backed by stale or unclassified rows when refresh cannot complete.
 
-Typed GraphQL collection fields must read only valid rows.
+## GraphQL visibility
 
-Example rule:
+### Typed queries
 
-```sql
-WHERE collection = ?
-  AND validation_status = 'valid'
-```
+These surfaces read only `validation_status = 'valid'` rows:
 
-Apply this to:
+- typed collection connections and counts
+- typed `ByUri` fields
+- typed create/update subscriptions
+- Certified profile hydration
 
-- generated collection connection resolvers,
-- single-record typed collection resolvers,
-- counts for typed collections,
-- typed collection subscriptions.
+Typed `ByUri` returns `null`, not a GraphQL error, when a raw row exists but is hidden.
 
-Generic/raw record queries must return all statuses, including `unknown_schema`, `invalid`, and `validation_error` records. Expose validation metadata on generic record results so consumers can understand why a record is not available through typed GraphQL:
+`certifiedProfileData` only attaches a valid `app.certified.actor.profile` row. An invalid or unknown profile cannot bypass the gate through relationship hydration.
+
+### Generic queries and search
+
+`records(collection: ...)` and `search(...)` return raw rows regardless of validation status. Their `GenericRecord` nodes include:
 
 - `validationStatus`
 - `validationError`
 - `validatedAt`
 - `lexiconHash`
 
-If filtering is small to add, generic record queries should also allow filtering by `validationStatus`.
+This keeps invalid and unknown-schema records available for diagnostics without allowing them into typed fields.
 
-## Lexicon lifecycle behavior
+## Subscription behavior
 
-Public typed GraphQL schema shape is rebuilt on process restart, not hot-reloaded, in the first implementation. Lexicon upload/register/delete updates validation state immediately, but newly added, removed, or structurally changed typed GraphQL fields require a Hyperindex restart/redeploy to refresh the generated schema.
+Hyperindex uses one raw pubsub stream.
 
-### Upload/register lexicon
+- Every successfully stored create/update event is published, including invalid, unknown-schema, and validation-error records.
+- Every observed delete is published after deletion.
+- Generic `recordEvents` receives all matching raw events.
+- Typed per-collection create/update fields check the current row and emit only when it is valid.
+- Resolver-level filtering produces no WebSocket `next` message; clients do not receive `{ typedField: null }` for suppressed events.
 
-When a lexicon is uploaded or registered:
+For deletes, ingestion reads the typed-visible row before deletion and carries internal `wasValid` plus the previous typed payload on the event:
 
-1. Save the lexicon JSON to the lexicons table.
-2. Compute the current `lexicon_hash` for that saved schema and its transitive referenced lexicons.
-3. Refresh the in-memory lexicon registry used by validation classification.
-4. Classify existing records for the lexicon's collection whose validation result is missing, invalid, unknown, errored, or stale.
-
-This classification can run in a goroutine so the admin request does not block on large collections.
-
-This is not a separate operator-facing “revalidation” workflow. It is the normal consequence of adding a schema: existing records for that collection can now be judged against it.
-
-Suggested in-process scheduler name:
-
-```go
-ScheduleValidationRefresh(collection string, reason string)
+```text
+read valid row, if present
+delete raw row
+publish raw delete with pre-delete visibility metadata
 ```
 
-Example reasons:
+Typed delete fields emit only when the deleted row was previously valid. Raw delete payloads do not expose the internal visibility metadata.
 
-- `lexicon_registered`
-- `lexicon_uploaded`
+## Admin Lexicon lifecycle
 
-The first implementation can use an in-memory goroutine with a `running map[string]bool` to avoid duplicate concurrent classification jobs per collection. It does not need a durable queue unless lexicon updates become frequent or multi-instance coordination becomes necessary.
+Admin upload/register/delete changes the database-backed saved configuration only.
 
-### Delete lexicon
+Before upload or registration persists anything, Hyperindex:
 
-When a lexicon is deleted:
+1. validates each candidate with the internal GraphQL parser and Indigo
+2. overlays all candidates on filesystem plus current database Lexicons
+3. validates the complete prospective startup set and local reference closure
+4. persists only when the full set is valid
 
-1. Delete the lexicon row.
-2. Mark existing records for that collection as `unknown_schema`.
-3. Clear their `lexicon_hash`.
-4. Refresh the in-memory registry used by validation classification.
+ZIP upload validates all candidates before one transactional batch save. Duplicate IDs, ID mismatches, invalid schemas, and unresolved prospective references persist nothing.
 
-Deletion should be synchronous because it is a single collection-wide SQL update and keeps validation state immediately consistent. Public typed GraphQL schema fields for the deleted lexicon are removed after restart/redeploy.
+Delete also validates the prospective set. A helper Lexicon cannot be deleted while another saved Lexicon would retain a broken reference. Deleting a database override may reveal a valid filesystem Lexicon with the same NSID.
 
-Suggested resolver flow:
+Mutation return types remain compatible. Logs, admin descriptions, and frontend copy tell operators to restart or redeploy. The running GraphQL schema, validator, validation metadata, backfill defaults, and Jetstream defaults do not change until restart.
 
-```go
-func (r *Resolver) DeleteLexicon(ctx context.Context, nsid string) (bool, error) {
-    if err := r.repos.Lexicons.Delete(ctx, nsid); err != nil {
-        return false, err
-    }
+## Verification contract
 
-    if err := r.repos.Records.MarkCollectionUnknownSchema(
-        ctx,
-        nsid,
-        "lexicon removed for collection",
-    ); err != nil {
-        return false, err
-    }
+Changes to this feature require:
 
-    r.notifyLexiconChange(ctx)
-    return true, nil
-}
+```bash
+go build -v ./...
+make lint
+DATABASE_URL=sqlite::memory: go test -v -race ./...
 ```
 
-A deleted lexicon does not mean existing records are invalid. It only means Hyperindex no longer has a saved schema to judge that collection.
+Database changes also require PostgreSQL parity:
 
-## Validation refresh worker
-
-When a schema becomes available after upload/register, classify existing rows in batches. Startup classification for existing saved lexicons is synchronous; upload/register refreshes after the server is already running use the goroutine scheduler.
-
-Pseudo-flow:
-
-```go
-func (s *ValidationRefreshScheduler) ScheduleValidationRefresh(collection, reason string) {
-    s.mu.Lock()
-    if s.running[collection] {
-        s.mu.Unlock()
-        return
-    }
-    s.running[collection] = true
-    s.mu.Unlock()
-
-    go func() {
-        defer func() {
-            s.mu.Lock()
-            delete(s.running, collection)
-            s.mu.Unlock()
-        }()
-
-        if err := s.refreshCollection(context.Background(), collection, reason); err != nil {
-            slog.Warn("validation refresh failed", "collection", collection, "reason", reason, "error", err)
-        }
-    }()
-}
+```bash
+DATABASE_URL=postgres://hyperindex:hyperindex@localhost:5432/hyperindex_test?sslmode=disable \
+  go test -v -race ./...
 ```
 
-```go
-func (s *ValidationRefreshScheduler) refreshCollection(ctx context.Context, collection, reason string) error {
-    const batchSize = 500
+Integration behavior requires:
 
-    currentHash, ok := s.validator.LexiconHash(collection)
-    if !ok {
-        return s.records.MarkCollectionUnknownSchema(ctx, collection, "no saved lexicon for collection")
-    }
-
-    var afterURI string
-    for {
-        records, err := s.records.ListRecordsNeedingValidation(ctx, collection, currentHash, afterURI, batchSize)
-        if err != nil {
-            return err
-        }
-        if len(records) == 0 {
-            return nil
-        }
-
-        for _, rec := range records {
-            result := s.validator.ValidateRecord(rec.Collection, rec.RKey, []byte(rec.JSON))
-            if err := s.records.UpdateValidationStatus(ctx, rec.URI, result.Status, result.Error, result.LexiconHash); err != nil {
-                return err
-            }
-            afterURI = rec.URI
-        }
-    }
-}
+```bash
+go test -v -race -tags=integration ./internal/integration/...
 ```
 
-## Startup behavior for existing records
+When Docker/local Tap dependencies are available:
 
-The first deployment with Record Validation Gate will add validation columns to a `record` table that may already contain many rows. Before the migration, those rows have no validation status at all. The migration assigns them the conservative default `unknown_schema` because SQL migrations cannot safely validate records against Go lexicon logic.
+```bash
+make smoke-tap-local
+```
 
-To avoid a temporary empty typed API window, startup must synchronously classify existing records for saved collection lexicons before the server begins serving GraphQL requests.
-
-Startup flow:
-
-1. Run database migrations.
-2. Load saved lexicons from filesystem and the lexicons table.
-3. Build the local lexicon registry.
-4. Run inline validation refresh for every saved collection lexicon.
-5. Log batched progress for each collection.
-6. Start serving GraphQL only after startup classification succeeds.
-
-The startup refresh should use the same batch query as the background refresh and classify rows that are `unknown_schema`, invalid, errored, missing a `lexicon_hash`, or stale against the current `lexicon_hash`. It should skip rows already classified against the current `lexicon_hash`. This makes later startups cheap unless lexicons changed or records were left stale.
-
-Progress logs should include at least:
-
-- collection
-- reason, e.g. `startup`
-- processed count
-- valid count
-- invalid count
-- unknown/error count
-- elapsed time
-
-If startup classification fails, startup should fail loudly instead of serving a typed API backed by unclassified records. This fail-fast behavior is intentional: production consumers already depend on typed GraphQL responses, so Hyperindex should prefer not starting over serving typed fields whose visibility was computed from stale validation metadata.
-
-## Rollout plan
-
-1. Add SQLite and PostgreSQL migrations for validation metadata.
-2. Update `RecordsRepository.Insert` and `BatchInsert` behavior to initialize validation metadata safely.
-3. Add repository methods for validation status updates, collection unknown-schema marking, and validation refresh batch selection.
-4. Implement the local record validator against saved lexicons.
-5. Add synchronous startup classification for saved collection lexicons before GraphQL starts serving.
-6. Wire validation into Tap and Jetstream create/update paths.
-7. Wire validation into backfill insert and batch insert paths.
-8. Filter typed GraphQL collection queries to valid rows only.
-9. Preserve generic/raw record visibility and expose validation metadata there.
-10. Wire lexicon upload/register to schedule validation refresh in a goroutine.
-11. Wire lexicon delete to synchronously mark records unknown-schema.
-12. Document that typed GraphQL schema shape refreshes on restart/redeploy, not dynamically.
-13. Add tests for both SQLite and PostgreSQL paths.
-
-## Testing requirements
-
-Add or update tests for:
-
-- SQLite migration adds validation columns and indexes.
-- PostgreSQL migration adds validation columns and indexes.
-- `MarkCollectionUnknownSchema` updates only the target collection.
-- `ListRecordsNeedingValidation` returns invalid, unknown, errored, missing-hash, and stale-hash rows but skips current valid rows.
-- Ingestion stores invalid records but marks them `invalid`.
-- Ingestion stores records with no saved lexicon as `unknown_schema`.
-- Typed GraphQL collection queries exclude invalid and unknown-schema rows.
-- Generic/raw record queries can still access invalid, unknown-schema, and validation-error rows.
-- Generic/raw record query results include `validationStatus`, `validationError`, `validatedAt`, and `lexiconHash`.
-- Lexicon delete marks the collection `unknown_schema` and clears `lexicon_hash`.
-- Lexicon upload/register classifies previously unknown-schema records.
-
-Per repository policy, database-related tests should cover both SQLite and PostgreSQL where applicable.
-
-## Implementation decisions
-
-- Typed single-record queries should return `null` for invalid, unknown-schema, or validation-error rows. They should not return a GraphQL error for hidden validation states.
-- Generic/raw GraphQL should expose validation metadata in the first implementation: `validationStatus`, `validationError`, `validatedAt`, and `lexiconHash`.
-- Startup classification for existing saved lexicons should run synchronously before GraphQL starts serving, with batched progress logs. Validation refresh after upload/register should run in a goroutine. Lexicon delete should remain a synchronous bulk update to `unknown_schema`.
-- `lexicon_hash` must hash the exact saved JSON bytes from the lexicon repository for the collection lexicon and transitive referenced lexicons. Canonical JSON hashing is intentionally out of scope for the first implementation because formatting-only refreshes are acceptable and exact-byte hashing is simpler to reason about.
+Coverage must include atomic valid-to-invalid updates, same-CID repair, both database dialects, transitive fingerprints, prospective admin validation, raw and typed query visibility, Certified profile gating, raw invalid events, typed suppression, and pre-delete typed visibility.

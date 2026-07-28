@@ -58,14 +58,8 @@ func Run(ctx context.Context, exec database.Executor) error {
 
 		slog.Info("Applying migration", "version", m.Version, "name", m.Name)
 
-		// Execute migration SQL
-		if _, err := exec.DB().ExecContext(ctx, m.UpSQL); err != nil {
+		if err := applyMigration(ctx, exec, m); err != nil {
 			return fmt.Errorf("failed to apply migration %s: %w", m.Version, err)
-		}
-
-		// Record migration
-		if err := recordMigration(ctx, exec, m.Version); err != nil {
-			return fmt.Errorf("failed to record migration %s: %w", m.Version, err)
 		}
 
 		slog.Info("Migration applied successfully", "version", m.Version)
@@ -114,17 +108,8 @@ func Rollback(ctx context.Context, exec database.Executor) error {
 
 	slog.Info("Rolling back migration", "version", version, "name", migration.Name)
 
-	// Execute rollback SQL
-	if _, err := exec.DB().ExecContext(ctx, migration.DownSQL); err != nil {
+	if err := rollbackMigration(ctx, exec, *migration); err != nil {
 		return fmt.Errorf("failed to rollback migration %s: %w", version, err)
-	}
-
-	// Remove migration record
-	_, err = exec.Exec(ctx,
-		fmt.Sprintf("DELETE FROM schema_migrations WHERE version = %s", exec.Placeholder(1)),
-		[]database.Value{database.Text(version)})
-	if err != nil {
-		return fmt.Errorf("failed to remove migration record: %w", err)
 	}
 
 	slog.Info("Migration rolled back successfully", "version", version)
@@ -170,11 +155,44 @@ func getAppliedMigrations(ctx context.Context, exec database.Executor) (map[stri
 	return applied, rows.Err()
 }
 
-func recordMigration(ctx context.Context, exec database.Executor, version string) error {
-	_, err := exec.Exec(ctx,
-		fmt.Sprintf("INSERT INTO schema_migrations (version) VALUES (%s)", exec.Placeholder(1)),
-		[]database.Value{database.Text(version)})
-	return err
+func applyMigration(ctx context.Context, exec database.Executor, migration Migration) error {
+	tx, err := exec.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, migration.UpSQL); err != nil {
+		return fmt.Errorf("execute migration SQL: %w", err)
+	}
+	query := fmt.Sprintf("INSERT INTO schema_migrations (version) VALUES (%s)", exec.Placeholder(1))
+	if _, err := tx.ExecContext(ctx, query, exec.ConvertParams([]database.Value{database.Text(migration.Version)})...); err != nil {
+		return fmt.Errorf("record migration version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration transaction: %w", err)
+	}
+	return nil
+}
+
+func rollbackMigration(ctx context.Context, exec database.Executor, migration Migration) error {
+	tx, err := exec.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin rollback transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, migration.DownSQL); err != nil {
+		return fmt.Errorf("execute rollback SQL: %w", err)
+	}
+	query := fmt.Sprintf("DELETE FROM schema_migrations WHERE version = %s", exec.Placeholder(1))
+	if _, err := tx.ExecContext(ctx, query, exec.ConvertParams([]database.Value{database.Text(migration.Version)})...); err != nil {
+		return fmt.Errorf("remove migration version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit rollback transaction: %w", err)
+	}
+	return nil
 }
 
 const recordCreatedAtBackfillBatchSize = 500
