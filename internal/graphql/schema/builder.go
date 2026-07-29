@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,7 +23,6 @@ import (
 	"github.com/GainForest/hyperindex/internal/graphql/externallabels"
 	"github.com/GainForest/hyperindex/internal/graphql/query"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
-	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/graphql/types"
 	"github.com/GainForest/hyperindex/internal/lexicon"
 )
@@ -452,26 +452,19 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 			Type:        recordType,
 			Description: fmt.Sprintf("Subscribe to %s record changes", lexiconID),
 			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-				var eventCollection string
-				var record map[string]interface{}
-				switch source := p.Source.(type) {
-				case *subscription.RecordEvent:
-					if source == nil {
-						return nil, nil
-					}
-					eventCollection = source.Collection
-					record = source.Record
-				case map[string]interface{}:
-					payload, _ := source["recordEvents"].(map[string]interface{})
-					eventCollection, _ = payload["collection"].(string)
-					record, _ = payload["record"].(map[string]interface{})
-				default:
+				source, ok := p.Source.(map[string]interface{})
+				if !ok {
 					return nil, nil
 				}
+				payload, _ := source["recordEvents"].(map[string]interface{})
+				eventCollection, _ := payload["collection"].(string)
 				if eventCollection != collection {
 					return nil, nil
 				}
+
+				record, _ := payload["record"].(map[string]interface{})
 				if record != nil {
+					record = maps.Clone(record)
 					b.coerceRequiredFields(record, collection)
 				}
 				return record, nil

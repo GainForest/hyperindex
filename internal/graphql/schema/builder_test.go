@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -3335,6 +3336,66 @@ func TestRecordAuthorIdentityAcrossQueries(t *testing.T) {
 	}
 	typedSubscriptionData := typedSubscriptionResult.Data.(map[string]interface{})["comExampleCertifiedConsumerEvents"].(map[string]interface{})
 	assertRecordAuthor(t, typedSubscriptionData, "comExampleCertifiedConsumerEvents")
+}
+
+func TestTypedSubscriptionDoesNotMutateSharedRecord(t *testing.T) {
+	schema := buildCertifiedProfileTestSchema(t)
+	sharedRecord := map[string]interface{}{
+		"uri":  "at://did:plc:alice/app.certified.actor.profile/self",
+		"cid":  "cid-profile-alice",
+		"did":  "did:plc:alice",
+		"rkey": "self",
+	}
+	rootObject := map[string]interface{}{
+		"recordEvents": map[string]interface{}{
+			"collection": "app.certified.actor.profile",
+			"record":     sharedRecord,
+		},
+	}
+
+	const executions = 32
+	start := make(chan struct{})
+	errs := make(chan error, executions)
+	var wg sync.WaitGroup
+	for range executions {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result := graphql.Do(graphql.Params{
+				Schema:        *schema,
+				RequestString: `subscription { appCertifiedActorProfileEvents { createdAt } }`,
+				RootObject:    rootObject,
+			})
+			if len(result.Errors) > 0 {
+				errs <- fmt.Errorf("GraphQL returned errors: %v", result.Errors)
+				return
+			}
+			data, ok := result.Data.(map[string]interface{})
+			if !ok {
+				errs <- fmt.Errorf("result.Data is %T, want map[string]interface{}", result.Data)
+				return
+			}
+			record, ok := data["appCertifiedActorProfileEvents"].(map[string]interface{})
+			if !ok {
+				errs <- fmt.Errorf("typed subscription result is %T, want map[string]interface{}", data["appCertifiedActorProfileEvents"])
+				return
+			}
+			if createdAt, ok := record["createdAt"].(string); !ok || createdAt != "" {
+				errs <- fmt.Errorf("createdAt = %#v, want coerced empty string", record["createdAt"])
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	if _, mutated := sharedRecord["createdAt"]; mutated {
+		t.Fatalf("typed subscription mutated shared source: %#v", sharedRecord)
+	}
 }
 
 func TestAuthorHydrationIsSelectionAwareAndBatched(t *testing.T) {

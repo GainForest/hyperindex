@@ -11,6 +11,8 @@ import (
 	"github.com/GainForest/hyperindex/internal/database"
 )
 
+const missingHandlePredicateSQL = "(handle IS NULL OR TRIM(handle) = '' OR handle = did)"
+
 // Actor represents an AT Protocol user/actor.
 type Actor struct {
 	DID       string
@@ -91,7 +93,7 @@ func (r *ActorsRepository) SetHandleIfMissing(ctx context.Context, did, handle s
 	p2 := r.db.Placeholder(2)
 	sqlStr := fmt.Sprintf(`UPDATE actor
 		SET handle = %s, indexed_at = %s
-		WHERE did = %s AND (handle IS NULL OR handle = '')`, p1, r.db.Now(), p2)
+		WHERE did = %s AND %s`, p1, r.db.Now(), p2, missingHandlePredicateSQL)
 
 	result, err := r.db.Exec(ctx, sqlStr, []database.Value{
 		database.Text(handle),
@@ -256,9 +258,9 @@ func (r *ActorsRepository) ListDIDsMissingHandle(ctx context.Context, afterDID s
 	}
 
 	sqlStr := fmt.Sprintf(`SELECT did FROM actor
-		WHERE (handle IS NULL OR handle = '') AND did > %s
+		WHERE %s AND did > %s
 		ORDER BY did ASC
-		LIMIT %s`, r.db.Placeholder(1), r.db.Placeholder(2))
+		LIMIT %s`, missingHandlePredicateSQL, r.db.Placeholder(1), r.db.Placeholder(2))
 	params := []database.Value{database.Text(afterDID), database.Int(int64(limit))}
 	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
 	if err != nil {

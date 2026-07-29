@@ -4,8 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
 	"testing"
+	"time"
 
+	"github.com/GainForest/hyperindex/internal/database/migrations"
+	"github.com/GainForest/hyperindex/internal/database/postgres"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/testutil"
 )
@@ -130,30 +134,53 @@ func TestActorsRepository_MissingHandleReconciliation(t *testing.T) {
 	if err := repo.UpsertIdentity(ctx, "did:plc:carol", "carol.example"); err != nil {
 		t.Fatalf("UpsertIdentity(carol) error = %v", err)
 	}
+	if err := repo.UpsertIdentity(ctx, "did:plc:dave", "did:plc:dave"); err != nil {
+		t.Fatalf("UpsertIdentity(dave) error = %v", err)
+	}
+	if err := repo.UpsertIdentity(ctx, "did:plc:erin", "   "); err != nil {
+		t.Fatalf("UpsertIdentity(erin) error = %v", err)
+	}
 
-	firstPage, err := repo.ListDIDsMissingHandle(ctx, "", 1)
+	firstPage, err := repo.ListDIDsMissingHandle(ctx, "", 2)
 	if err != nil {
 		t.Fatalf("ListDIDsMissingHandle(first page) error = %v", err)
 	}
-	if len(firstPage) != 1 || firstPage[0] != "did:plc:alice" {
-		t.Fatalf("first page = %v, want [did:plc:alice]", firstPage)
+	if len(firstPage) != 2 || firstPage[0] != "did:plc:alice" || firstPage[1] != "did:plc:bob" {
+		t.Fatalf("first page = %v, want [did:plc:alice did:plc:bob]", firstPage)
 	}
-	secondPage, err := repo.ListDIDsMissingHandle(ctx, firstPage[0], 10)
+	secondPage, err := repo.ListDIDsMissingHandle(ctx, firstPage[1], 10)
 	if err != nil {
 		t.Fatalf("ListDIDsMissingHandle(second page) error = %v", err)
 	}
-	if len(secondPage) != 1 || secondPage[0] != "did:plc:bob" {
-		t.Fatalf("second page = %v, want [did:plc:bob]", secondPage)
+	if len(secondPage) != 2 || secondPage[0] != "did:plc:dave" || secondPage[1] != "did:plc:erin" {
+		t.Fatalf("second page = %v, want [did:plc:dave did:plc:erin]", secondPage)
 	}
 
-	updated, err := repo.SetHandleIfMissing(ctx, "did:plc:alice", "alice.example")
-	if err != nil {
-		t.Fatalf("SetHandleIfMissing(alice) error = %v", err)
+	for _, test := range []struct {
+		did    string
+		handle string
+	}{
+		{did: "did:plc:alice", handle: "alice.example"},
+		{did: "did:plc:dave", handle: "dave.example"},
+		{did: "did:plc:erin", handle: "erin.example"},
+	} {
+		updated, err := repo.SetHandleIfMissing(ctx, test.did, test.handle)
+		if err != nil {
+			t.Fatalf("SetHandleIfMissing(%s) error = %v", test.did, err)
+		}
+		if !updated {
+			t.Fatalf("SetHandleIfMissing(%s) = false, want true", test.did)
+		}
+		actor, err := repo.GetByDID(ctx, test.did)
+		if err != nil {
+			t.Fatalf("GetByDID(%s) error = %v", test.did, err)
+		}
+		if actor.Handle != test.handle {
+			t.Fatalf("%s handle = %q, want %q", test.did, actor.Handle, test.handle)
+		}
 	}
-	if !updated {
-		t.Fatal("SetHandleIfMissing(alice) = false, want true")
-	}
-	updated, err = repo.SetHandleIfMissing(ctx, "did:plc:carol", "stale.example")
+
+	updated, err := repo.SetHandleIfMissing(ctx, "did:plc:carol", "stale.example")
 	if err != nil {
 		t.Fatalf("SetHandleIfMissing(carol) error = %v", err)
 	}
@@ -166,6 +193,95 @@ func TestActorsRepository_MissingHandleReconciliation(t *testing.T) {
 	}
 	if carol.Handle != "carol.example" {
 		t.Fatalf("carol.Handle = %q, want carol.example", carol.Handle)
+	}
+
+	remaining, err := repo.ListDIDsMissingHandle(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("ListDIDsMissingHandle(after updates) error = %v", err)
+	}
+	if len(remaining) != 1 || remaining[0] != "did:plc:bob" {
+		t.Fatalf("remaining missing handles = %v, want [did:plc:bob]", remaining)
+	}
+}
+
+func TestActorsRepository_MissingHandleReconciliation_PostgreSQL(t *testing.T) {
+	databaseURL, ok := safePostgresTestDatabaseURL(t)
+	if !ok {
+		t.Skip("PostgreSQL actor reconciliation test requires DATABASE_URL pointing at a postgres database named test or ending with _test/-test")
+	}
+
+	exec, err := postgres.NewExecutor(databaseURL)
+	if err != nil {
+		t.Fatalf("create postgres executor: %v", err)
+	}
+	t.Cleanup(func() { exec.Close() })
+
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("run postgres migrations: %v", err)
+	}
+	repo := repositories.NewActorsRepository(exec)
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	blankDID := "did:plc:zzzzpr128blank" + suffix
+	placeholderDID := "did:plc:zzzzpr128placeholder" + suffix
+	validDID := "did:plc:zzzzpr128valid" + suffix
+	actors := []repositories.ActorData{
+		{DID: blankDID, Handle: "   "},
+		{DID: placeholderDID, Handle: placeholderDID},
+		{DID: validDID, Handle: "valid.example"},
+	}
+	t.Cleanup(func() {
+		for _, actor := range actors {
+			if err := repo.DeleteByDID(context.Background(), actor.DID); err != nil {
+				t.Errorf("cleanup actor %s: %v", actor.DID, err)
+			}
+		}
+	})
+	for _, actor := range actors {
+		if err := repo.UpsertIdentity(ctx, actor.DID, actor.Handle); err != nil {
+			t.Fatalf("UpsertIdentity(%s) error = %v", actor.DID, err)
+		}
+	}
+
+	dids, err := repo.ListDIDsMissingHandle(ctx, "did:plc:zzzzpr128", 100)
+	if err != nil {
+		t.Fatalf("ListDIDsMissingHandle() error = %v", err)
+	}
+	missing := make(map[string]bool, len(dids))
+	for _, did := range dids {
+		missing[did] = true
+	}
+	if !missing[blankDID] || !missing[placeholderDID] {
+		t.Fatalf("missing handles = %v, want blank and placeholder DIDs", dids)
+	}
+	if missing[validDID] {
+		t.Fatalf("missing handles = %v, did not want valid DID", dids)
+	}
+
+	for _, test := range []struct {
+		did        string
+		handle     string
+		wantUpdate bool
+	}{
+		{did: blankDID, handle: "blank.example", wantUpdate: true},
+		{did: placeholderDID, handle: "placeholder.example", wantUpdate: true},
+		{did: validDID, handle: "stale.example", wantUpdate: false},
+	} {
+		updated, err := repo.SetHandleIfMissing(ctx, test.did, test.handle)
+		if err != nil {
+			t.Fatalf("SetHandleIfMissing(%s) error = %v", test.did, err)
+		}
+		if updated != test.wantUpdate {
+			t.Fatalf("SetHandleIfMissing(%s) = %v, want %v", test.did, updated, test.wantUpdate)
+		}
+	}
+
+	valid, err := repo.GetByDID(ctx, validDID)
+	if err != nil {
+		t.Fatalf("GetByDID(valid) error = %v", err)
+	}
+	if valid.Handle != "valid.example" {
+		t.Fatalf("valid handle = %q, want valid.example", valid.Handle)
 	}
 }
 

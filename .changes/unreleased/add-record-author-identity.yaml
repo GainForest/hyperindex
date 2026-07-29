@@ -1,4 +1,4 @@
 kind: breaking
-body: Add structured `author { did handle }` identity metadata to record queries and subscriptions while keeping the direct `did` output available as deprecated compatibility. `author` is now reserved record metadata, so registered Lexicons with a top-level `author` property must rename it; Tap ingestion also preserves stored handles and reconciles handles that older record events left empty.
+body: Add structured `author { did handle }` identity metadata to record queries and subscriptions while keeping the direct `did` output available as deprecated compatibility. `author` is now reserved record metadata, so registered Lexicons with a top-level `author` property must rename it; Tap ingestion also preserves stored handles and reconciles handles that older ingestion left empty or set to DID placeholders.
 custom:
   Affects: user
