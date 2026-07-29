@@ -66,6 +66,8 @@ CREATE INDEX idx_record_collection_uri
   ON record(collection, uri);
 ```
 
+PostgreSQL builds this index inside the startup migration transaction, which blocks writes to a large `record` table until the build completes. Operators with large datasets can create `idx_record_collection_uri` out of band before rollout; the migration's `IF NOT EXISTS` then skips the blocking build.
+
 ## Validation statuses
 
 | Status | Meaning | Typed visibility |

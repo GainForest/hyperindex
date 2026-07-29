@@ -601,6 +601,12 @@ func TestRecordsRepository_ValidOnlyQueries(t *testing.T) {
 	}
 	assertRecordURIs(t, records, []string{validURI})
 
+	reversed, err := repo.GetValidByCollectionReversedWithKeysetCursorAndExternalLabelFilters(ctx, collection, nil, repositories.DIDFilter{}, repositories.ExternalLabelFilterSet{}, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("GetValidByCollectionReversedWithKeysetCursorAndExternalLabelFilters() error = %v", err)
+	}
+	assertRecordURIs(t, reversed, []string{validURI})
+
 	count, err := repo.GetValidCollectionCountFilteredWithExternalLabelFilters(ctx, collection, nil, repositories.DIDFilter{}, repositories.ExternalLabelFilterSet{})
 	if err != nil {
 		t.Fatalf("GetValidCollectionCountFilteredWithExternalLabelFilters() error = %v", err)

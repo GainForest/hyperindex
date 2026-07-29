@@ -2,6 +2,7 @@ package validationrefresh_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,12 +48,13 @@ func (v *countingValidator) LexiconHash(collection string) (string, bool) {
 }
 
 type blockingValidator struct {
-	started chan struct{}
-	resume  chan struct{}
+	startOnce sync.Once
+	started   chan struct{}
+	resume    chan struct{}
 }
 
 func (v *blockingValidator) ValidateRecord(string, string, []byte) validation.Result {
-	close(v.started)
+	v.startOnce.Do(func() { close(v.started) })
 	<-v.resume
 	return validation.Result{Status: validation.StatusValid, LexiconHash: "hash-current"}
 }

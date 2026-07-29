@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,25 @@ func TestGetRepoClassifiesUnsupportedAndIntegrityFailures(t *testing.T) {
 		kind, ok := carFailureKind(err)
 		if !ok || kind != CARFailureUnsupported {
 			t.Fatalf("GetRepo() error = %v kind=%q, want unsupported CAR failure", err, kind)
+		}
+	})
+
+	t.Run("bounded error response", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(strings.Repeat("x", maxCARErrorBodyBytes+1024)))
+		}))
+		defer server.Close()
+		client := NewClient("", "")
+		_, err := client.GetRepo(t.Context(), server.URL, "did:plc:test", nil)
+		var failure *CARFailure
+		if !errors.As(err, &failure) || failure.Kind != CARFailureAvailability || len(failure.Errors) != 1 {
+			t.Fatalf("GetRepo() error = %v, want one availability CAR failure", err)
+		}
+		const prefix = "unexpected status 500: "
+		detail := failure.Errors[0].Error()
+		if !strings.HasPrefix(detail, prefix) || len(strings.TrimPrefix(detail, prefix)) != maxCARErrorBodyBytes {
+			t.Fatalf("GetRepo() detail length = %d, want prefix plus %d body bytes", len(detail), maxCARErrorBodyBytes)
 		}
 	})
 

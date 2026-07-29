@@ -150,6 +150,8 @@ func TestMigrations_BackfillsRecordCreatedAtSQLite(t *testing.T) {
 			indexed_at TEXT NOT NULL DEFAULT (datetime('now')),
 			rkey TEXT NOT NULL DEFAULT ''
 		);
+		INSERT INTO lexicon (id, json) VALUES
+			('com.example.saved', '{"lexicon": 1, "id": "com.example.saved", "defs": {}}');
 		INSERT INTO record (uri, cid, did, collection, json, rkey) VALUES
 			('at://did:plc:test/com.example.timeline.post/parseable', 'cid1', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T10:00:00.123+02:00"}', 'parseable'),
 			('at://did:plc:test/com.example.timeline.post/nanos', 'cid5', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T10:00:00.123999999Z"}', 'nanos'),
@@ -171,6 +173,14 @@ func TestMigrations_BackfillsRecordCreatedAtSQLite(t *testing.T) {
 
 	if err := migrations.Run(ctx, exec); err != nil {
 		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	var storedLexiconJSON, rawLexiconJSON string
+	if err := exec.DB().QueryRowContext(ctx, "SELECT json, raw_json FROM lexicon WHERE id = ?", "com.example.saved").Scan(&storedLexiconJSON, &rawLexiconJSON); err != nil {
+		t.Fatalf("query migrated Lexicon: %v", err)
+	}
+	if rawLexiconJSON != storedLexiconJSON {
+		t.Fatalf("migrated Lexicon raw_json = %q, want original json %q", rawLexiconJSON, storedLexiconJSON)
 	}
 
 	got := sqliteRecordCreatedAt(t, exec, "at://did:plc:test/com.example.timeline.post/parseable")
@@ -348,6 +358,8 @@ func TestMigrations_BackfillsRecordCreatedAtPostgres(t *testing.T) {
 			indexed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
 			rkey TEXT NOT NULL DEFAULT ''
 		);
+		INSERT INTO lexicon (id, json) VALUES
+			('com.example.saved', '{"lexicon": 1, "id": "com.example.saved", "defs": {}}'::jsonb);
 		INSERT INTO record (uri, cid, did, collection, json, rkey) VALUES
 			('at://did:plc:test/com.example.timeline.post/parseable', 'cid1', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T10:00:00.123+02:00"}'::jsonb, 'parseable'),
 			('at://did:plc:test/com.example.timeline.post/nanos', 'cid5', 'did:plc:test', 'com.example.timeline.post', '{"createdAt":"2026-01-15T10:00:00.123999999Z"}'::jsonb, 'nanos'),
@@ -366,6 +378,14 @@ func TestMigrations_BackfillsRecordCreatedAtPostgres(t *testing.T) {
 
 	if err := migrations.Run(ctx, exec); err != nil {
 		t.Fatalf("Run() returned error: %v", err)
+	}
+
+	var storedLexiconJSON, rawLexiconJSON string
+	if err := exec.DB().QueryRowContext(ctx, "SELECT json::text, raw_json FROM lexicon WHERE id = $1", "com.example.saved").Scan(&storedLexiconJSON, &rawLexiconJSON); err != nil {
+		t.Fatalf("query migrated postgres Lexicon: %v", err)
+	}
+	if rawLexiconJSON != storedLexiconJSON {
+		t.Fatalf("migrated postgres Lexicon raw_json = %q, want normalized json::text %q", rawLexiconJSON, storedLexiconJSON)
 	}
 
 	got := postgresRecordCreatedAt(t, exec, "at://did:plc:test/com.example.timeline.post/parseable")

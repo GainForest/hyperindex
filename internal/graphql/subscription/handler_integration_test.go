@@ -3,6 +3,7 @@ package subscription_test
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -416,7 +417,8 @@ func assertNoWSMessage(t *testing.T, conn *websocket.Conn) {
 	if err == nil {
 		t.Fatalf("unexpected post-terminal WebSocket message: %s", raw)
 	}
-	if netErr, ok := err.(interface{ Timeout() bool }); !ok || !netErr.Timeout() {
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
 		t.Fatalf("post-terminal read error = %v, want timeout with no message", err)
 	}
 }

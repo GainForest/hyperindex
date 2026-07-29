@@ -1047,6 +1047,7 @@ func serve(r *chi.Mux, cfg *config.Config, bg *backgroundServices) error {
 // that are valid JSON but not Lexicon documents are ignored.
 func loadLexiconsFromDir(dir string) (map[string][]byte, error) {
 	saved := make(map[string][]byte)
+	origins := make(map[string]string)
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -1076,7 +1077,11 @@ func loadLexiconsFromDir(dir string) (map[string][]byte, error) {
 		if parseErr != nil {
 			return fmt.Errorf("invalid Lexicon file %s: %w", path, parseErr)
 		}
+		if existingPath, duplicate := origins[lex.ID]; duplicate {
+			return fmt.Errorf("duplicate Lexicon id %s declared by both %s and %s", lex.ID, existingPath, path)
+		}
 
+		origins[lex.ID] = path
 		saved[lex.ID] = data
 		return nil
 	})

@@ -676,15 +676,15 @@ func (r *Resolver) DeleteLexicon(ctx context.Context, nsid string) (bool, error)
 
 func (r *Resolver) lexiconSetWithFilesystem(dbLexicons []*repositories.Lexicon) map[string][]byte {
 	prospective := cloneLexiconBytes(r.filesystemLexicons)
-	for _, lexicon := range dbLexicons {
-		prospective[lexicon.ID] = []byte(lexicon.JSON)
+	for _, saved := range dbLexicons {
+		prospective[saved.ID] = []byte(saved.JSON)
 	}
 	return prospective
 }
 
 func containsLexicon(lexicons []*repositories.Lexicon, id string) bool {
-	for _, lexicon := range lexicons {
-		if lexicon.ID == id {
+	for _, saved := range lexicons {
+		if saved.ID == id {
 			return true
 		}
 	}

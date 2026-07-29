@@ -396,6 +396,8 @@ const (
 	CARFailureIntegrity    CARFailureKind = "integrity"
 )
 
+const maxCARErrorBodyBytes = 4 << 10
+
 // CARFailure is a typed, bounded aggregate from fetching or extracting a CAR.
 type CARFailure struct {
 	Kind   CARFailureKind
@@ -461,14 +463,14 @@ func combineCARIntegrityFailures(errs ...error) error {
 		if errors.As(err, &failure) && failure.Kind == CARFailureIntegrity {
 			combined.Total += failure.Total
 			for _, detail := range failure.Errors {
-				if len(combined.Errors) < 20 {
+				if len(combined.Errors) < maxBackfillErrorDetails {
 					combined.Errors = append(combined.Errors, detail)
 				}
 			}
 			continue
 		}
 		combined.Total++
-		if len(combined.Errors) < 20 {
+		if len(combined.Errors) < maxBackfillErrorDetails {
 			combined.Errors = append(combined.Errors, err)
 		}
 	}
@@ -488,7 +490,7 @@ func (f *boundedCARFailures) add(err error) {
 		return
 	}
 	f.total++
-	if len(f.errs) < 20 {
+	if len(f.errs) < maxBackfillErrorDetails {
 		f.errs = append(f.errs, err)
 	}
 }
@@ -548,7 +550,7 @@ func (c *Client) GetRepo(ctx context.Context, pdsURL, did string, collections []
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxCARErrorBodyBytes))
 		failure := fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(body))
 		switch resp.StatusCode {
 		case http.StatusBadRequest, http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:

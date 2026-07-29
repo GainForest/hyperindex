@@ -149,11 +149,29 @@ func (r *LexiconsRepository) MutateValidated(ctx context.Context, build LexiconM
 	return nil
 }
 
-func (r *LexiconsRepository) getAllTx(ctx context.Context, tx *sql.Tx) ([]*Lexicon, error) {
-	query := "SELECT id, raw_json, created_at FROM lexicon ORDER BY id"
+func (r *LexiconsRepository) lexiconSelectFields() string {
+	createdAt := "created_at"
 	if r.db.Dialect() == database.PostgreSQL {
-		query = "SELECT id, raw_json, created_at::text FROM lexicon ORDER BY id"
+		createdAt = `to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
 	}
+	return "id, raw_json, " + createdAt
+}
+
+func parseLexiconCreatedAt(id, value string) (time.Time, error) {
+	layouts := []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999", "2006-01-02 15:04:05"}
+	var parseErr error
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed, nil
+		}
+		parseErr = err
+	}
+	return time.Time{}, fmt.Errorf("parse Lexicon %s created_at %q: %w", id, value, parseErr)
+}
+
+func (r *LexiconsRepository) getAllTx(ctx context.Context, tx *sql.Tx) ([]*Lexicon, error) {
+	query := fmt.Sprintf("SELECT %s FROM lexicon ORDER BY id", r.lexiconSelectFields())
 	rows, err := tx.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -167,7 +185,10 @@ func (r *LexiconsRepository) getAllTx(ctx context.Context, tx *sql.Tx) ([]*Lexic
 		if err := rows.Scan(&lex.ID, &lex.JSON, &createdAt); err != nil {
 			return nil, err
 		}
-		lex.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		lex.CreatedAt, err = parseLexiconCreatedAt(lex.ID, createdAt)
+		if err != nil {
+			return nil, err
+		}
 		lexicons = append(lexicons, &lex)
 	}
 	return lexicons, rows.Err()
@@ -193,15 +214,7 @@ func (r *LexiconsRepository) upsertSQL() string {
 
 // GetByID retrieves a lexicon by its ID.
 func (r *LexiconsRepository) GetByID(ctx context.Context, id string) (*Lexicon, error) {
-	var sqlStr string
-	switch r.db.Dialect() {
-	case database.PostgreSQL:
-		sqlStr = fmt.Sprintf("SELECT id, raw_json, created_at::text FROM lexicon WHERE id = %s",
-			r.db.Placeholder(1))
-	default:
-		sqlStr = fmt.Sprintf("SELECT id, raw_json, created_at FROM lexicon WHERE id = %s",
-			r.db.Placeholder(1))
-	}
+	sqlStr := fmt.Sprintf("SELECT %s FROM lexicon WHERE id = %s", r.lexiconSelectFields(), r.db.Placeholder(1))
 
 	var lex Lexicon
 	var createdAtStr string
@@ -211,21 +224,17 @@ func (r *LexiconsRepository) GetByID(ctx context.Context, id string) (*Lexicon, 
 		return nil, err
 	}
 
-	lex.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+	lex.CreatedAt, err = parseLexiconCreatedAt(lex.ID, createdAtStr)
+	if err != nil {
+		return nil, err
+	}
 	return &lex, nil
 }
 
 // GetAll retrieves all lexicons.
 func (r *LexiconsRepository) GetAll(ctx context.Context) ([]*Lexicon, error) {
-	var sqlStr string
-	switch r.db.Dialect() {
-	case database.PostgreSQL:
-		sqlStr = "SELECT id, raw_json, created_at::text FROM lexicon ORDER BY id"
-	default:
-		sqlStr = "SELECT id, raw_json, created_at FROM lexicon ORDER BY id"
-	}
-
-	rows, err := r.db.DB().QueryContext(ctx, sqlStr)
+	query := fmt.Sprintf("SELECT %s FROM lexicon ORDER BY id", r.lexiconSelectFields())
+	rows, err := r.db.DB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +247,10 @@ func (r *LexiconsRepository) GetAll(ctx context.Context) ([]*Lexicon, error) {
 		if err := rows.Scan(&lex.ID, &lex.JSON, &createdAtStr); err != nil {
 			return nil, err
 		}
-		lex.CreatedAt, _ = time.Parse(time.RFC3339, createdAtStr)
+		lex.CreatedAt, err = parseLexiconCreatedAt(lex.ID, createdAtStr)
+		if err != nil {
+			return nil, err
+		}
 		lexicons = append(lexicons, &lex)
 	}
 

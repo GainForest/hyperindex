@@ -532,6 +532,21 @@ func TestLoadLexiconsFromDirSkipsNonLexiconJSON(t *testing.T) {
 	}
 }
 
+func TestLoadLexiconsFromDirRejectsDuplicateIDs(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first.json")
+	secondPath := filepath.Join(dir, "second.json")
+	const lexiconJSON = `{"lexicon":1,"id":"app.example.post","defs":{"main":{"type":"record","key":"any","record":{"type":"object","properties":{}}}}}`
+	writeTestLexiconFile(t, dir, "first.json", lexiconJSON)
+	writeTestLexiconFile(t, dir, "second.json", lexiconJSON)
+
+	_, err := loadLexiconsFromDir(dir)
+	if err == nil || !strings.Contains(err.Error(), "duplicate Lexicon id app.example.post") ||
+		!strings.Contains(err.Error(), firstPath) || !strings.Contains(err.Error(), secondPath) {
+		t.Fatalf("loadLexiconsFromDir() error = %v, want duplicate ID and both paths", err)
+	}
+}
+
 func TestBundledLexiconsBuildIndigoValidator(t *testing.T) {
 	saved, err := loadLexiconsFromDir(filepath.Join("..", "..", "testdata", "lexicons"))
 	if err != nil {

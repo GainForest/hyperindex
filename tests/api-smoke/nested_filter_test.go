@@ -667,7 +667,7 @@ func fetchActivityContributorIdentityCandidates(t testing.TB, config smokeConfig
 
 	var candidates activityNestedCandidateResponse
 	if err := json.Unmarshal(response.Data, &candidates); err != nil {
-		t.Fatalf("decode SmokeActivityContributorIdentityCandidates data: %v", err)
+		t.Fatalf("decode SmokeActivityNestedFilterCandidates data: %v", err)
 	}
 	return candidates
 }

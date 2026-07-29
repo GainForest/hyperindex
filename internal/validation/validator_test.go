@@ -3,6 +3,8 @@ package validation
 import (
 	"strings"
 	"testing"
+
+	indigolexicon "github.com/bluesky-social/indigo/atproto/lexicon"
 )
 
 func TestValidatorValidateRecordWithIndigo(t *testing.T) {
@@ -207,6 +209,21 @@ func TestValidatorUnknownSchema(t *testing.T) {
 	}
 	if got.LexiconHash != "" {
 		t.Fatalf("LexiconHash = %q, want empty", got.LexiconHash)
+	}
+}
+
+func TestValidatorCatalogResolutionFailureIsValidationError(t *testing.T) {
+	const schema = `{"lexicon":1,"id":"com.example.record","defs":{"main":{"type":"record","key":"any","record":{"type":"object","required":["name"],"properties":{"name":{"type":"string"}}}}}}`
+	validator, err := NewValidatorFromLexiconBytes(map[string][]byte{"com.example.record": []byte(schema)})
+	if err != nil {
+		t.Fatalf("NewValidatorFromLexiconBytes() error = %v", err)
+	}
+	emptyCatalog := indigolexicon.NewBaseCatalog()
+	validator.catalog = &emptyCatalog
+
+	got := validator.ValidateRecord("com.example.record", "any-key", []byte(`{"$type":"com.example.record","name":"test"}`))
+	if got.Status != StatusValidationError || !strings.Contains(got.Error, "startup Lexicon set is incomplete") {
+		t.Fatalf("ValidateRecord() = status:%q error:%q, want catalog resolution validation_error", got.Status, got.Error)
 	}
 }
 

@@ -551,6 +551,9 @@ func (r *RecordsRepository) BatchUpsertWithValidationForBackfill(ctx context.Con
 			return result, fmt.Errorf("acquire PostgreSQL backfill advisory transaction lock for %s: %w", did, err)
 		}
 	case database.SQLite:
+		// Keep this as the transaction's first database statement. SQLite treats
+		// UPDATE as a write even when no rows match, acquiring the database writer
+		// lock before the classification read below.
 		if _, err := tx.ExecContext(ctx, "UPDATE record SET uri = uri WHERE 0"); err != nil {
 			return result, fmt.Errorf("acquire SQLite backfill writer lock for %s: %w", did, err)
 		}

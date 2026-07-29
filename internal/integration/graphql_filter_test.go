@@ -334,7 +334,6 @@ func TestTypedGraphQLUsesValidationRefreshForCertifiedProfile(t *testing.T) {
 	if got := getNodeField(t, edges[0], "displayName"); got != "Valid Profile" {
 		t.Fatalf("displayName = %v, want Valid Profile", got)
 	}
-
 }
 
 func TestFilterSort_FilterByStringEq(t *testing.T) {

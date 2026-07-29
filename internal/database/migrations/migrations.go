@@ -155,6 +155,8 @@ func getAppliedMigrations(ctx context.Context, exec database.Executor) (map[stri
 	return applied, rows.Err()
 }
 
+// Migration SQL and version bookkeeping are atomic. PostgreSQL migrations
+// therefore cannot use CREATE/DROP INDEX CONCURRENTLY, including on rollback.
 func applyMigration(ctx context.Context, exec database.Executor, migration Migration) error {
 	tx, err := exec.BeginTx(ctx, nil)
 	if err != nil {
