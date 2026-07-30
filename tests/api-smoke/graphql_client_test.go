@@ -31,12 +31,16 @@ type GraphQLError struct {
 
 // Record is the generic shape shared by record-returning smoke test responses.
 type Record struct {
-	URI        string         `json:"uri"`
-	CID        string         `json:"cid"`
-	DID        string         `json:"did"`
-	Collection string         `json:"collection"`
-	RKey       string         `json:"rkey"`
-	Value      map[string]any `json:"value"`
+	URI              string  `json:"uri"`
+	CID              string  `json:"cid"`
+	DID              string  `json:"did"`
+	Collection       string  `json:"collection"`
+	RKey             string  `json:"rkey"`
+	Value            any     `json:"value"`
+	ValidationStatus string  `json:"validationStatus"`
+	ValidationError  *string `json:"validationError"`
+	ValidatedAt      *string `json:"validatedAt"`
+	LexiconHash      *string `json:"lexiconHash"`
 }
 
 // PageInfo is the cursor pagination metadata shared by connection responses.

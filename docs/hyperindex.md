@@ -79,7 +79,22 @@ Hyperindex dynamically builds its public GraphQL schema from AT Protocol Lexicon
 | `app.certified.actor.profile` | `appCertifiedActorProfile` | `appCertifiedActorProfileByUri` |
 | `app.certified.link.evm` | `appCertifiedLinkEvm` | `appCertifiedLinkEvmByUri` |
 
-Use typed queries first. They provide typed fields, filters, sorting, and pagination. Use the generic `records(collection: ...)` query when you need raw JSON or when a typed query is not available.
+Use typed queries first. They provide typed fields, filters, sorting, and pagination. Typed collection queries only expose records that Indigo has validated against the startup Lexicon set used to generate the running schema. If an observed record is malformed for that saved schema, or if Hyperindex has no saved Lexicon for its collection, it is hidden from typed collection list queries, typed `ByUri` queries, typed counts, relationship hydration, and typed create/update subscriptions. Typed delete subscriptions emit only when the deleted row was valid before deletion.
+
+Use the generic `records(collection: ...)` query or `search(...)` when you need raw JSON, debugging visibility, or access to records hidden from typed GraphQL. Hyperindex stores every observed record in the raw record table even when validation fails or no saved Lexicon is available. Generic record and search results include validation metadata:
+
+| Field | Meaning |
+| --- | --- |
+| `validationStatus` | `valid`, `invalid`, `unknown_schema`, or `validation_error` |
+| `validationError` | Explanation of why the record is hidden from typed GraphQL, when available |
+| `validatedAt` | Timestamp of the most recent local validation classification |
+| `lexiconHash` | SHA-256 validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used for classification |
+
+Validation is local-only. During normal ingestion Hyperindex uses Indigo to validate against the Lexicons loaded at startup and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources.
+
+Public typed GraphQL, record validation, startup record refresh, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Uploading, registering, or deleting a Lexicon changes only the saved configuration; restart or redeploy Hyperindex to apply the change to all of those runtime surfaces together. In a multi-replica deployment, coordinate a Lexicon-changing rollout so old-snapshot and new-snapshot backend replicas never serve concurrently against the shared validation metadata.
+
+The generic `recordEvents` subscription receives all observed raw create/update/delete events, including events for invalid or unknown-schema records. Typed collection subscriptions filter that stream to valid create/update rows and deletes that were valid before removal.
 
 All generated record types, generic record results, timeline nodes, and record subscription payloads expose:
 
@@ -236,7 +251,7 @@ Variables:
 
 `where.did.eq` is required and selects the root DID. The endorsement closure DID filter exposes only `eq`, not `in`, because each request is rooted at one DID. Optional `where.degree.eq` returns only one hop distance; the value must be `1`, `2`, or `3`. Omit `where.degree` to return all supported degrees. Results are sorted by degree then DID. `certifiedProfileData` resolves the reached account's Certified profile when one exists. `viaAccounts` lists up to 64 previous-ring accounts that led to an account, including each predecessor DID and optional Certified profile data; it is empty for degree-1 accounts. `truncated` is `true` when the server-side account cap is reached; clients should treat the response as a useful subset, not a complete network.
 
-The resolver computes edges from current `app.certified.badge.award`, `app.certified.badge.definition`, and `app.certified.badge.response` records at request time. An active edge requires an endorsement-typed badge definition, an `app.certified.defs#did` account subject with a valid DID, an issuer allowed by `allowedIssuers` when that badge definition has an allowlist, no self-loop, and no rejection response authored by the subject for that award. Badge awards to record strongRefs do not create account endorsement edges.
+The resolver computes edges from current `app.certified.badge.award`, `app.certified.badge.definition`, and `app.certified.badge.response` records at request time. Only records whose `validationStatus` is `valid` participate, so invalid awards or definitions cannot create edges and invalid responses cannot suppress them. An active edge requires an endorsement-typed badge definition, an `app.certified.defs#did` account subject with a valid DID, an issuer allowed by `allowedIssuers` when that badge definition has an allowlist, no self-loop, and no rejection response authored by the subject for that award. Badge awards to record strongRefs do not create account endorsement edges.
 
 ## External and author label filters
 

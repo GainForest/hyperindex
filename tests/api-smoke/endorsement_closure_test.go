@@ -96,17 +96,22 @@ func fetchActiveEndorsementSmokeEdges(t testing.TB, config smokeConfig) []endors
 
 	endorsementDefinitions := make(map[string]Record, len(definitionRecords))
 	for _, edge := range definitionRecords {
-		if endorsementSmokeStringValue(edge.Node.Value, "badgeType") == "endorsement" {
+		value, ok := validGenericRecordObject(edge.Node)
+		if !ok {
+			continue
+		}
+		if endorsementSmokeStringValue(value, "badgeType") == "endorsement" {
 			endorsementDefinitions[edge.Node.URI] = edge.Node
 		}
 	}
 
 	rejectedAwards := make(map[string]bool, len(responseRecords))
 	for _, edge := range responseRecords {
-		if endorsementSmokeStringValue(edge.Node.Value, "response") != "rejected" {
+		value, ok := validGenericRecordObject(edge.Node)
+		if !ok || endorsementSmokeStringValue(value, "response") != "rejected" {
 			continue
 		}
-		awardURI := nestedStringValue(edge.Node.Value, "badgeAward", "uri")
+		awardURI := nestedStringValue(value, "badgeAward", "uri")
 		if awardURI == "" {
 			continue
 		}
@@ -116,13 +121,17 @@ func fetchActiveEndorsementSmokeEdges(t testing.TB, config smokeConfig) []endors
 	edgeSet := make(map[endorsementSmokeEdge]bool)
 	for _, edge := range awardRecords {
 		award := edge.Node
-		badgeURI := nestedStringValue(award.Value, "badge", "uri")
+		value, ok := validGenericRecordObject(award)
+		if !ok {
+			continue
+		}
+		badgeURI := nestedStringValue(value, "badge", "uri")
 		definition, ok := endorsementDefinitions[badgeURI]
 		if !ok || !endorsementDefinitionAllowsIssuer(definition, award.DID) {
 			continue
 		}
 
-		subjectDID, ok := endorsementAwardAccountSubjectDID(award.Value)
+		subjectDID, ok := endorsementAwardAccountSubjectDID(value)
 		if !ok || subjectDID == award.DID {
 			continue
 		}
@@ -304,8 +313,20 @@ func queryEndorsementClosurePage(t testing.TB, config smokeConfig, rootDID strin
 	return decoded
 }
 
+func validGenericRecordObject(record Record) (map[string]any, bool) {
+	if record.ValidationStatus != "valid" {
+		return nil, false
+	}
+	value, ok := record.Value.(map[string]any)
+	return value, ok
+}
+
 func endorsementDefinitionAllowsIssuer(definition Record, issuer string) bool {
-	rawAllowed, exists := definition.Value["allowedIssuers"]
+	value, ok := validGenericRecordObject(definition)
+	if !ok {
+		return false
+	}
+	rawAllowed, exists := value["allowedIssuers"]
 	if !exists {
 		return true
 	}

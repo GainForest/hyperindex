@@ -1,6 +1,6 @@
 # Hyperindex GraphQL Schema Reference
 
-Last updated on 2026-07-28 for pending record author identity changes. Baseline generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10; `author` metadata described below reflects the current branch and may not yet be deployed.
+Last updated on 2026-07-30 for pending record validation gate and record author identity changes. Baseline generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10; validation and `author` metadata described below reflect the current branch and may not yet be deployed.
 
 ## Endpoints
 
@@ -49,7 +49,7 @@ Last updated on 2026-07-28 for pending record author identity changes. Baseline 
 | `orgHypercertsFundingReceiptByUri` | uri: `String!` | Get a single org.hypercerts.funding.receipt by AT-URI |
 | `orgHypercertsWorkscopeTag` | after: `String`, before: `String`, first: `Int`, last: `Int`, sortBy: `OrgHypercertsWorkscopeTagSortField`, sortDirection: `SortDirection`, where: `OrgHypercertsWorkscopeTagWhereInput` | Query org.hypercerts.workscope.tag records |
 | `orgHypercertsWorkscopeTagByUri` | uri: `String!` | Get a single org.hypercerts.workscope.tag by AT-URI |
-| `records` | after: `String`, before: `String`, collection: `String!`, first: `Int`, last: `Int` | Query records from any collection (useful for collections without lexicon schemas) |
+| `records` | after: `String`, before: `String`, collection: `String!`, first: `Int`, last: `Int` | Query raw records from any collection, including records hidden from typed GraphQL by validation metadata. |
 | `recordTimeline` | after: `String`, first: `Int`, where: `RecordTimelineWhereInput!` | Query a newest-first page of current records across selected collections, optionally filtered by author DIDs. |
 | `externalLabels` | activeOnly: `Boolean`, sources: `[String!]`, subjects: `[String!]!`, values: `[String!]` | Query locally ingested external ATProto labels by DID or AT-URI subject. |
 | `search` | after: `String`, collection: `String`, first: `Int`, query: `String!` | Search records by text content |
@@ -81,7 +81,33 @@ Last updated on 2026-07-28 for pending record author identity changes. Baseline 
 | `org.hypercerts.funding.receipt` | `orgHypercertsFundingReceipt` | `orgHypercertsFundingReceiptByUri` | `OrgHypercertsFundingReceipt` |
 | `org.hypercerts.workscope.tag` | `orgHypercertsWorkscopeTag` | `orgHypercertsWorkscopeTagByUri` | `OrgHypercertsWorkscopeTag` |
 
-Typed list queries accept Relay-style pagination arguments (`first`, `after`, `last`, `before`), plus `where`, `sortBy`, and `sortDirection` when the collection exposes those inputs.
+Typed list queries accept Relay-style pagination arguments (`first`, `after`, `last`, `before`), plus `where`, `sortBy`, and `sortDirection` when the collection exposes those inputs. Typed list queries, typed single-record queries, typed collection counts, relationship hydration, and typed create/update subscriptions only expose rows whose saved validation status is `valid`. Typed delete subscriptions emit only for rows that were valid before deletion. Typed single-record queries return `null` when a raw row exists but is `invalid`, `unknown_schema`, or `validation_error`.
+
+## Record validation gate
+
+Hyperindex stores every observed AT Protocol record in the raw `record` table. Validation metadata controls whether the row is safe to serve through generated, typed GraphQL fields:
+
+| Status | Typed GraphQL visibility | Meaning |
+| --- | --- | --- |
+| `valid` | Visible | Indigo confirmed that the record conforms to Hyperindex's saved startup Lexicon snapshot, with the record key validated locally against that same snapshot. |
+| `invalid` | Hidden | The startup snapshot contains the collection Lexicon, but the record does not conform to it. |
+| `unknown_schema` | Hidden | The startup snapshot contains no saved Lexicon for the collection. |
+| `validation_error` | Hidden | Hyperindex could not complete validation against the startup snapshot because of malformed data, an incomplete local Lexicon set, or an internal validation error. |
+
+Validation uses saved Lexicons only. Normal ingestion does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or any other remote schema source while classifying records.
+
+The generic `records(collection: ...)` query returns all raw records for the collection, including rows hidden from typed GraphQL. `search(...)` uses the same raw visibility and metadata contract. Generic record nodes expose these validation metadata fields:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `validationStatus` | `String!` | One of `valid`, `invalid`, `unknown_schema`, or `validation_error`. |
+| `validationError` | `String` | Explanation of the failed or hidden validation state, when available. |
+| `validatedAt` | `String` | Timestamp when Hyperindex last classified the record against its saved startup Lexicon snapshot. |
+| `lexiconHash` | `String` | SHA-256 validation fingerprint for the exact saved collection Lexicon bytes and transitive referenced Lexicons in that startup snapshot. |
+
+Public typed GraphQL, Indigo record validation, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Lexicon upload/register/delete changes only saved configuration; restart or redeploy Hyperindex to apply the change everywhere together.
+
+Generic `recordEvents` receives all observed raw events. Typed collection subscriptions filter those events to valid create/update records and deletes that were valid before removal.
 
 ## Generic record timeline
 
@@ -172,6 +198,8 @@ Rows are ordered by top-level record JSON `createdAt` descending, then `uri` des
 | --- | --- | --- |
 | `did` | `String!` | DID of the predecessor account. |
 | `certifiedProfileData` | `AppCertifiedActorProfile` | Certified profile for the predecessor account, or null when no profile record exists. |
+
+`endorsementClosure` only uses badge awards, badge definitions, and badge responses whose `validationStatus` is `valid`. Invalid or unclassified awards and definitions cannot create edges, and invalid or unclassified responses cannot suppress them.
 
 Example:
 

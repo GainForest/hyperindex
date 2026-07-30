@@ -5,6 +5,7 @@ package apismoke
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -46,15 +47,42 @@ func TestCollectionStatsSmoke(t *testing.T) {
 	}
 
 	for _, expected := range config.expectations.DataBearingCollections {
-		count, ok := countsByCollection[expected.NSID]
+		rawCount, ok := countsByCollection[expected.NSID]
 		if !ok {
 			t.Fatalf("SmokeCollectionStats: collectionStats is missing data-bearing collection %q; available collections: %s", expected.NSID, formatAvailableCollections(countsByCollection))
 		}
-		if count < expected.MinimumRecords {
-			t.Fatalf("SmokeCollectionStats: data-bearing collection %q has %d records, want at least %d", expected.NSID, count, expected.MinimumRecords)
+
+		typedField := config.expectations.TypedQueryFields[expected.NSID]
+		typedCount := fetchTypedCollectionCount(t, config, typedField)
+		if typedCount < expected.MinimumRecords {
+			t.Fatalf("SmokeCollectionStats: typed collection %q has %d valid records, want at least %d", expected.NSID, typedCount, expected.MinimumRecords)
 		}
-		smokeLog("✓ %s has at least %d records", expected.NSID, expected.MinimumRecords)
+		smokeLog("✓ %s has at least %d valid typed records (%d raw at stats snapshot)", expected.NSID, expected.MinimumRecords, rawCount)
 	}
+}
+
+func fetchTypedCollectionCount(t testing.TB, config smokeConfig, typedField string) int {
+	t.Helper()
+
+	query := fmt.Sprintf(`
+query SmokeTypedCollectionCount {
+  %s(first: 1) {
+    totalCount
+  }
+}`, typedField)
+	response := postGraphQL(t, context.Background(), config, "SmokeTypedCollectionCount", query, nil)
+
+	var payload map[string]struct {
+		TotalCount int `json:"totalCount"`
+	}
+	if err := json.Unmarshal(response.Data, &payload); err != nil {
+		t.Fatalf("SmokeTypedCollectionCount: decode response data for %s: %v", typedField, err)
+	}
+	connection, ok := payload[typedField]
+	if !ok {
+		t.Fatalf("SmokeTypedCollectionCount: response is missing typed field %q", typedField)
+	}
+	return connection.TotalCount
 }
 
 func TestSearchSmoke(t *testing.T) {
@@ -67,6 +95,10 @@ func TestSearchSmoke(t *testing.T) {
 						uri
 						did
 						collection
+						validationStatus
+						validationError
+						validatedAt
+						lexiconHash
 					}
 				}
 			}
@@ -79,11 +111,7 @@ func TestSearchSmoke(t *testing.T) {
 	var payload struct {
 		Search struct {
 			Edges []struct {
-				Node struct {
-					URI        string `json:"uri"`
-					DID        string `json:"did"`
-					Collection string `json:"collection"`
-				} `json:"node"`
+				Node Record `json:"node"`
 			} `json:"edges"`
 		} `json:"search"`
 	}
@@ -104,9 +132,11 @@ func TestSearchSmoke(t *testing.T) {
 		if edge.Node.Collection == "" {
 			t.Fatalf("SmokeSearch: query %q search.edges[%d].node.collection is empty", config.expectations.Search.Query, index)
 		}
+		location := fmt.Sprintf("search query %q edge %d uri=%q", config.expectations.Search.Query, index, edge.Node.URI)
+		assertGenericRecordValidationMetadata(t, location, edge.Node)
 	}
 
-	smokeLog("✓ Search responds")
+	smokeLog("✓ Search responds with validation metadata")
 }
 
 func formatAvailableCollections(countsByCollection map[string]int) string {

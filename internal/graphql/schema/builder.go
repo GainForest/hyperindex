@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,6 +22,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/graphql/externallabels"
 	"github.com/GainForest/hyperindex/internal/graphql/query"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/graphql/types"
 	"github.com/GainForest/hyperindex/internal/lexicon"
 )
@@ -434,9 +434,14 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 				},
 			},
 			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-				// Extract recordEvents from the root object passed by subscription handler
-				if m, ok := p.Source.(map[string]interface{}); ok {
-					return m["recordEvents"], nil
+				if event := subscriptionRecordEvent(p.Source); event != nil {
+					if collection, _ := p.Args["collection"].(string); collection != "" && event.Collection != collection {
+						return nil, nil
+					}
+					return event.RawGraphQLValue(), nil
+				}
+				if source, ok := p.Source.(map[string]interface{}); ok {
+					return source["recordEvents"], nil
 				}
 				return p.Source, nil
 			},
@@ -452,22 +457,39 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 			Type:        recordType,
 			Description: fmt.Sprintf("Subscribe to %s record changes", lexiconID),
 			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-				source, ok := p.Source.(map[string]interface{})
-				if !ok {
-					return nil, nil
-				}
-				payload, _ := source["recordEvents"].(map[string]interface{})
-				eventCollection, _ := payload["collection"].(string)
-				if eventCollection != collection {
+				event := subscriptionRecordEvent(p.Source)
+				if event == nil || event.Collection != collection || event.URI == "" {
 					return nil, nil
 				}
 
-				record, _ := payload["record"].(map[string]interface{})
-				if record != nil {
-					record = maps.Clone(record)
-					b.coerceRequiredFields(record, collection)
+				if event.Type == subscription.EventDelete {
+					if !event.WasValid || event.TypedRecord == nil {
+						return nil, nil
+					}
+				} else {
+					if !event.TypedVisible {
+						return nil, nil
+					}
+					repos := resolver.GetRepositories(p.Context)
+					if repos == nil || repos.Records == nil {
+						return nil, nil
+					}
+					if _, err := repos.Records.GetValidByURI(p.Context, event.URI, collection); err != nil {
+						if errors.Is(err, sql.ErrNoRows) {
+							return nil, nil
+						}
+						return nil, fmt.Errorf("failed to validate subscription record visibility: %w", err)
+					}
 				}
-				return record, nil
+				typedRecord := cloneSubscriptionRecord(event.TypedRecord)
+				if typedRecord != nil {
+					typedRecord["uri"] = event.URI
+					typedRecord["cid"] = event.CID
+					typedRecord["did"] = event.DID
+					typedRecord["rkey"] = subscriptionRecordKey(event.URI)
+					b.coerceRequiredFields(typedRecord, collection)
+				}
+				return typedRecord, nil
 			},
 		}
 	}
@@ -476,6 +498,40 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 		Name:   "Subscription",
 		Fields: fields,
 	})
+}
+
+func subscriptionRecordEvent(source interface{}) *subscription.RecordEvent {
+	switch source := source.(type) {
+	case *subscription.RecordEvent:
+		return source
+	case map[string]interface{}:
+		event, _ := source["__recordEvent"].(*subscription.RecordEvent)
+		return event
+	default:
+		return nil
+	}
+}
+
+func cloneSubscriptionRecord(record map[string]interface{}) map[string]interface{} {
+	if record == nil {
+		return nil
+	}
+	cloned := make(map[string]interface{}, len(record))
+	for key, value := range record {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func subscriptionRecordKey(uri string) string {
+	if !strings.HasPrefix(uri, "at://") {
+		return ""
+	}
+	separator := strings.LastIndex(uri, "/")
+	if separator < len("at://") || separator == len(uri)-1 {
+		return ""
+	}
+	return uri[separator+1:]
 }
 
 // buildGenericRecordTypes builds the GenericRecord connection types. This runs
@@ -508,6 +564,22 @@ func (b *Builder) buildGenericRecordTypes() {
 		"value": &graphql.Field{
 			Type:        types.JSONScalar,
 			Description: "The record data as JSON",
+		},
+		"validationStatus": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "Record validation status used to decide typed GraphQL visibility.",
+		},
+		"validationError": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Validation failure or operational reason when the record is hidden from typed GraphQL.",
+		},
+		"validatedAt": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Timestamp when Hyperindex last classified this record against a saved lexicon.",
+		},
+		"lexiconHash": &graphql.Field{
+			Type:        graphql.String,
+			Description: "SHA-256 hash of the exact saved lexicon JSON bytes used for validation.",
 		},
 		"externalLabels": externallabels.Field(),
 	}
@@ -792,7 +864,7 @@ func (b *Builder) buildQueryType() *graphql.Object {
 }
 
 // nodeBuilder transforms a Record and its parsed JSON into a GraphQL node.
-type nodeBuilder func(rec *repositories.Record, value map[string]interface{}) (interface{}, bool)
+type nodeBuilder func(rec *repositories.Record, value interface{}) (interface{}, bool)
 
 // extractFilters extracts FieldFilter conditions and an optional DIDFilter from
 // the GraphQL `where` argument. The whereArg is expected to be a
@@ -1326,7 +1398,7 @@ func (b *Builder) hydrateCertifiedProfilesForRecords(p graphql.ResolveParams, re
 		return &certifiedProfileHydration{byDID: map[string]map[string]interface{}{}}, nil
 	}
 
-	profileRecords, err := repos.Records.GetByURIs(p.Context, uris)
+	profileRecords, err := repos.Records.GetValidByURIs(p.Context, uris)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch certified profiles: %w", err)
 	}
@@ -1341,6 +1413,9 @@ func (b *Builder) hydrateCertifiedProfilesForRecords(p graphql.ResolveParams, re
 
 	profilesByDID := make(map[string]map[string]interface{}, len(profileRecords))
 	for _, profileRecord := range profileRecords {
+		if profileRecord.Collection != certifiedprofiles.CollectionID {
+			continue
+		}
 		var data map[string]interface{}
 		if err := json.Unmarshal([]byte(profileRecord.JSON), &data); err != nil {
 			slog.Warn("Skipping certified profile with invalid JSON", "uri", profileRecord.URI, "error", err)
@@ -1390,7 +1465,7 @@ var directSortCols = map[string]bool{
 }
 
 // sortFieldValueForRecord extracts the sort field value from a record for cursor building.
-func sortFieldValueForRecord(rec *repositories.Record, value map[string]interface{}, sortOpt *repositories.SortOption) string {
+func sortFieldValueForRecord(rec *repositories.Record, value interface{}, sortOpt *repositories.SortOption) string {
 	if sortOpt == nil {
 		return rec.IndexedAt.UTC().Format(time.RFC3339Nano)
 	}
@@ -1412,9 +1487,12 @@ func sortFieldValueForRecord(rec *repositories.Record, value map[string]interfac
 			return rec.IndexedAt.Format("2006-01-02T15:04:05Z")
 		}
 	}
-	// JSON field
-	if v, exists := value[sortOpt.Field]; exists && v != nil {
-		return fmt.Sprintf("%v", v)
+	// JSON field. Typed collection records are objects; generic raw records may
+	// also be arrays or scalars and fall back to an empty JSON sort value.
+	if object, ok := value.(map[string]interface{}); ok {
+		if v, exists := object[sortOpt.Field]; exists && v != nil {
+			return fmt.Sprintf("%v", v)
+		}
 	}
 	return ""
 }
@@ -1425,6 +1503,7 @@ func sortFieldValueForRecord(rec *repositories.Record, value map[string]interfac
 func (b *Builder) resolveRecordConnection(
 	p graphql.ResolveParams,
 	collection string,
+	validOnly bool,
 	buildNode nodeBuilder,
 ) (interface{}, error) {
 	repos := resolver.GetRepositories(p.Context)
@@ -1483,7 +1562,13 @@ func (b *Builder) resolveRecordConnection(
 		}
 
 		// Fetch last+1 to detect hasPreviousPage
-		records, err := repos.Records.GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, last+1, beforeCursorValues)
+		var records []*repositories.Record
+		var err error
+		if validOnly {
+			records, err = repos.Records.GetValidByCollectionReversedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, last+1, beforeCursorValues)
+		} else {
+			records, err = repos.Records.GetByCollectionReversedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, last+1, beforeCursorValues)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to query records: %w", err)
 		}
@@ -1513,8 +1598,8 @@ func (b *Builder) resolveRecordConnection(
 		var startCursor, endCursor string
 
 		for _, rec := range records {
-			var value map[string]interface{}
-			if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
+			value, err := decodeConnectionRecordValue(rec, validOnly)
+			if err != nil {
 				slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
 				continue
 			}
@@ -1550,7 +1635,13 @@ func (b *Builder) resolveRecordConnection(
 		}
 
 		if isTotalCountRequested(p) {
-			count, err := repos.Records.GetCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+			var count int64
+			var err error
+			if validOnly {
+				count, err = repos.Records.GetValidCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+			} else {
+				count, err = repos.Records.GetCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+			}
 			if err == nil {
 				result["totalCount"] = int(count)
 			}
@@ -1577,7 +1668,13 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	// Fetch first+1 to determine hasNextPage using the sorted method
-	records, err := repos.Records.GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, first+1, afterCursorValues)
+	var records []*repositories.Record
+	var err error
+	if validOnly {
+		records, err = repos.Records.GetValidByCollectionSortedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, first+1, afterCursorValues)
+	} else {
+		records, err = repos.Records.GetByCollectionSortedWithKeysetCursorAndExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters, sortOpt, first+1, afterCursorValues)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to query records: %w", err)
 	}
@@ -1606,8 +1703,8 @@ func (b *Builder) resolveRecordConnection(
 	var startCursor, endCursor string
 
 	for _, rec := range records {
-		var value map[string]interface{}
-		if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
+		value, err := decodeConnectionRecordValue(rec, validOnly)
+		if err != nil {
 			slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
 			continue
 		}
@@ -1643,7 +1740,13 @@ func (b *Builder) resolveRecordConnection(
 	}
 
 	if isTotalCountRequested(p) {
-		count, err := repos.Records.GetCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+		var count int64
+		var err error
+		if validOnly {
+			count, err = repos.Records.GetValidCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+		} else {
+			count, err = repos.Records.GetCollectionCountFilteredWithExternalLabelFilters(p.Context, collection, filters, didFilter, externalLabelFilters)
+		}
 		if err == nil {
 			result["totalCount"] = int(count)
 		}
@@ -1996,6 +2099,24 @@ func emptyRecordTimelineConnection() map[string]interface{} {
 	}
 }
 
+func decodeConnectionRecordValue(rec *repositories.Record, objectOnly bool) (interface{}, error) {
+	if objectOnly {
+		var object map[string]interface{}
+		if err := json.Unmarshal([]byte(rec.JSON), &object); err != nil {
+			return nil, err
+		}
+		if object == nil {
+			return nil, fmt.Errorf("typed record JSON must be an object")
+		}
+		return object, nil
+	}
+	var raw interface{}
+	if err := json.Unmarshal([]byte(rec.JSON), &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
 // createSearchResolver creates a resolver for the search query.
 // It validates the query string (minimum 3 runes) and calls the Search repository method.
 func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
@@ -2053,26 +2174,19 @@ func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 		var startCursor, endCursor string
 
 		for _, rec := range records {
-			var value map[string]interface{}
+			var value interface{}
 			if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
 				slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
 				continue
 			}
 
-			cursor := encodeCursor(rec.IndexedAt.Format("2006-01-02T15:04:05Z"), rec.URI)
+			cursor := encodeCursor(rec.IndexedAt.UTC().Format(time.RFC3339Nano), rec.URI)
 			if startCursor == "" {
 				startCursor = cursor
 			}
 			endCursor = cursor
 
-			node := map[string]interface{}{
-				"uri":        rec.URI,
-				"cid":        rec.CID,
-				"did":        rec.DID,
-				"collection": rec.Collection,
-				"rkey":       rec.RKey,
-				"value":      value,
-			}
+			node := genericRecordNode(rec, value)
 			attachExternalLabels(node, rec, labelsBySubject)
 			attachAuthorIdentity(node, rec, authors)
 			attachCertifiedProfileData(node, rec, certifiedProfiles)
@@ -2103,18 +2217,29 @@ func (b *Builder) createGenericRecordsResolver() graphql.FieldResolveFn {
 			return nil, fmt.Errorf("collection is required")
 		}
 
-		return b.resolveRecordConnection(p, collection,
-			func(rec *repositories.Record, value map[string]interface{}) (interface{}, bool) {
-				return map[string]interface{}{
-					"uri":        rec.URI,
-					"cid":        rec.CID,
-					"did":        rec.DID,
-					"collection": rec.Collection,
-					"rkey":       rec.RKey,
-					"value":      value,
-				}, true
+		return b.resolveRecordConnection(p, collection, false,
+			func(rec *repositories.Record, value interface{}) (interface{}, bool) {
+				return genericRecordNode(rec, value), true
 			})
 	}
+}
+
+func genericRecordNode(rec *repositories.Record, value interface{}) map[string]interface{} {
+	node := map[string]interface{}{
+		"uri":              rec.URI,
+		"cid":              rec.CID,
+		"did":              rec.DID,
+		"collection":       rec.Collection,
+		"rkey":             rec.RKey,
+		"value":            value,
+		"validationStatus": string(rec.ValidationStatus),
+		"validationError":  rec.ValidationError,
+		"lexiconHash":      rec.LexiconHash,
+	}
+	if rec.ValidatedAt != nil {
+		node["validatedAt"] = rec.ValidatedAt.Format(time.RFC3339)
+	}
+	return node
 }
 
 // coerceRequiredFields fills in zero values for required fields that are missing or null.
@@ -2146,8 +2271,12 @@ func (b *Builder) coerceRequiredFields(data map[string]interface{}, collection s
 // createCollectionResolver creates a resolver for querying a typed collection.
 func (b *Builder) createCollectionResolver(lexiconID string) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
-		return b.resolveRecordConnection(p, lexiconID,
-			func(rec *repositories.Record, data map[string]interface{}) (interface{}, bool) {
+		return b.resolveRecordConnection(p, lexiconID, true,
+			func(rec *repositories.Record, value interface{}) (interface{}, bool) {
+				data, ok := value.(map[string]interface{})
+				if !ok {
+					return nil, false
+				}
 				// Inject standard record fields into the flat data
 				data["uri"] = rec.URI
 				data["cid"] = rec.CID
@@ -2173,8 +2302,9 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 			return nil, nil
 		}
 
-		// Query database
-		rec, err := repos.Records.GetByURI(p.Context, uri)
+		// Query database. Typed single-record fields only expose records that
+		// conform to the saved lexicon for this generated collection.
+		rec, err := repos.Records.GetValidByURI(p.Context, uri, lexiconID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, nil // Not found

@@ -6,6 +6,7 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 func TestGetByCollectionSortedWithKeysetCursor_BadgeAwardBadgeTypeFilter(t *testing.T) {
@@ -100,8 +101,11 @@ func TestGetByCollectionSortedWithKeysetCursor_BadgeAwardBadgeTypeFilter(t *test
 
 func insertRecord(t *testing.T, repo *repositories.RecordsRepository, uri, cid, did, collection, jsonData string) {
 	t.Helper()
-	_, err := repo.Insert(context.Background(), uri, cid, did, collection, jsonData)
-	if err != nil {
+	ctx := context.Background()
+	if _, err := repo.Insert(ctx, uri, cid, did, collection, jsonData); err != nil {
 		t.Fatalf("failed to insert record %s: %v", uri, err)
+	}
+	if err := repo.UpdateValidationStatus(ctx, uri, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+		t.Fatalf("failed to mark record %s valid: %v", uri, err)
 	}
 }

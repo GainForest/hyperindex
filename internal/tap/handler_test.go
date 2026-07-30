@@ -10,7 +10,20 @@ import (
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/tap"
 	"github.com/GainForest/hyperindex/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
+
+func assertRawPubSubEvent(t *testing.T, sub *subscription.Subscriber, wantType subscription.EventType, reason string) {
+	t.Helper()
+	select {
+	case event := <-sub.Events:
+		if event.Type != wantType {
+			t.Fatalf("pubsub event type for %s = %q, want %q", reason, event.Type, wantType)
+		}
+	default:
+		t.Fatalf("missing raw pubsub event for %s", reason)
+	}
+}
 
 // setupHandler creates an IndexHandler backed by a real in-memory SQLite database.
 func setupHandler(t *testing.T) (*tap.IndexHandler, *testutil.TestDB, *subscription.PubSub) {
@@ -19,6 +32,21 @@ func setupHandler(t *testing.T) (*tap.IndexHandler, *testutil.TestDB, *subscript
 	pubsub := subscription.NewPubSub()
 	handler := tap.NewIndexHandler(db.Records, db.Actors, db.Activity, pubsub)
 	return handler, db, pubsub
+}
+
+type fakeRecordValidator struct {
+	result validation.Result
+}
+
+func (v fakeRecordValidator) ValidateRecord(collection string, rkey string, rawJSON []byte) validation.Result {
+	return v.result
+}
+
+func (v fakeRecordValidator) LexiconHash(collection string) (string, bool) {
+	if v.result.LexiconHash == "" {
+		return "", false
+	}
+	return v.result.LexiconHash, true
 }
 
 func TestIndexHandler_HandleRecord_Create(t *testing.T) {
@@ -53,6 +81,9 @@ func TestIndexHandler_HandleRecord_Create(t *testing.T) {
 	if rec.CID != "bafyrei123" {
 		t.Errorf("expected CID %q, got %q", "bafyrei123", rec.CID)
 	}
+	if rec.ValidationStatus != validation.StatusValidationError || rec.ValidationError == "" || rec.ValidatedAt == nil {
+		t.Fatalf("nil-validator record did not fail closed: status=%q error=%q validatedAt=%v", rec.ValidationStatus, rec.ValidationError, rec.ValidatedAt)
+	}
 
 	// Verify actor was upserted
 	actor, err := db.Actors.GetByDID(ctx, "did:plc:alice")
@@ -78,6 +109,125 @@ func TestIndexHandler_HandleRecord_Create(t *testing.T) {
 	default:
 		t.Error("expected pubsub event to be published for create")
 	}
+}
+
+func TestIndexHandler_HandleRecord_InvalidRecordStoresMetadataAndPublishesRawEvent(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	pubsub := subscription.NewPubSub()
+	handler := tap.NewIndexHandler(db.Records, db.Actors, db.Activity, pubsub, fakeRecordValidator{result: validation.Result{
+		Status:      validation.StatusInvalid,
+		Error:       "missing required field: name",
+		LexiconHash: "hash-1",
+	}})
+	ctx := context.Background()
+	sub := pubsub.Subscribe("app.bsky.feed.post")
+	defer pubsub.Unsubscribe(sub)
+
+	event := &tap.RecordEvent{
+		DID:        "did:plc:alice",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post-invalid",
+		Action:     tap.ActionCreate,
+		CID:        "bafyinvalid",
+		Record:     json.RawMessage(`{"unexpected":"value"}`),
+	}
+
+	if err := handler.HandleRecord(ctx, event); err != nil {
+		t.Fatalf("HandleRecord returned error: %v", err)
+	}
+
+	uri := "at://did:plc:alice/app.bsky.feed.post/post-invalid"
+	rec, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("record not found after invalid create: %v", err)
+	}
+	if rec.ValidationStatus != validation.StatusInvalid {
+		t.Fatalf("ValidationStatus = %q, want %q", rec.ValidationStatus, validation.StatusInvalid)
+	}
+	if rec.ValidationError != "missing required field: name" {
+		t.Fatalf("ValidationError = %q", rec.ValidationError)
+	}
+	if rec.LexiconHash != "hash-1" {
+		t.Fatalf("LexiconHash = %q, want hash-1", rec.LexiconHash)
+	}
+
+	assertRawPubSubEvent(t, sub, subscription.EventCreate, "invalid record")
+}
+
+func TestIndexHandler_HandleRecord_UnknownSchemaStoresMetadataAndPublishesRawEvent(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	pubsub := subscription.NewPubSub()
+	handler := tap.NewIndexHandler(db.Records, db.Actors, nil, pubsub, fakeRecordValidator{result: validation.Result{
+		Status: validation.StatusUnknownSchema,
+		Error:  "no saved lexicon for collection app.bsky.feed.post",
+	}})
+	ctx := context.Background()
+	sub := pubsub.Subscribe("app.bsky.feed.post")
+	defer pubsub.Unsubscribe(sub)
+
+	event := &tap.RecordEvent{
+		DID:        "did:plc:alice",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post-unknown",
+		Action:     tap.ActionCreate,
+		CID:        "bafyunknown",
+		Record:     json.RawMessage(`{"text":"hello"}`),
+	}
+
+	if err := handler.HandleRecord(ctx, event); err != nil {
+		t.Fatalf("HandleRecord returned error: %v", err)
+	}
+
+	uri := "at://did:plc:alice/app.bsky.feed.post/post-unknown"
+	rec, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("record not found after unknown-schema create: %v", err)
+	}
+	if rec.ValidationStatus != validation.StatusUnknownSchema {
+		t.Fatalf("ValidationStatus = %q, want %q", rec.ValidationStatus, validation.StatusUnknownSchema)
+	}
+	if rec.LexiconHash != "" {
+		t.Fatalf("LexiconHash = %q, want empty", rec.LexiconHash)
+	}
+
+	assertRawPubSubEvent(t, sub, subscription.EventCreate, "unknown-schema record")
+}
+
+func TestIndexHandler_HandleRecord_SameCIDRepairsValidationMetadata(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	pubsub := subscription.NewPubSub()
+	handler := tap.NewIndexHandler(db.Records, db.Actors, nil, pubsub, fakeRecordValidator{result: validation.Result{
+		Status:      validation.StatusValid,
+		LexiconHash: "hash-current",
+	}})
+	ctx := context.Background()
+	uri := "at://did:plc:alice/app.bsky.feed.post/post-repair"
+	recordJSON := `{"text":"same content"}`
+	if _, err := db.Records.Insert(ctx, uri, "cid-same", "did:plc:alice", "app.bsky.feed.post", recordJSON); err != nil {
+		t.Fatalf("legacy Insert() error = %v", err)
+	}
+	sub := pubsub.Subscribe("app.bsky.feed.post")
+	defer pubsub.Unsubscribe(sub)
+
+	event := &tap.RecordEvent{
+		DID:        "did:plc:alice",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post-repair",
+		Action:     tap.ActionUpdate,
+		CID:        "cid-same",
+		Record:     json.RawMessage(recordJSON),
+	}
+	if err := handler.HandleRecord(ctx, event); err != nil {
+		t.Fatalf("HandleRecord() error = %v", err)
+	}
+	stored, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI() error = %v", err)
+	}
+	if stored.ValidationStatus != validation.StatusValid || stored.LexiconHash != "hash-current" || stored.ValidatedAt == nil {
+		t.Fatalf("same-CID validation repair = status:%q hash:%q at:%v", stored.ValidationStatus, stored.LexiconHash, stored.ValidatedAt)
+	}
+	assertRawPubSubEvent(t, sub, subscription.EventUpdate, "same-CID repair")
 }
 
 func TestIndexHandler_HandleRecord_Update(t *testing.T) {
@@ -141,7 +291,12 @@ func TestIndexHandler_HandleRecord_Update(t *testing.T) {
 }
 
 func TestIndexHandler_HandleRecord_Delete(t *testing.T) {
-	handler, db, pubsub := setupHandler(t)
+	db := testutil.SetupTestDB(t)
+	pubsub := subscription.NewPubSub()
+	handler := tap.NewIndexHandler(db.Records, db.Actors, db.Activity, pubsub, fakeRecordValidator{result: validation.Result{
+		Status:      validation.StatusValid,
+		LexiconHash: "hash-current",
+	}})
 	ctx := context.Background()
 
 	// Subscribe to capture published events
@@ -189,6 +344,9 @@ func TestIndexHandler_HandleRecord_Delete(t *testing.T) {
 		}
 		if pubEvent.URI != uri {
 			t.Errorf("expected URI %q, got %q", uri, pubEvent.URI)
+		}
+		if !pubEvent.WasValid || pubEvent.TypedRecord == nil {
+			t.Fatalf("delete visibility metadata = wasValid:%v typedRecord:%v, want true/non-nil", pubEvent.WasValid, pubEvent.TypedRecord)
 		}
 	default:
 		t.Error("expected pubsub event to be published for delete")
@@ -391,6 +549,9 @@ func TestIndexHandler_HandleRecord_DeleteNonExistent(t *testing.T) {
 	case pubEvent := <-sub.Events:
 		if pubEvent.Type != subscription.EventDelete {
 			t.Errorf("expected EventDelete, got %q", pubEvent.Type)
+		}
+		if pubEvent.WasValid || pubEvent.TypedRecord != nil {
+			t.Fatalf("nonexistent delete visibility = wasValid:%v typedRecord:%v, want false/nil", pubEvent.WasValid, pubEvent.TypedRecord)
 		}
 	default:
 		t.Error("expected pubsub event to be published for delete of non-existent record")

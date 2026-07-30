@@ -276,7 +276,7 @@ export default function LexiconsPage() {
     },
     onSuccess: (response) => {
       const count = response.uploadLexicons;
-      setSuccess(`Uploaded ${count} lexicon${count !== 1 ? "s" : ""}`);
+      setSuccess(`Uploaded ${count} lexicon${count !== 1 ? "s" : ""}. Restart or redeploy Hyperindex to apply the change.`);
       setError(null);
       setZipFile(null);
       if (zipFileInputRef.current) {
@@ -297,7 +297,7 @@ export default function LexiconsPage() {
       graphqlClient.request(DELETE_LEXICON, { nsid }),
     onMutate: (nsid) => setDeletingNsid(nsid),
     onSuccess: (_, nsid) => {
-      setSuccess(`Deleted ${nsid}`);
+      setSuccess(`Deleted ${nsid}. Restart or redeploy Hyperindex to apply the change.`);
       setError(null);
       if (expandedId === nsid) setExpandedId(null);
       queryClient.invalidateQueries({ queryKey: ["lexicons"] });
@@ -352,10 +352,10 @@ export default function LexiconsPage() {
       queryClient.invalidateQueries({ queryKey: ["lexicons"] });
       if (!firstError) {
         setNsidInput("");
-        setSuccess(`Registered ${completed} lexicon${completed !== 1 ? "s" : ""}`);
-        setTimeout(() => setSuccess(null), 3000);
+        setSuccess(`Registered ${completed} lexicon${completed !== 1 ? "s" : ""}. Restart or redeploy Hyperindex to apply the change.`);
+        setTimeout(() => setSuccess(null), 5000);
       } else {
-        setSuccess(`Registered ${completed}/${nsids.length} lexicons (stopped on error)`);
+        setSuccess(`Registered ${completed}/${nsids.length} lexicons before the error. Restart or redeploy Hyperindex to apply the saved changes.`);
       }
     }
   };
@@ -478,7 +478,7 @@ export default function LexiconsPage() {
               Register published lexicons by NSID
             </h3>
             <p className="mt-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
-              Resolve published AT Protocol lexicons by NSID and add them to this AppView.
+              Resolve and save published AT Protocol Lexicons by NSID. Restart or redeploy Hyperindex to apply them.
             </p>
             <form onSubmit={handleRegister} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start">
               <label htmlFor="lexicon-nsids" className="sr-only">
@@ -521,7 +521,7 @@ export default function LexiconsPage() {
             </h3>
             <div className="mt-1 space-y-1 text-xs" style={{ color: "var(--muted-foreground)" }}>
               <p>Upload a .zip containing one or more lexicon .json files. Lexicons do not need to be published yet.</p>
-              <p>Each JSON file must contain a top-level id field. A backend restart may be required before new lexicons appear in the public GraphQL schema.</p>
+              <p>Each JSON file must contain a top-level id field. Restart or redeploy Hyperindex to apply saved changes to GraphQL, validation, and ingestion.</p>
             </div>
             <form onSubmit={handleUpload} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
               <label htmlFor="lexicon-zip-file" className="sr-only">

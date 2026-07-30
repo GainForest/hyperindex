@@ -45,12 +45,13 @@ Use production by default for consumer examples. `api.indexer.hypercerts.dev` is
 ## Before answering
 
 1. If the user asks for an exact field, filter, enum, or union and you are not sure, introspect the endpoint first.
-2. Prefer schema-specific queries such as `orgHypercertsClaimActivity` over generic `records` when the collection has a typed query.
-3. Use `recordTimeline` when the caller needs one newest-first feed across multiple collections. It requires `where.collection.in`, supports optional `where.did.in` author filtering, and does not expose `totalCount`.
-4. Always include pagination (`first`, `after`, `pageInfo { hasNextPage endCursor }`) in list examples.
-5. Keep selection sets small. Add fields only when needed for the workflow.
-6. Use inline fragments for union fields such as descriptions, images, attachment content, proof fields, and strong references.
-7. Do not assume the target endpoint exposes every feature described in this skill. `main` may be ahead of staging, and staging may be ahead of production. When a query depends on newer schema features such as `recordTimeline`, nested filters, author labels, or collection-specific fields, introspect the target endpoint first. If the feature is missing, tell the user which endpoint lacks it and offer the closest fallback, such as `search(query: ..., collection: ...)` plus client-side filtering.
+2. Prefer schema-specific queries such as `orgHypercertsClaimActivity` over generic `records` when the collection has a typed query and the caller only needs schema-valid records.
+3. Use generic `records(collection: ...)` when the caller needs raw JSON, operational debugging, unknown-schema records, or records hidden from typed GraphQL by validation metadata.
+4. Use `recordTimeline` when the caller needs one newest-first feed across multiple collections. It requires `where.collection.in`, supports optional `where.did.in` author filtering, and does not expose `totalCount`.
+5. Always include pagination (`first`, `after`, `pageInfo { hasNextPage endCursor }`) in list examples.
+6. Keep selection sets small. Add fields only when needed for the workflow.
+7. Use inline fragments for union fields such as descriptions, images, attachment content, proof fields, and strong references.
+8. Do not assume the target endpoint exposes every feature described in this skill. `main` may be ahead of staging, and staging may be ahead of production. When a query depends on newer schema features such as `recordTimeline`, nested filters, author labels, validation metadata, or collection-specific fields, introspect the target endpoint first. If the feature is missing, tell the user which endpoint lacks it and offer the closest fallback, such as `search(query: ..., collection: ...)` plus client-side filtering.
 
 Detailed schema reference: [references/schema-reference.md](references/schema-reference.md)
 
@@ -165,13 +166,47 @@ query EndorsementClosure($did: String!) {
 }
 ```
 
-`where.did.eq` is required and selects the root DID. The endorsement closure DID filter exposes only `eq`, not `in`, because each request is rooted at one DID. Optional `where.degree.eq` returns only one hop distance; the value must be `1`, `2`, or `3`. Omit `where.degree` to return all supported degrees. Results are sorted by degree then DID. `certifiedProfileData` resolves the reached account's Certified profile when one exists. `viaAccounts` lists up to 64 previous-ring accounts that led to the account, including each predecessor DID and optional Certified profile data; it is empty for direct degree-1 accounts. `truncated: true` means the server-side account cap was reached. The resolver computes active endorsement edges from current Certified badge award, definition, and response records at request time; it only counts badge awards whose subject is the `app.certified.defs#did` account DID union member, ignores record strongRef subjects, respects badge-definition `allowedIssuers` allowlists, and does not use a persisted edge table.
+`where.did.eq` is required and selects the root DID. The endorsement closure DID filter exposes only `eq`, not `in`, because each request is rooted at one DID. Optional `where.degree.eq` returns only one hop distance; the value must be `1`, `2`, or `3`. Omit `where.degree` to return all supported degrees. Results are sorted by degree then DID. `certifiedProfileData` resolves the reached account's Certified profile when one exists. `viaAccounts` lists up to 64 previous-ring accounts that led to the account, including each predecessor DID and optional Certified profile data; it is empty for direct degree-1 accounts. `truncated: true` means the server-side account cap was reached. The resolver computes active endorsement edges from current Certified badge award, definition, and response records whose `validationStatus` is `valid`; invalid records cannot create or suppress edges. It only counts badge awards whose subject is the `app.certified.defs#did` account DID union member, ignores record strongRef subjects, respects badge-definition `allowedIssuers` allowlists, and does not use a persisted edge table.
 
 If a workflow needs unsupported nested matching, use one of these patterns:
 
 - Use typed nested/presence filters to narrow the set, then filter client-side.
 - Use `search(query: ..., collection: ...)` to find records whose JSON contains a referenced AT-URI or string.
-- Use `records(collection: ...)` as a fallback for collections without typed schema coverage.
+- Use `records(collection: ...)` as a fallback for collections without typed schema coverage or for raw debugging.
+
+## Validation gate and generic records
+
+Hyperindex stores every observed AT Protocol record in its raw record table. Typed GraphQL collection fields only expose rows whose `validationStatus` is `valid`, meaning Indigo validated the record against the startup Lexicon set used to generate the running schema. Records whose status is `invalid`, `unknown_schema`, or `validation_error` are hidden from typed list queries, typed `ByUri` queries, typed counts, relationship hydration, and typed create/update subscriptions. Typed delete subscriptions emit only for rows that were valid before deletion.
+
+Use generic `records(collection: ...)` or `search(...)` for operational visibility into raw rows, including records hidden from typed GraphQL. Generic record nodes expose validation metadata:
+
+```graphql
+query RawRecords($collection: String!) {
+  records(collection: $collection, first: 20) {
+    edges {
+      node {
+        uri
+        cid
+        did
+        collection
+        rkey
+        validationStatus
+        validationError
+        validatedAt
+        lexiconHash
+        value
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+Validation is local-only during ingestion. Hyperindex uses Indigo to check records against the Lexicons loaded at startup and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources while classifying records. `lexiconHash` is a validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used during classification.
+
+Public typed GraphQL, record validation, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Lexicon upload/register/delete changes only saved configuration; restart or redeploy Hyperindex to apply the change everywhere together. For multiple backend replicas, coordinate Lexicon-changing rollouts so old and new startup snapshots never serve concurrently against the shared validation metadata.
+
+Generic `recordEvents` receives every observed raw create/update/delete event, including invalid and unknown-schema records. Typed collection subscriptions filter that stream to valid create/update rows and deletes that were valid before removal.
 
 ## Generic record timeline
 

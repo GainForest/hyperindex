@@ -1,0 +1,4 @@
+kind: fixed
+body: Fix `endorsementClosure` so only validated badge awards, badge definitions, and badge responses affect the computed trust graph. Invalid or unclassified raw records remain available through generic queries but can no longer create or suppress endorsement edges.
+custom:
+  Affects: user

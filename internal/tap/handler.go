@@ -9,14 +9,16 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 // IndexHandler implements EventHandler and stores events in the database.
 type IndexHandler struct {
-	records  *repositories.RecordsRepository
-	actors   *repositories.ActorsRepository
-	activity *repositories.IndexingActivityRepository // records indexing activity
-	pubsub   *subscription.PubSub
+	records   *repositories.RecordsRepository
+	actors    *repositories.ActorsRepository
+	activity  *repositories.IndexingActivityRepository // records indexing activity
+	pubsub    *subscription.PubSub
+	validator validation.RecordValidator
 }
 
 // NewIndexHandler creates a new IndexHandler.
@@ -25,12 +27,18 @@ func NewIndexHandler(
 	actors *repositories.ActorsRepository,
 	activity *repositories.IndexingActivityRepository,
 	pubsub *subscription.PubSub,
+	validators ...validation.RecordValidator,
 ) *IndexHandler {
+	var validator validation.RecordValidator
+	if len(validators) > 0 {
+		validator = validators[0]
+	}
 	return &IndexHandler{
-		records:  records,
-		actors:   actors,
-		activity: activity,
-		pubsub:   pubsub,
+		records:   records,
+		actors:    actors,
+		activity:  activity,
+		pubsub:    pubsub,
+		validator: validator,
 	}
 }
 
@@ -54,43 +62,60 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 			slog.Debug("Failed to upsert actor", "did", event.DID, "error", err)
 		}
 
-		// Store record
-		result, err := h.records.Insert(ctx, uri, event.CID, event.DID, event.Collection, string(event.Record))
+		validationResult := validation.ClassifyRecord(h.validator, event.Collection, event.RKey, event.Record)
+		writeResult, err := h.records.UpsertWithValidation(ctx, repositories.RecordWrite{
+			URI:              uri,
+			CID:              event.CID,
+			DID:              event.DID,
+			Collection:       event.Collection,
+			RKey:             event.RKey,
+			JSON:             string(event.Record),
+			ValidationStatus: validationResult.Status,
+			ValidationError:  validationResult.Error,
+			LexiconHash:      validationResult.LexiconHash,
+		})
 		if err != nil {
-			return fmt.Errorf("failed to insert record: %w", err)
+			return fmt.Errorf("failed to store record with validation metadata: %w", err)
 		}
-		if result == repositories.Skipped {
-			slog.Debug("Record insert skipped (unchanged CID)", "uri", uri, "cid", event.CID)
-			return nil
-		}
-
-		// Log activity (if activity repo available)
-		if h.activity != nil {
+		if writeResult == repositories.Skipped {
+			slog.Debug("Record content unchanged; validation metadata is current", "uri", uri, "cid", event.CID)
+		} else if h.activity != nil {
 			activityID, err := h.activity.LogActivity(ctx, time.Now(), string(event.Action), event.Collection, event.DID, event.RKey, string(event.Record))
 			if err != nil {
 				slog.Debug("Failed to log activity", "error", err)
-			} else {
-				if err := h.activity.UpdateStatus(ctx, activityID, "completed", nil); err != nil {
-					slog.Debug("Failed to update activity status", "error", err)
-				}
+			} else if err := h.activity.UpdateStatus(ctx, activityID, "completed", nil); err != nil {
+				slog.Debug("Failed to update activity status", "error", err)
 			}
 		}
 
-		// Publish to GraphQL subscriptions
+		// Publish every stored raw event. Typed resolvers apply validation gating.
 		eventType := subscription.EventCreate
 		if event.Action == ActionUpdate {
 			eventType = subscription.EventUpdate
 		}
 		if h.pubsub != nil {
-			h.pubsub.PublishRecord(eventType, uri, event.CID, event.DID, event.Collection, event.Record)
+			h.pubsub.PublishRecordWithValidation(eventType, uri, event.CID, event.DID, event.Collection, event.Record, validationResult.Status == validation.StatusValid)
 		}
 
 	case ActionDelete:
-		if err := h.records.Delete(ctx, uri); err != nil {
+		deleted, err := h.records.DeleteReturning(ctx, uri)
+		if err != nil {
 			return fmt.Errorf("failed to delete record: %w", err)
 		}
 		if h.pubsub != nil {
-			h.pubsub.PublishRecord(subscription.EventDelete, uri, "", event.DID, event.Collection, nil)
+			previousCID := ""
+			deleteDID := event.DID
+			deleteCollection := event.Collection
+			var previousJSON []byte
+			wasValid := false
+			if deleted != nil {
+				previousCID = deleted.CID
+				deleteDID = deleted.DID
+				deleteCollection = deleted.Collection
+				previousJSON = []byte(deleted.JSON)
+				wasValid = deleted.ValidationStatus == validation.StatusValid
+			}
+			h.pubsub.PublishDelete(uri, previousCID, deleteDID, deleteCollection, previousJSON, wasValid)
 		}
 		if h.activity != nil {
 			activityID, err := h.activity.LogActivity(ctx, time.Now(), "delete", event.Collection, event.DID, event.RKey, "")
