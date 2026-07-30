@@ -1,0 +1,4 @@
+kind: changed
+body: Bundle the stable Hypercerts Lexicon set and its referenced schemas directly into Hyperindex, with every Atmosphere resolution pinned by URI and CID. New deployments can build GraphQL and validation without first registering boot-critical Lexicons; optional `LEXICON_DIR` documents override the bundle, and saved database Lexicons override both. Deployments without explicit Jetstream collections now use the bundled record collections as their startup set.
+custom:
+  Affects: operator

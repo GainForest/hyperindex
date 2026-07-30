@@ -1,0 +1,50 @@
+{
+  "id": "app.certified.badge.response",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "badgeAward",
+          "response",
+          "createdAt"
+        ],
+        "properties": {
+          "weight": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "Optional relative weight for accepted badges, assigned by the recipient."
+          },
+          "response": {
+            "type": "string",
+            "description": "The recipient’s response for the badge (accepted or rejected).",
+            "knownValues": [
+              "accepted",
+              "rejected"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created"
+          },
+          "badgeAward": {
+            "ref": "com.atproto.repo.strongRef",
+            "type": "ref",
+            "description": "Strong reference to the badge award being responded to. The record referenced must conform with the lexicon app.certified.badge.award."
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          }
+        }
+      },
+      "description": "Recipient response to a badge award."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

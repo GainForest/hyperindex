@@ -6,7 +6,6 @@ package integration
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/validation"
 	"github.com/GainForest/hyperindex/internal/validationrefresh"
+	bundledlexicons "github.com/GainForest/hyperindex/lexicons"
 )
 
 // testLexiconJSON is a minimal lexicon with scalar fields and complex fields
@@ -259,9 +259,13 @@ func TestTypedGraphQLUsesValidationRefreshForCertifiedProfile(t *testing.T) {
 	db := setupTestDB(t)
 	ctx := context.Background()
 
-	rawLexicon, err := os.ReadFile("../../testdata/lexicons/app/certified/actor/profile.json")
+	validationLexicons, err := bundledlexicons.Load()
 	if err != nil {
-		t.Fatalf("Read profile lexicon: %v", err)
+		t.Fatalf("load bundled Lexicons: %v", err)
+	}
+	rawLexicon, ok := validationLexicons["app.certified.actor.profile"]
+	if !ok {
+		t.Fatal("bundled app.certified.actor.profile Lexicon is missing")
 	}
 	registry := lexicon.NewRegistry()
 	parsed, err := lexicon.ParseBytes(rawLexicon)
@@ -269,17 +273,6 @@ func TestTypedGraphQLUsesValidationRefreshForCertifiedProfile(t *testing.T) {
 		t.Fatalf("ParseBytes(profile) error = %v", err)
 	}
 	registry.Register(parsed)
-	validationLexicons := map[string][]byte{"app.certified.actor.profile": rawLexicon}
-	for id, path := range map[string]string{
-		"org.hypercerts.defs":     "../../testdata/lexicons/org/hypercerts/defs.json",
-		"app.bsky.richtext.facet": "../../testdata/lexicons/app/bsky/richtext/facet.json",
-	} {
-		raw, readErr := os.ReadFile(path)
-		if readErr != nil {
-			t.Fatalf("Read %s Lexicon: %v", id, readErr)
-		}
-		validationLexicons[id] = raw
-	}
 	validator, err := validation.NewValidatorFromLexiconBytes(validationLexicons)
 	if err != nil {
 		t.Fatalf("NewValidatorFromLexiconBytes() error = %v", err)

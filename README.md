@@ -34,9 +34,11 @@ Open http://localhost:8080/graphiql/admin to access the admin interface.
 
 ## Usage
 
-### 1. Register Lexicons
+### 1. Configure Lexicons
 
-Lexicons define the AT Protocol record types you want to index. Hyperindex supports two registration modes via the Admin GraphQL API at `/graphiql/admin`:
+Hyperindex ships with a CID-pinned bundle of the stable Hypercerts, Hyperboards, Certified, and referenced external Lexicons. These built-ins let a new deployment start with the complete Hypercerts schema without first registering boot-critical dependencies through the Admin API.
+
+Use the Admin GraphQL API at `/graphiql/admin` to add custom Lexicons or override a bundled Lexicon:
 
 1. **Register by NSID** — use this when the lexicon can be resolved by its NSID.
 
@@ -54,9 +56,11 @@ Lexicons define the AT Protocol record types you want to index. Hyperindex suppo
    }
    ```
 
-Or place lexicon JSON files in a directory and set the `LEXICON_DIR` environment variable.
+Or place Lexicon JSON files in a directory and set the `LEXICON_DIR` environment variable. Directory documents override bundled documents with the same NSID; database documents override both.
 
-After registering, uploading, or deleting Lexicons, restart/redeploy the backend indexer. The admin Lexicon list updates immediately, but public GraphQL, Indigo record validation, and default Jetstream collection filters all keep using the Lexicon set loaded at startup until the process restarts. For multi-replica deployments, coordinate Lexicon-changing rollouts so replicas using the old and new startup snapshots never serve concurrently against the shared validation metadata.
+The bundle is installed with `@atproto/lex` and tracked by `lexicons.json`. Run `make lexicons-check` to verify the checked-in files against their pinned CIDs.
+
+After registering, uploading, or deleting database Lexicon overrides, restart/redeploy the backend indexer. The admin Lexicon list updates immediately, but public GraphQL, Indigo record validation, and default Jetstream collection filters all keep using the Lexicon set loaded at startup until the process restarts. Deleting a database override reveals the bundled or directory version on the next restart. For multi-replica deployments, coordinate Lexicon-changing rollouts so replicas using the old and new startup snapshots never serve concurrently against the shared validation metadata.
 
 **Example lexicons:**
 - `org.hypercerts.claim.activity` - Hypercert claim activity
@@ -123,13 +127,13 @@ When Tap mode starts, Hyperindex performs a bounded background reconciliation fo
 
 **Local isolated Tap smoke stack (requires Docker):**
 
-Use this when you want to test current local changes against Tap with the Hypercerts/Certified lexicon set mounted into the backend container:
+Use this when you want to test current local changes against Tap with the same embedded Lexicon bundle used in production:
 
 ```bash
 make smoke-tap-local
 ```
 
-The target starts a fresh Docker Compose project with Tap and Hyperindex, mounts `testdata/lexicons` into the backend so the listed lexicons are present in the generated GraphQL schema, uses `TAP_SIGNAL_COLLECTION=app.certified.actor.profile`, uses `TAP_COLLECTION_FILTERS=app.certified.*,org.hypercerts.*`, waits 20 seconds for Tap discovery/backfill to warm up after Hyperindex is ready, runs the API smoke suite against `http://127.0.0.1:8080` with `tests/api-smoke/expectations/local-tap.json`, retries every 15 seconds while Tap catches up, and then stops the stack. The filters use Tap's `.*` wildcard syntax for NSID prefixes. Set `HYPERINDEX_LOCAL_TAP_KEEP=1` to leave the stack running for debugging, or `HYPERINDEX_LOCAL_TAP_HOST_PORT=18080` if port 8080 is already in use.
+The target starts a fresh Docker Compose project with Tap and Hyperindex, uses the CID-pinned Lexicons embedded in the backend binary, sets `TAP_SIGNAL_COLLECTION=app.certified.actor.profile`, uses `TAP_COLLECTION_FILTERS=app.certified.*,org.hypercerts.*`, waits 20 seconds for Tap discovery/backfill to warm up after Hyperindex is ready, runs the API smoke suite against `http://127.0.0.1:8080` with `tests/api-smoke/expectations/local-tap.json`, retries every 15 seconds while Tap catches up, and then stops the stack. The filters use Tap's `.*` wildcard syntax for NSID prefixes. Set `HYPERINDEX_LOCAL_TAP_KEEP=1` to leave the stack running for debugging, or `HYPERINDEX_LOCAL_TAP_HOST_PORT=18080` if port 8080 is already in use.
 
 #### Optional: External Labeler Streams
 

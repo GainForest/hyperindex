@@ -1,0 +1,118 @@
+{
+  "id": "org.hypercerts.context.measurement",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "metric",
+          "unit",
+          "value",
+          "createdAt"
+        ],
+        "properties": {
+          "unit": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "The unit of the measured value (e.g. kg CO₂e, hectares, %, index score)."
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "The measured value as a numeric string (e.g. '1234.56')"
+          },
+          "metric": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "The metric being measured, e.g. forest area restored, number of users, etc."
+          },
+          "comment": {
+            "type": "string",
+            "maxLength": 3000,
+            "description": "Short comment of this measurement, suitable for previews and list views. Rich text annotations may be provided via `commentFacets`.",
+            "maxGraphemes": 300
+          },
+          "endDate": {
+            "type": "string",
+            "format": "datetime",
+            "description": "The end date and time when the measurement ended. For one-time measurements, this should equal the start date."
+          },
+          "subjects": {
+            "type": "array",
+            "items": {
+              "ref": "com.atproto.repo.strongRef",
+              "type": "ref"
+            },
+            "maxLength": 100,
+            "description": "Strong references to the records this measurement refers to (e.g. activities, projects, or claims)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created"
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "ref": "com.atproto.repo.strongRef",
+              "type": "ref"
+            },
+            "maxLength": 100,
+            "description": "Optional geographic references related to where the measurement was taken. Each referenced record must conform with the app.certified.location lexicon."
+          },
+          "measurers": {
+            "type": "array",
+            "items": {
+              "ref": "app.certified.defs#did",
+              "type": "ref"
+            },
+            "maxLength": 100,
+            "description": "DIDs of the entities that performed this measurement"
+          },
+          "methodURI": {
+            "type": "string",
+            "format": "uri",
+            "description": "URI to methodology documentation, standard protocol, or measurement procedure"
+          },
+          "startDate": {
+            "type": "string",
+            "format": "datetime",
+            "description": "The start date and time when the measurement began."
+          },
+          "methodType": {
+            "type": "string",
+            "maxLength": 30,
+            "description": "Short identifier for the measurement methodology"
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "evidenceURI": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            },
+            "maxLength": 50,
+            "description": "URIs to related evidence or underlying data (e.g. org.hypercerts.claim.evidence records or raw datasets)"
+          },
+          "commentFacets": {
+            "type": "array",
+            "items": {
+              "ref": "app.bsky.richtext.facet",
+              "type": "ref"
+            },
+            "description": "Rich text annotations for `comment` (mentions, URLs, hashtags, etc)."
+          }
+        }
+      },
+      "description": "Measurement data related to one or more records (e.g. activities, projects, etc.)."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

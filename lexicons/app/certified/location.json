@@ -1,0 +1,96 @@
+{
+  "id": "app.certified.location",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "lpVersion",
+          "srs",
+          "locationType",
+          "location",
+          "createdAt"
+        ],
+        "properties": {
+          "srs": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 100,
+            "description": "The Spatial Reference System URI (e.g., http://www.opengis.net/def/crs/OGC/1.3/CRS84) that defines the coordinate system."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Human-readable name for this location (e.g. 'Golden Gate Park', 'San Francisco Bay Area')",
+            "maxGraphemes": 100
+          },
+          "location": {
+            "refs": [
+              "org.hypercerts.defs#uri",
+              "org.hypercerts.defs#smallBlob",
+              "#string"
+            ],
+            "type": "union",
+            "description": "The location of where the work was performed as a URI, blob, or inline string."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created"
+          },
+          "lpVersion": {
+            "type": "string",
+            "maxLength": 10,
+            "description": "The version of the Location Protocol"
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Additional context about this location, such as its significance to the work or specific boundaries",
+            "maxGraphemes": 500
+          },
+          "locationType": {
+            "type": "string",
+            "maxLength": 20,
+            "description": "An identifier for the format of the location data. Use `geojson-point` for a single GeoJSON Point; use `geojson` as the catch-all for any other GeoJSON geometry (Polygon, MultiPolygon, FeatureCollection, etc.) — the inner payload's own GeoJSON `type` field carries the specifics. Values beyond the known set are permitted; see the Location Protocol spec for the canonical registry: https://spec.decentralizedgeo.org/specification/location-types/#location-type-registry",
+            "knownValues": [
+              "coordinate-decimal",
+              "geojson-point",
+              "geojson",
+              "h3",
+              "geohash",
+              "wkt",
+              "address",
+              "scaledCoordinates"
+            ]
+          }
+        }
+      },
+      "description": "A location reference"
+    },
+    "string": {
+      "type": "object",
+      "required": [
+        "string"
+      ],
+      "properties": {
+        "string": {
+          "type": "string",
+          "maxLength": 10000,
+          "description": "The location string value",
+          "maxGraphemes": 1000
+        }
+      },
+      "description": "A location represented as a string, e.g. coordinates or a small GeoJSON string."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -305,6 +306,39 @@ func TestStatsUsesPersistedLabelerURLOverride(t *testing.T) {
 	}
 }
 
+func TestSetupGraphQLUsesBundledLexiconsWithoutDirectoryOrDatabaseRows(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	svc := labelerTestServices(db)
+	router := chi.NewRouter()
+
+	collections, err := setupGraphQL(router, &config.Config{
+		ExternalBaseURL: "https://example.com",
+	}, svc, nil, nil)
+	if err != nil {
+		t.Fatalf("setupGraphQL() error = %v", err)
+	}
+	if !slices.Contains(collections, "org.hypercerts.claim.activity") {
+		t.Fatalf("collections = %v, want bundled Hypercerts collection", collections)
+	}
+	if _, ok := svc.validator.LexiconHash("org.hypercerts.workscope.cel"); !ok {
+		t.Fatal("startup validator is missing bundled org.hypercerts.workscope.cel")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"{ appCertifiedSignatureProof(first: 1) { totalCount } orgHyperboardsBoard(first: 1) { totalCount } orgHyperboardsDisplayProfile(first: 1) { totalCount } }"}`))
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	var body struct {
+		Errors []map[string]interface{} `json:"errors"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatalf("decode bundled GraphQL query response: %v", err)
+	}
+	if len(body.Errors) > 0 {
+		t.Fatalf("bundled typed GraphQL fields failed: errors=%v body=%s", body.Errors, response.Body.String())
+	}
+}
+
 func TestSetupGraphQLHashesSavedLexiconsAndClassifiesBeforeServing(t *testing.T) {
 	ctx := context.Background()
 	db := testutil.SetupTestDB(t)
@@ -324,8 +358,11 @@ func TestSetupGraphQLHashesSavedLexiconsAndClassifiesBeforeServing(t *testing.T)
 	if err != nil {
 		t.Fatalf("setupGraphQL() error = %v", err)
 	}
-	if len(collections) != 1 || collections[0] != "com.example.record" {
-		t.Fatalf("collections = %v, want startup record collection", collections)
+	if !slices.Contains(collections, "com.example.record") {
+		t.Fatalf("collections = %v, want custom startup record collection", collections)
+	}
+	if !slices.Contains(collections, "org.hypercerts.claim.activity") {
+		t.Fatalf("collections = %v, want bundled Hypercerts collection", collections)
 	}
 	wantHash := validation.HashLexiconJSON([]byte("com.example.record=" + validation.HashLexiconJSON([]byte(setupGraphQLTestLexicon))))
 	if gotHash, ok := svc.validator.LexiconHash("com.example.record"); !ok || gotHash != wantHash {
@@ -361,7 +398,7 @@ func TestSetupGraphQLSupportsRecordKeyLexicon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setupGraphQL(record-key) error = %v", err)
 	}
-	if len(collections) != 1 || collections[0] != "com.example.record" {
+	if !slices.Contains(collections, "com.example.record") {
 		t.Fatalf("collections = %v, want record-key collection", collections)
 	}
 	result := svc.validator.ValidateRecord("com.example.record", "self", []byte(`{"$type":"com.example.record","name":"ok"}`))
@@ -429,8 +466,11 @@ func TestSetupGraphQLAppliesStagedLexiconDeletionAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setupGraphQL(after deletion) error = %v", err)
 	}
-	if len(collections) != 0 {
-		t.Fatalf("startup collections after deletion = %v, want empty", collections)
+	if slices.Contains(collections, "com.example.record") {
+		t.Fatalf("startup collections after deletion = %v, want com.example.record absent", collections)
+	}
+	if !slices.Contains(collections, "org.hypercerts.claim.activity") {
+		t.Fatalf("startup collections after deletion = %v, want bundled collections retained", collections)
 	}
 	if _, ok := svc.validator.GraphQLRegistry().GetRecordDef("com.example.record"); ok {
 		t.Fatal("deleted Lexicon remained in restarted GraphQL registry")
@@ -544,19 +584,6 @@ func TestLoadLexiconsFromDirRejectsDuplicateIDs(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "duplicate Lexicon id app.example.post") ||
 		!strings.Contains(err.Error(), firstPath) || !strings.Contains(err.Error(), secondPath) {
 		t.Fatalf("loadLexiconsFromDir() error = %v, want duplicate ID and both paths", err)
-	}
-}
-
-func TestBundledLexiconsBuildIndigoValidator(t *testing.T) {
-	saved, err := loadLexiconsFromDir(filepath.Join("..", "..", "testdata", "lexicons"))
-	if err != nil {
-		t.Fatalf("loadLexiconsFromDir() error = %v", err)
-	}
-	if len(saved) == 0 {
-		t.Fatal("loadLexiconsFromDir() returned no bundled Lexicons")
-	}
-	if _, err := validation.NewValidatorFromLexiconBytes(saved); err != nil {
-		t.Fatalf("bundled Lexicons do not build an Indigo validator: %v", err)
 	}
 }
 

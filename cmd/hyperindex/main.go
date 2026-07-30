@@ -46,6 +46,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/validation"
 	"github.com/GainForest/hyperindex/internal/validationrefresh"
 	"github.com/GainForest/hyperindex/internal/workers"
+	bundledlexicons "github.com/GainForest/hyperindex/lexicons"
 )
 
 func main() {
@@ -722,26 +723,33 @@ func configureBackfillCallbacks(adminHandler *admin.Handler, cfg *config.Config,
 	slog.Info("Backfill callbacks configured for admin UI")
 }
 
-// setupGraphQL loads lexicons from disk and database, creates the public GraphQL
-// handler with WebSocket subscriptions, and returns the resolved collection list
-// for Jetstream configuration.
+// setupGraphQL loads bundled, optional filesystem, and database Lexicons,
+// creates the public GraphQL handler with WebSocket subscriptions, and returns
+// the resolved collection list for Jetstream configuration.
 func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscription.PubSub, adminHandler *admin.Handler) ([]string, error) {
-	// Select one fixed set of saved Lexicons for this process. Database rows
-	// override filesystem documents with the same NSID.
-	filesystemLexicons := make(map[string][]byte)
-	savedLexicons := make(map[string][]byte)
-	lexiconDir := cfg.LexiconDir
-	if lexiconDir == "" {
-		lexiconDir = "testdata/lexicons"
+	// Select one fixed Lexicon set for this process. Optional filesystem
+	// documents override the bundled baseline, and database rows override both.
+	bundled, err := bundledlexicons.Load()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load bundled Hypercerts Lexicons: %w", err)
 	}
+	filesystemLexicons := make(map[string][]byte, len(bundled))
+	savedLexicons := make(map[string][]byte, len(bundled))
+	for id, raw := range bundled {
+		filesystemLexicons[id] = raw
+		savedLexicons[id] = raw
+	}
+	slog.Info("Loaded bundled Hypercerts Lexicons", "count", len(bundled))
 
-	if info, err := os.Stat(lexiconDir); err != nil {
-		if cfg.LexiconDir != "" || !os.IsNotExist(err) {
+	lexiconDir := cfg.LexiconDir
+	if lexiconDir != "" {
+		info, err := os.Stat(lexiconDir)
+		if err != nil {
 			return nil, fmt.Errorf("failed to access lexicon directory %s: %w", lexiconDir, err)
 		}
-	} else if !info.IsDir() {
-		return nil, fmt.Errorf("lexicon path %s is not a directory", lexiconDir)
-	} else {
+		if !info.IsDir() {
+			return nil, fmt.Errorf("lexicon path %s is not a directory", lexiconDir)
+		}
 		loaded, err := loadLexiconsFromDir(lexiconDir)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load lexicons from directory %s: %w", lexiconDir, err)
@@ -750,7 +758,7 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 			filesystemLexicons[id] = raw
 			savedLexicons[id] = raw
 		}
-		slog.Info("Loaded lexicons from directory", "count", len(loaded), "dir", lexiconDir)
+		slog.Info("Loaded Lexicon directory overrides", "count", len(loaded), "dir", lexiconDir)
 	}
 
 	ctx := context.Background()

@@ -1,4 +1,4 @@
-.PHONY: help build run test test-coverage smoke-api smoke-tap-local lint fmt clean dev db-migrate db-rollback db-status db-create-migration docker docker-run tools generate hooks-install changie-new
+.PHONY: help build run test test-coverage smoke-api smoke-tap-local lexicons-check lint fmt clean dev db-migrate db-rollback db-status db-create-migration docker docker-run tools generate hooks-install changie-new
 
 GO_TOOLCHAIN := GOTOOLCHAIN=go1.26.0
 VERSION ?= 0.1.0-dev
@@ -15,6 +15,7 @@ help:
 	@echo "  make test         - Run all tests"
 	@echo "  make smoke-api    - Run API smoke tests"
 	@echo "  make smoke-tap-local - Run isolated local Tap Docker stack and smoke tests"
+	@echo "  make lexicons-check - Verify the CID-pinned bundled Lexicons"
 	@echo "  make lint         - Run linter"
 	@echo "  make tools        - Install development tools (including Changie)"
 	@echo "  make changie-new  - Create a new changelog fragment"
@@ -64,6 +65,10 @@ smoke-api:
 # Run an isolated local Tap Docker stack and API smoke tests (requires Docker)
 smoke-tap-local:
 	@scripts/smoke-tap-local.sh
+
+# Verify bundled Lexicons against their CID-pinned manifest (requires Node.js 22+)
+lexicons-check:
+	@npx --yes @atproto/lex@0.3.0 install --ci
 
 # Run linter (requires golangci-lint)
 lint:

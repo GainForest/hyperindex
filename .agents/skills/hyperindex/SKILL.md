@@ -23,6 +23,9 @@ The current production indexer is ATProto-first. Do **not** explain it using old
 - `app.certified.graph.follow`
 - `app.certified.link.evm`
 - `app.certified.location`
+- `app.certified.signature.proof`
+- `org.hyperboards.board`
+- `org.hyperboards.displayProfile`
 - `org.hypercerts.claim.activity`
 - `org.hypercerts.claim.contribution`
 - `org.hypercerts.claim.contributorInformation`
@@ -85,7 +88,7 @@ author {
 
 Prefer `author.did` and `author.handle` in output selection sets. `author` is non-null; `handle` is nullable when no current verified handle is available. The direct record-level `did` output remains functional but is deprecated. DID filters are unchanged: continue using `where.did` to filter records by author DID.
 
-`author` is reserved record metadata. If an uploaded Lexicon defines a top-level property named `author`, Hyperindex skips that property and its generated filter in favor of `ActorIdentity`; tell schema owners to rename colliding Lexicon properties.
+Generated record metadata reserves `uri`, `cid`, `did`, `rkey`, `externalLabels`, `author`, `authorLabels`, and `certifiedProfileData`. Hyperindex skips top-level Lexicon properties and generated filters with those names. In particular, `app.certified.signature.proof` defines an attested-content `cid` that is currently omitted from its typed GraphQL object because `cid` exposes the indexed record's own CID; use generic `records` or `search` JSON when that payload field is needed.
 
 ## Core filter model
 
@@ -204,7 +207,7 @@ query RawRecords($collection: String!) {
 
 Validation is local-only during ingestion. Hyperindex uses Indigo to check records against the Lexicons loaded at startup and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources while classifying records. `lexiconHash` is a validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used during classification.
 
-Public typed GraphQL, record validation, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Lexicon upload/register/delete changes only saved configuration; restart or redeploy Hyperindex to apply the change everywhere together. For multiple backend replicas, coordinate Lexicon-changing rollouts so old and new startup snapshots never serve concurrently against the shared validation metadata.
+The startup set begins with Hyperindex's CID-pinned Hypercerts bundle. Optional `LEXICON_DIR` documents override matching bundled NSIDs, and database documents override both. Public typed GraphQL, record validation, and default Jetstream collection filters use that one fixed set for the process lifetime. Lexicon upload/register/delete changes only saved database configuration; restart or redeploy Hyperindex to apply the change everywhere together. Deleting a database override reveals the bundled or directory document after restart. For multiple backend replicas, coordinate Lexicon-changing rollouts so old and new startup snapshots never serve concurrently against the shared validation metadata.
 
 Generic `recordEvents` receives every observed raw create/update/delete event, including invalid and unknown-schema records. Typed collection subscriptions filter that stream to valid create/update rows and deletes that were valid before removal.
 

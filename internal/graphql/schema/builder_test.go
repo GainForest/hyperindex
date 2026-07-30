@@ -5,9 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -24,36 +23,43 @@ import (
 	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/testutil"
 	"github.com/GainForest/hyperindex/internal/validation"
+	bundledlexicons "github.com/GainForest/hyperindex/lexicons"
 )
 
-// loadLexiconsFromDir loads all lexicon JSON files from a directory tree.
-func loadLexiconsFromDir(dir string) ([]*lexicon.Lexicon, error) {
-	var lexicons []*lexicon.Lexicon
+func loadBundledLexicons(t *testing.T) []*lexicon.Lexicon {
+	t.Helper()
+	documents, err := bundledlexicons.Load()
+	if err != nil {
+		t.Fatalf("load bundled Lexicons: %v", err)
+	}
+	ids := make([]string, 0, len(documents))
+	for id := range documents {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	parsed := make([]*lexicon.Lexicon, 0, len(ids))
+	for _, id := range ids {
+		lex, err := lexicon.ParseBytes(documents[id])
 		if err != nil {
-			return err
+			t.Fatalf("parse bundled Lexicon %s: %v", id, err)
 		}
-		if info.IsDir() || !strings.HasSuffix(path, ".json") {
-			return nil
-		}
+		parsed = append(parsed, lex)
+	}
+	return parsed
+}
 
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		lex, parseErr := lexicon.ParseBytes(data)
-		if parseErr != nil {
-			// Skip non-lexicon JSON files
-			return nil //nolint:nilerr // intentionally skip parse errors
-		}
-
-		lexicons = append(lexicons, lex)
-		return nil
-	})
-
-	return lexicons, err
+func mustBundledLexicon(t *testing.T, id string) []byte {
+	t.Helper()
+	documents, err := bundledlexicons.Load()
+	if err != nil {
+		t.Fatalf("load bundled Lexicons: %v", err)
+	}
+	raw, ok := documents[id]
+	if !ok {
+		t.Fatalf("bundled Lexicon %s not found", id)
+	}
+	return raw
 }
 
 // TestEncodeDecode verifies that encodeCursorValues and decodeCursorValues
@@ -150,11 +156,8 @@ func TestEncodeDecode(t *testing.T) {
 }
 
 func TestBuildSchemaFromHypercertsLexicons(t *testing.T) {
-	// Load all hypercerts lexicons
-	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
-	if err != nil {
-		t.Fatalf("Failed to load lexicons: %v", err)
-	}
+	// Load the same CID-pinned Lexicons used at runtime.
+	lexicons := loadBundledLexicons(t)
 
 	if len(lexicons) == 0 {
 		t.Fatal("No lexicons loaded")
@@ -206,22 +209,18 @@ func TestBuildSchemaFromHypercertsLexicons(t *testing.T) {
 }
 
 func TestActivityClaimType(t *testing.T) {
-	// Load activity claim lexicon specifically
-	data, err := os.ReadFile("../../../testdata/lexicons/org/hypercerts/claim/activity.json")
-	if err != nil {
-		t.Fatalf("Failed to read activity.json: %v", err)
-	}
-
+	// Load activity claim Lexicon specifically.
+	data := mustBundledLexicon(t, "org.hypercerts.claim.activity")
 	lex, err := lexicon.ParseBytes(data)
 	if err != nil {
 		t.Fatalf("Failed to parse activity.json: %v", err)
 	}
 
-	// Load supporting lexicons
-	defsData, _ := os.ReadFile("../../../testdata/lexicons/org/hypercerts/defs.json")
+	// Load supporting Lexicons.
+	defsData := mustBundledLexicon(t, "org.hypercerts.defs")
 	defsLex, _ := lexicon.ParseBytes(defsData)
 
-	strongRefData, _ := os.ReadFile("../../../testdata/lexicons/com/atproto/repo/strongRef.json")
+	strongRefData := mustBundledLexicon(t, "com.atproto.repo.strongRef")
 	strongRefLex, _ := lexicon.ParseBytes(strongRefData)
 
 	// Create registry
@@ -300,14 +299,14 @@ func TestActivityClaimType(t *testing.T) {
 }
 
 func TestUnionTypes(t *testing.T) {
-	// Load lexicons
-	activityData, _ := os.ReadFile("../../../testdata/lexicons/org/hypercerts/claim/activity.json")
+	// Load Lexicons.
+	activityData := mustBundledLexicon(t, "org.hypercerts.claim.activity")
 	activityLex, _ := lexicon.ParseBytes(activityData)
 
-	defsData, _ := os.ReadFile("../../../testdata/lexicons/org/hypercerts/defs.json")
+	defsData := mustBundledLexicon(t, "org.hypercerts.defs")
 	defsLex, _ := lexicon.ParseBytes(defsData)
 
-	strongRefData, _ := os.ReadFile("../../../testdata/lexicons/com/atproto/repo/strongRef.json")
+	strongRefData := mustBundledLexicon(t, "com.atproto.repo.strongRef")
 	strongRefLex, _ := lexicon.ParseBytes(strongRefData)
 
 	registry := lexicon.NewRegistry()
@@ -353,11 +352,8 @@ func TestUnionTypes(t *testing.T) {
 }
 
 func TestSchemaIntrospection(t *testing.T) {
-	// Load all lexicons
-	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
-	if err != nil {
-		t.Fatalf("Failed to load lexicons: %v", err)
-	}
+	// Load all bundled Lexicons.
+	lexicons := loadBundledLexicons(t)
 
 	registry := lexicon.NewRegistry()
 	for _, lex := range lexicons {
@@ -581,17 +577,14 @@ func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
 }
 
 func TestBuildWhereInput_CollectionFilterExtensions(t *testing.T) {
-	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
-	if err != nil {
-		t.Fatalf("load lexicons: %v", err)
-	}
+	lexicons := loadBundledLexicons(t)
 	registry := lexicon.NewRegistry()
 	for _, lex := range lexicons {
 		registry.Register(lex)
 	}
 
 	builder := NewBuilder(registry)
-	_, err = builder.Build()
+	_, err := builder.Build()
 	if err != nil {
 		t.Fatalf("Build() failed: %v", err)
 	}
@@ -1801,25 +1794,22 @@ func assertRawCIDLinkShape(t *testing.T, value map[string]interface{}, cid strin
 	}
 }
 
-// buildActivitySchema builds a GraphQL schema from the org.hypercerts.claim.activity lexicon.
-func buildAllTestdataSchema(t *testing.T) *graphql.Schema {
+// buildBundledSchema builds GraphQL from the same Lexicon bundle used at runtime.
+func buildBundledSchema(t *testing.T) *graphql.Schema {
 	t.Helper()
 
-	builder := buildAllTestdataBuilder(t)
+	builder := buildBundledBuilder(t)
 	schema, err := builder.Build()
 	if err != nil {
-		t.Fatalf("buildAllTestdataSchema: failed to build schema: %v", err)
+		t.Fatalf("buildBundledSchema: failed to build schema: %v", err)
 	}
 	return schema
 }
 
-func buildAllTestdataBuilder(t *testing.T) *Builder {
+func buildBundledBuilder(t *testing.T) *Builder {
 	t.Helper()
 
-	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
-	if err != nil {
-		t.Fatalf("buildAllTestdataBuilder: failed to load lexicons: %v", err)
-	}
+	lexicons := loadBundledLexicons(t)
 	registry := lexicon.NewRegistry()
 	for _, lex := range lexicons {
 		registry.Register(lex)
@@ -1830,10 +1820,7 @@ func buildAllTestdataBuilder(t *testing.T) *Builder {
 func buildActivitySchema(t *testing.T) *graphql.Schema {
 	t.Helper()
 
-	data, err := os.ReadFile("../../../testdata/lexicons/org/hypercerts/claim/activity.json")
-	if err != nil {
-		t.Fatalf("buildActivitySchema: failed to read activity.json: %v", err)
-	}
+	data := mustBundledLexicon(t, "org.hypercerts.claim.activity")
 	lex, err := lexicon.ParseBytes(data)
 	if err != nil {
 		t.Fatalf("buildActivitySchema: failed to parse activity.json: %v", err)
@@ -1928,7 +1915,7 @@ func TestCollectionResolver_URIWhereFilterRejectsSubstringOperators(t *testing.T
 }
 
 func TestCollectionResolver_NestedUnionFilterFindsBadgeAwardRecipientDID(t *testing.T) {
-	schema := buildAllTestdataSchema(t)
+	schema := buildBundledSchema(t)
 	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
 		{
 			URI:        "at://did:plc:issuer/app.certified.badge.award/award-alice",
@@ -1964,7 +1951,7 @@ func TestCollectionResolver_NestedUnionFilterFindsBadgeAwardRecipientDID(t *test
 }
 
 func TestCollectionResolver_BadgeAwardBadgeTypeFilterFindsReferencedDefinitionType(t *testing.T) {
-	schema := buildAllTestdataSchema(t)
+	schema := buildBundledSchema(t)
 	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement"
 	const otherBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/other"
 	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
@@ -2040,7 +2027,7 @@ func TestEndorsementClosureWhereInputUsesExactDIDFilter(t *testing.T) {
 		t.Fatal("EndorsementClosureDIDFilterInput exposes unsupported in field")
 	}
 
-	builder := buildAllTestdataBuilder(t)
+	builder := buildBundledBuilder(t)
 	if _, err := builder.Build(); err != nil {
 		t.Fatalf("Build() failed: %v", err)
 	}
@@ -2061,7 +2048,7 @@ func TestEndorsementClosureWhereInputUsesExactDIDFilter(t *testing.T) {
 }
 
 func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
-	schema := buildAllTestdataSchema(t)
+	schema := buildBundledSchema(t)
 	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement"
 	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
 		{
@@ -2188,7 +2175,7 @@ func TestEndorsementClosureResolverComputesBoundedCertifiedGraph(t *testing.T) {
 }
 
 func TestEndorsementClosureResolverPaginatesAndFiltersDegrees(t *testing.T) {
-	schema := buildAllTestdataSchema(t)
+	schema := buildBundledSchema(t)
 	const endorsementBadgeURI = "at://did:plc:issuer/app.certified.badge.definition/endorsement-pagination"
 	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
 		{URI: endorsementBadgeURI, CID: "cid-endorsement", DID: "did:plc:issuer", Collection: "app.certified.badge.definition", JSON: `{"title":"Endorsement","badgeType":"endorsement","createdAt":"2026-01-01T00:00:00Z"}`},
@@ -2266,7 +2253,7 @@ func TestEndorsementClosureResolverPaginatesAndFiltersDegrees(t *testing.T) {
 }
 
 func TestEndorsementClosureResolverRejectsInvalidArgs(t *testing.T) {
-	schema := buildAllTestdataSchema(t)
+	schema := buildBundledSchema(t)
 	ctx := setupSchemaRecordsTestDB(t, nil)
 
 	result := graphql.Do(graphql.Params{
@@ -2316,7 +2303,7 @@ func TestEndorsementClosureResolverRejectsInvalidArgs(t *testing.T) {
 }
 
 func TestCollectionResolver_NestedArrayFilterFindsCollectionContainingItemURI(t *testing.T) {
-	schema := buildAllTestdataSchema(t)
+	schema := buildBundledSchema(t)
 	const activityURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
 	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
 		{
@@ -2353,7 +2340,7 @@ func TestCollectionResolver_NestedArrayFilterFindsCollectionContainingItemURI(t 
 }
 
 func TestCollectionResolver_NestedArrayAnyFilterKeepsPredicatesOnSameElement(t *testing.T) {
-	schema := buildAllTestdataSchema(t)
+	schema := buildBundledSchema(t)
 	const targetURI = "at://did:plc:maker/org.hypercerts.claim.activity/activity-1"
 	const targetCID = "bafyactivity"
 	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
@@ -2391,7 +2378,7 @@ func TestCollectionResolver_NestedArrayAnyFilterKeepsPredicatesOnSameElement(t *
 }
 
 func TestCollectionResolver_ContributorDidCompatibilityFilter(t *testing.T) {
-	schema := buildAllTestdataSchema(t)
+	schema := buildBundledSchema(t)
 	const contributorURI = "at://did:plc:contributor/org.hypercerts.claim.contributorInformation/info-1"
 	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
 		{
@@ -2468,7 +2455,7 @@ func TestCollectionResolver_ContributorDidCompatibilityFilter(t *testing.T) {
 }
 
 func TestCollectionResolver_NestedFiltersRejectSubstringOperators(t *testing.T) {
-	schema := buildAllTestdataSchema(t)
+	schema := buildBundledSchema(t)
 	ctx := setupSchemaRecordsTestDB(t, []*repositories.Record{
 		{
 			URI:        "at://did:plc:author/org.hypercerts.claim.activity/inline",
@@ -4123,10 +4110,7 @@ func setupExternalLabelsWhereTestDB(t *testing.T) (context.Context, map[string]s
 
 func buildRecordTimelineTestSchema(t *testing.T) *graphql.Schema {
 	t.Helper()
-	lexicons, err := loadLexiconsFromDir("../../../testdata/lexicons")
-	if err != nil {
-		t.Fatalf("failed to load test lexicons: %v", err)
-	}
+	lexicons := loadBundledLexicons(t)
 	registry := lexicon.NewRegistry()
 	for _, lex := range lexicons {
 		registry.Register(lex)

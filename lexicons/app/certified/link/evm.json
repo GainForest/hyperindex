@@ -1,0 +1,109 @@
+{
+  "id": "app.certified.link.evm",
+  "defs": {
+    "main": {
+      "key": "any",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "address",
+          "proof",
+          "createdAt"
+        ],
+        "properties": {
+          "proof": {
+            "refs": [
+              "#eip712Proof"
+            ],
+            "type": "union",
+            "description": "Cryptographic proof of wallet ownership. The union is open to allow future proof methods (e.g. ERC-1271, ERC-6492). Each variant bundles its signature with the corresponding message format."
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 42,
+            "minLength": 42,
+            "description": "EVM wallet address (0x-prefixed, with EIP-55 checksum recommended)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created."
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content. The EIP-712 `proof` field proves wallet consent (orthogonal trust statement); `signatures` proves record provenance (e.g. that a platform UI minted this record)."
+          }
+        }
+      },
+      "description": "A verifiable link between an ATProto DID and an EVM wallet address, proven via a cryptographic signature. Currently supports EOA wallets via EIP-712 typed data signatures; the proof field is an open union to allow future signature methods."
+    },
+    "eip712Proof": {
+      "type": "object",
+      "required": [
+        "signature",
+        "message"
+      ],
+      "properties": {
+        "message": {
+          "ref": "#eip712Message",
+          "type": "ref",
+          "description": "The EIP-712 structured message fields that were signed."
+        },
+        "signature": {
+          "type": "string",
+          "maxLength": 132,
+          "minLength": 130,
+          "description": "ECDSA signature over the EIP-712 hash (hex-encoded with 0x prefix, 64 or 65 bytes)."
+        }
+      },
+      "description": "EOA wallet ownership proof via EIP-712 typed data signature. Contains both the structured message that was signed and the resulting signature."
+    },
+    "eip712Message": {
+      "type": "object",
+      "required": [
+        "did",
+        "evmAddress",
+        "chainId",
+        "timestamp",
+        "nonce"
+      ],
+      "properties": {
+        "did": {
+          "type": "string",
+          "format": "did",
+          "maxLength": 256,
+          "description": "The ATProto DID being linked to the EVM address."
+        },
+        "nonce": {
+          "type": "string",
+          "maxLength": 78,
+          "minLength": 1,
+          "description": "Replay-protection nonce (bigint serialized)."
+        },
+        "chainId": {
+          "type": "string",
+          "maxLength": 78,
+          "minLength": 1,
+          "description": "EVM chain ID as string (bigint serialized). Identifies which chain was used for signing; for EOA wallets the identity link applies across all EVM-compatible chains."
+        },
+        "timestamp": {
+          "type": "string",
+          "maxLength": 78,
+          "minLength": 1,
+          "description": "Unix timestamp when the attestation was created (bigint serialized)."
+        },
+        "evmAddress": {
+          "type": "string",
+          "maxLength": 42,
+          "minLength": 42,
+          "description": "The EVM wallet address (must match the top-level address field)."
+        }
+      },
+      "description": "The EIP-712 typed data message that was signed by the wallet. Contains the fields binding an ATProto DID to an EVM address on a specific chain."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

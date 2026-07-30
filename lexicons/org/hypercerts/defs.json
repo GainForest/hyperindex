@@ -1,0 +1,137 @@
+{
+  "id": "org.hypercerts.defs",
+  "defs": {
+    "uri": {
+      "type": "object",
+      "required": [
+        "uri"
+      ],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "format": "uri",
+          "description": "URI to external data"
+        }
+      },
+      "description": "Object containing a URI to external data"
+    },
+    "largeBlob": {
+      "type": "object",
+      "required": [
+        "blob"
+      ],
+      "properties": {
+        "blob": {
+          "type": "blob",
+          "accept": [
+            "*/*"
+          ],
+          "maxSize": 104857600,
+          "description": "Blob to external data (up to 100MB)"
+        }
+      },
+      "description": "Object containing a blob to external data"
+    },
+    "smallBlob": {
+      "type": "object",
+      "required": [
+        "blob"
+      ],
+      "properties": {
+        "blob": {
+          "type": "blob",
+          "accept": [
+            "*/*"
+          ],
+          "maxSize": 10485760,
+          "description": "Blob to external data (up to 10MB)"
+        }
+      },
+      "description": "Object containing a blob to external data"
+    },
+    "largeImage": {
+      "type": "object",
+      "required": [
+        "image"
+      ],
+      "properties": {
+        "image": {
+          "type": "blob",
+          "accept": [
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/webp"
+          ],
+          "maxSize": 10485760,
+          "description": "Image (up to 10MB)"
+        }
+      },
+      "description": "Object containing a large image"
+    },
+    "smallImage": {
+      "type": "object",
+      "required": [
+        "image"
+      ],
+      "properties": {
+        "image": {
+          "type": "blob",
+          "accept": [
+            "image/jpeg",
+            "image/jpg",
+            "image/png",
+            "image/webp"
+          ],
+          "maxSize": 5242880,
+          "description": "Image (up to 5MB)"
+        }
+      },
+      "description": "Object containing a small image"
+    },
+    "smallVideo": {
+      "type": "object",
+      "required": [
+        "video"
+      ],
+      "properties": {
+        "video": {
+          "type": "blob",
+          "accept": [
+            "video/mp4",
+            "video/webm"
+          ],
+          "maxSize": 20971520,
+          "description": "Video (up to 20MB)"
+        }
+      },
+      "description": "Object containing a small video"
+    },
+    "descriptionString": {
+      "type": "object",
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "type": "string",
+          "maxLength": 250000,
+          "description": "The description text (plain text or markdown).",
+          "maxGraphemes": 25000
+        },
+        "facets": {
+          "type": "array",
+          "items": {
+            "ref": "app.bsky.richtext.facet",
+            "type": "ref"
+          },
+          "description": "Rich text annotations for the description (mentions, URLs, hashtags, etc)."
+        }
+      },
+      "description": "An inline long-form description as plain text or markdown, with optional rich-text annotations."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1,
+  "description": "Common type definitions used across all Hypercerts protocols."
+}

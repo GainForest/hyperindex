@@ -1,0 +1,106 @@
+{
+  "id": "org.hypercerts.workscope.tag",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "createdAt"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Lowercase, underscore-separated machine-readable key for this scope (e.g., 'mangrove_restoration', 'biodiversity_monitoring'). Used as the canonical identifier in CEL expressions."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Human-readable name for this scope."
+          },
+          "parent": {
+            "ref": "com.atproto.repo.strongRef",
+            "type": "ref",
+            "description": "Optional strong reference to a parent work scope tag record for taxonomy/hierarchy support. The record referenced must conform with the lexicon org.hypercerts.workscope.tag."
+          },
+          "sameAs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048
+            },
+            "maxLength": 20,
+            "description": "URIs to semantically equivalent concepts in external ontologies or taxonomies (e.g., Wikidata QIDs, ENVO terms, SDG targets). Used for interoperability, not as documentation."
+          },
+          "status": {
+            "type": "string",
+            "maxLength": 20,
+            "description": "Lifecycle status of this tag. Communities propose tags, curators accept them, deprecated tags point to replacements via supersededBy. Values beyond the known set are permitted.",
+            "knownValues": [
+              "proposed",
+              "accepted",
+              "deprecated"
+            ]
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "maxLength": 50,
+            "description": "Alternative human-readable names for this scope (e.g., translations, abbreviations, or common synonyms). Unlike sameAs, these are plain-text labels, not links to external ontologies."
+          },
+          "category": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "Category type of this scope. Values beyond the known set are permitted.",
+            "knownValues": [
+              "topic",
+              "language",
+              "domain",
+              "method"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created."
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 10000,
+            "description": "Optional longer description of this scope.",
+            "maxGraphemes": 1000
+          },
+          "supersededBy": {
+            "ref": "com.atproto.repo.strongRef",
+            "type": "ref",
+            "description": "When status is 'deprecated', points to the replacement work scope tag record. The record referenced must conform with the lexicon org.hypercerts.workscope.tag."
+          },
+          "referenceDocument": {
+            "refs": [
+              "org.hypercerts.defs#uri",
+              "org.hypercerts.defs#smallBlob"
+            ],
+            "type": "union",
+            "description": "Link to a governance or reference document where this work scope tag is defined and further explained."
+          }
+        }
+      },
+      "description": "A reusable scope atom for work scope logic expressions. Scopes can represent topics, languages, domains, deliverables, methods, regions, tags, or other categorical labels. Tags are composed into structured expressions via CEL (Common Expression Language) on activity records."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}
