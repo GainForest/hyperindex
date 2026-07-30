@@ -1,0 +1,44 @@
+{
+  "id": "pub.leaflet.blocks.iframe",
+  "defs": {
+    "main": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "html": {
+          "type": "string",
+          "description": "DEPRECATED — use pub.leaflet.blocks.html instead. Inline HTML rendered via the iframe's srcdoc attribute. Takes precedence over url."
+        },
+        "height": {
+          "type": "integer",
+          "maximum": 1600,
+          "minimum": 16
+        },
+        "aspectRatio": {
+          "ref": "#aspectRatio",
+          "type": "ref"
+        }
+      }
+    },
+    "aspectRatio": {
+      "type": "object",
+      "required": [
+        "width",
+        "height"
+      ],
+      "properties": {
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

@@ -1,0 +1,72 @@
+{
+  "id": "org.hyperboards.displayProfile",
+  "defs": {
+    "main": {
+      "key": "literal:self",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "createdAt"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "description": "Default click-through link URL for this user across boards."
+          },
+          "image": {
+            "refs": [
+              "org.hypercerts.defs#uri",
+              "org.hypercerts.defs#smallImage"
+            ],
+            "type": "union",
+            "description": "Avatar or face image override for this user on hyperboards, as a URI or image blob."
+          },
+          "video": {
+            "refs": [
+              "org.hypercerts.defs#uri",
+              "org.hypercerts.defs#smallVideo"
+            ],
+            "type": "union",
+            "description": "Default video for this user across boards, as a URI (embed/direct link) or uploaded video blob."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created."
+          },
+          "hoverImage": {
+            "refs": [
+              "org.hypercerts.defs#uri",
+              "org.hypercerts.defs#smallImage"
+            ],
+            "type": "union",
+            "description": "Default hover image for this user across boards, as a URI or image blob."
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "displayName": {
+            "type": "string",
+            "maxLength": 640,
+            "description": "Display name override for this user on hyperboards.",
+            "maxGraphemes": 64
+          },
+          "hoverIframeUrl": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "description": "Default hover iframe URL for this user across boards."
+          }
+        }
+      },
+      "description": "User-declared visual presentation defaults for how a contributor appears on hyperboards. Stored in the contributor's own PDS and reusable across multiple boards."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

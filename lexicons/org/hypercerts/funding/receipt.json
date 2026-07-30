@@ -1,0 +1,105 @@
+{
+  "id": "org.hypercerts.funding.receipt",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "to",
+          "amount",
+          "currency",
+          "createdAt"
+        ],
+        "properties": {
+          "to": {
+            "refs": [
+              "#text",
+              "app.certified.defs#did",
+              "com.atproto.repo.strongRef"
+            ],
+            "type": "union",
+            "description": "The recipient of the funds (a free-text string, an account DID, or a strong reference to a record)."
+          },
+          "for": {
+            "ref": "com.atproto.repo.strongRef",
+            "type": "ref",
+            "description": "Optional strong reference to the activity, project, or organization this funding relates to."
+          },
+          "from": {
+            "refs": [
+              "#text",
+              "app.certified.defs#did",
+              "com.atproto.repo.strongRef"
+            ],
+            "type": "union",
+            "description": "The sender of the funds (a free-text string, an account DID, or a strong reference to a record). Optional — omit to represent anonymity."
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "Optional notes or additional context for this funding receipt."
+          },
+          "amount": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "Amount of funding received as a numeric string (e.g. '1000.50')."
+          },
+          "currency": {
+            "type": "string",
+            "maxLength": 10,
+            "description": "Currency of the payment (e.g. EUR, USD, ETH)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this receipt record was created."
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Timestamp when the payment occurred."
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "paymentRail": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "How the funds were transferred (e.g. bank_transfer, credit_card, onchain, cash, check, payment_processor)."
+          },
+          "transactionId": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Identifier of the underlying payment transaction (e.g. bank reference, onchain transaction hash, or processor-specific ID). Use paymentNetwork to specify the network where applicable."
+          },
+          "paymentNetwork": {
+            "type": "string",
+            "maxLength": 50,
+            "description": "Optional network within the payment rail (e.g. arbitrum, ethereum, sepa, visa, paypal)."
+          }
+        }
+      },
+      "description": "Records a funding receipt for a payment from one user to another user. It may be recorded by the recipient, by the sender, or by a third party. The sender may remain anonymous."
+    },
+    "text": {
+      "type": "object",
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "The string value."
+        }
+      },
+      "description": "A free-text string value (e.g. a display name, wallet address, or other identifier)."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

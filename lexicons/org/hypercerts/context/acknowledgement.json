@@ -1,0 +1,55 @@
+{
+  "id": "org.hypercerts.context.acknowledgement",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "subject",
+          "acknowledged",
+          "createdAt"
+        ],
+        "properties": {
+          "comment": {
+            "type": "string",
+            "maxLength": 10000,
+            "description": "Optional plain-text comment providing additional context or reasoning.",
+            "maxGraphemes": 1000
+          },
+          "context": {
+            "refs": [
+              "org.hypercerts.defs#uri",
+              "com.atproto.repo.strongRef"
+            ],
+            "type": "union",
+            "description": "Context for the acknowledgement (e.g. the collection that includes an activity, or the activity that includes a contributor). A URI for a lightweight reference or a strong reference for content-hash verification."
+          },
+          "subject": {
+            "ref": "com.atproto.repo.strongRef",
+            "type": "ref",
+            "description": "The record being acknowledged (e.g. an activity, a contributor information record, an evaluation)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created."
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "description": "Whether the relationship is acknowledged (true) or rejected (false)."
+          }
+        }
+      },
+      "description": "Acknowledges a record (subject) or its relationship in a context. Created in the acknowledging actor's repo to form a bidirectional link. Examples: a contributor acknowledging inclusion in an activity, an activity owner acknowledging inclusion in a collection, or a record owner acknowledging an evaluation."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

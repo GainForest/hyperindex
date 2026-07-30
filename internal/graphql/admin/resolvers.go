@@ -79,8 +79,8 @@ func NewResolver(repos *Repositories, domainDID string, adminDIDs []string) *Res
 	}
 }
 
-// SetFilesystemLexicons supplies the immutable filesystem baseline used to
-// verify that staged database Lexicon changes will form a valid startup set.
+// SetFilesystemLexicons supplies the immutable bundled and filesystem baseline
+// used to verify that staged database Lexicon changes form a valid startup set.
 func (r *Resolver) SetFilesystemLexicons(saved map[string][]byte) {
 	r.lexiconMutationMu.Lock()
 	defer r.lexiconMutationMu.Unlock()

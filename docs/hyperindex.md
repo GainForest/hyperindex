@@ -90,9 +90,9 @@ Use the generic `records(collection: ...)` query or `search(...)` when you need 
 | `validatedAt` | Timestamp of the most recent local validation classification |
 | `lexiconHash` | SHA-256 validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used for classification |
 
-Validation is local-only. During normal ingestion Hyperindex uses Indigo to validate against the Lexicons loaded at startup and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources.
+Validation is local-only. Hyperindex starts with a CID-pinned bundle of stable Hypercerts Lexicons, then applies optional `LEXICON_DIR` overrides and saved database overrides. During normal ingestion it uses Indigo to validate against that startup set and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources.
 
-Public typed GraphQL, record validation, startup record refresh, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Uploading, registering, or deleting a Lexicon changes only the saved configuration; restart or redeploy Hyperindex to apply the change to all of those runtime surfaces together. In a multi-replica deployment, coordinate a Lexicon-changing rollout so old-snapshot and new-snapshot backend replicas never serve concurrently against the shared validation metadata.
+Public typed GraphQL, record validation, startup record refresh, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Uploading, registering, or deleting a database Lexicon changes only the saved configuration; restart or redeploy Hyperindex to apply the change to all of those runtime surfaces together. Deleting a database override reveals the bundled or directory version after restart. In a multi-replica deployment, coordinate a Lexicon-changing rollout so old-snapshot and new-snapshot backend replicas never serve concurrently against the shared validation metadata.
 
 The generic `recordEvents` subscription receives all observed raw create/update/delete events, including events for invalid or unknown-schema records. Typed collection subscriptions filter that stream to valid create/update rows and deletes that were valid before removal.
 

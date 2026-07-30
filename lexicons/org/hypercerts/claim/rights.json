@@ -1,0 +1,57 @@
+{
+  "id": "org.hypercerts.claim.rights",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "rightsName",
+          "rightsType",
+          "rightsDescription",
+          "createdAt"
+        ],
+        "properties": {
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created"
+          },
+          "attachment": {
+            "refs": [
+              "org.hypercerts.defs#uri",
+              "org.hypercerts.defs#smallBlob"
+            ],
+            "type": "union",
+            "description": "An attachment to define the rights further, e.g. a legal document."
+          },
+          "rightsName": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Human-readable name for these rights (e.g. 'All Rights Reserved', 'CC BY-SA 4.0')"
+          },
+          "rightsType": {
+            "type": "string",
+            "maxLength": 10,
+            "description": "Short identifier code for this rights type (e.g. 'ARR', 'CC-BY-SA') to facilitate filtering and search"
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "rightsDescription": {
+            "type": "string",
+            "maxLength": 10000,
+            "description": "Detailed explanation of the rights holders' permissions, restrictions, and conditions",
+            "maxGraphemes": 1000
+          }
+        }
+      },
+      "description": "Describes the rights that a contributor and/or an owner has, such as whether the hypercert can be sold, transferred, and under what conditions."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

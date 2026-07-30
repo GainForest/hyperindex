@@ -12,6 +12,7 @@
 
 - Backend entrypoint: `cmd/hyperindex/`
 - Backend database schema source of truth: `internal/database/migrations/`
+- Bundled Hypercerts Lexicons: `lexicons/`, with Atmosphere URI/CID pins in `lexicons.json`
 - Frontend app: `client/`
 - Tap ingestion support is available and should be preferred for new record ingestion work when applicable; Jetstream + backfill is the legacy record path.
 - External ATProto labeler ingestion lives in `internal/labeler/` and stores raw label events in dedicated external label tables; labels are exposed through public GraphQL query and record fields.
@@ -29,6 +30,7 @@
 - `make dev` — run backend with hot reload (`air` required)
 - `make test` — run Go tests with `-race`
 - `make smoke-tap-local` — run a full isolated local Tap Docker stack and API smoke tests using `app.certified.actor.profile` as the Tap signal collection and `app.certified.*,org.hypercerts.*` as Tap collection filters
+- `make lexicons-check` — verify bundled Lexicon files against the URI/CID pins in `lexicons.json` using `@atproto/lex`
 - `go test -v -run TestName ./...` — run a single Go test by name
 - `go test -v ./path/to/package/...` — run one Go package
 - `go test -v -race -tags=integration ./internal/integration/...` — run integration tests
@@ -89,6 +91,7 @@ Run verification based on what changed.
 
 - `ADMIN_API_KEY` is required at startup.
 - `SECRET_KEY_BASE` must be at least 64 characters.
+- Hyperindex always loads the CID-pinned `lexicons/` bundle. `LEXICON_DIR` documents override matching bundled NSIDs, and database Lexicons override both.
 - `TAP_ENABLED=true` switches record ingestion to Tap mode. After Tap becomes healthy, Hyperindex runs one bounded background pass that fills missing `actor.handle` values from Tap's local `/info/:did` metadata without delaying API startup.
 - `LABELER_SUBSCRIBE_ENABLED=true` with `LABELER_SUBSCRIBE_URLS` starts optional external `com.atproto.label.subscribeLabels` ingestion.
 - Migrations run automatically on startup.

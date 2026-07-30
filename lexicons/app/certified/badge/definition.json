@@ -1,0 +1,76 @@
+{
+  "id": "app.certified.badge.definition",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "title",
+          "badgeType",
+          "createdAt"
+        ],
+        "properties": {
+          "icon": {
+            "type": "blob",
+            "accept": [
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "image/svg+xml"
+            ],
+            "maxSize": 1048576,
+            "description": "Icon representing the badge, stored as a blob for compact visual display."
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Human-readable title of the badge."
+          },
+          "badgeType": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Category of the badge. Values beyond the known set are permitted.",
+            "knownValues": [
+              "endorsement",
+              "verification",
+              "participation",
+              "certification",
+              "affiliation",
+              "recognition"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created"
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000,
+            "description": "Optional short statement describing what the badge represents.",
+            "maxGraphemes": 500
+          },
+          "allowedIssuers": {
+            "type": "array",
+            "items": {
+              "ref": "app.certified.defs#did",
+              "type": "ref"
+            },
+            "maxLength": 100,
+            "description": "Optional allowlist of DIDs allowed to issue this badge. If omitted, anyone may issue it."
+          }
+        }
+      },
+      "description": "Defines a badge that can be awarded via badge award records to users, projects, or activity claims."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

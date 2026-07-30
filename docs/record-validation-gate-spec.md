@@ -84,20 +84,21 @@ Every attempted classification sets `validated_at`, including invalid, unknown-s
 Startup performs these steps before serving HTTP or starting ingestion consumers:
 
 1. Run database migrations.
-2. Load filesystem Lexicons.
-3. Load database Lexicons, overriding filesystem documents with the same NSID.
-4. Parse the selected documents into the internal registry used by GraphQL.
-5. Add the same documents to an Indigo catalog.
-6. Validate complete local reference closure.
-7. Compute exact per-Lexicon hashes and transitive collection fingerprints.
-8. Mark stored collections absent from the snapshot as `unknown_schema`.
-9. Refresh missing or stale validation metadata for active collections.
-10. Build and expose GraphQL from the snapshot registry.
-11. Start Tap or Jetstream using the same startup collection set unless configuration provides an explicit collection override.
+2. Load the CID-pinned Lexicons bundled in the binary.
+3. Load optional `LEXICON_DIR` documents, overriding bundled documents with the same NSID.
+4. Load database Lexicons, overriding bundled and directory documents with the same NSID.
+5. Parse the selected documents into the internal registry used by GraphQL.
+6. Add the same documents to an Indigo catalog.
+7. Validate complete local reference closure.
+8. Compute exact per-Lexicon hashes and transitive collection fingerprints.
+9. Mark stored collections absent from the snapshot as `unknown_schema`.
+10. Refresh missing or stale validation metadata for active collections.
+11. Build and expose GraphQL from the snapshot registry.
+12. Start Tap or Jetstream using the same startup collection set unless configuration provides an explicit collection override.
 
 The registry, Indigo catalog, hashes, and generated schema remain fixed for the process lifetime.
 
-Filesystem JSON files that do not declare a Lexicon are ignored. Malformed JSON or malformed Lexicon documents fail startup with the file path rather than silently disappearing from the active schema.
+Bundled Lexicons are installed from the Atmosphere with `@atproto/lex` and pinned by URI and CID in `lexicons.json`. Filesystem JSON files that do not declare a Lexicon are ignored. Malformed JSON or malformed Lexicon documents fail startup with the file path rather than silently disappearing from the active schema.
 
 ## Indigo-backed validation
 
@@ -246,7 +247,7 @@ Before upload or registration persists anything, Hyperindex:
 
 ZIP upload validates all candidates before one transactional batch save. Duplicate IDs, ID mismatches, invalid schemas, and unresolved prospective references persist nothing.
 
-Delete also validates the prospective set. A helper Lexicon cannot be deleted while another saved Lexicon would retain a broken reference. Deleting a database override may reveal a valid filesystem Lexicon with the same NSID.
+Delete also validates the prospective set. A helper Lexicon cannot be deleted while another saved Lexicon would retain a broken reference. Deleting a database override may reveal a valid bundled or filesystem Lexicon with the same NSID.
 
 Mutation return types remain compatible. Logs, admin descriptions, and frontend copy tell operators to restart or redeploy. The running GraphQL schema, validator, validation metadata, backfill defaults, and Jetstream defaults do not change until restart.
 

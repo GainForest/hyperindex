@@ -27,6 +27,12 @@ Last updated on 2026-07-30 for pending record validation gate and record author 
 | `appCertifiedLinkEvmByUri` | uri: `String!` | Get a single app.certified.link.evm by AT-URI |
 | `appCertifiedLocation` | after: `String`, before: `String`, first: `Int`, last: `Int`, sortBy: `AppCertifiedLocationSortField`, sortDirection: `SortDirection`, where: `AppCertifiedLocationWhereInput` | Query app.certified.location records |
 | `appCertifiedLocationByUri` | uri: `String!` | Get a single app.certified.location by AT-URI |
+| `appCertifiedSignatureProof` | after: `String`, before: `String`, first: `Int`, last: `Int`, sortBy: `AppCertifiedSignatureProofSortField`, sortDirection: `SortDirection`, where: `AppCertifiedSignatureProofWhereInput` | Query app.certified.signature.proof records |
+| `appCertifiedSignatureProofByUri` | uri: `String!` | Get a single app.certified.signature.proof by AT-URI |
+| `orgHyperboardsBoard` | after: `String`, before: `String`, first: `Int`, last: `Int`, sortBy: `OrgHyperboardsBoardSortField`, sortDirection: `SortDirection`, where: `OrgHyperboardsBoardWhereInput` | Query org.hyperboards.board records |
+| `orgHyperboardsBoardByUri` | uri: `String!` | Get a single org.hyperboards.board by AT-URI |
+| `orgHyperboardsDisplayProfile` | after: `String`, before: `String`, first: `Int`, last: `Int`, sortBy: `OrgHyperboardsDisplayProfileSortField`, sortDirection: `SortDirection`, where: `OrgHyperboardsDisplayProfileWhereInput` | Query org.hyperboards.displayProfile records |
+| `orgHyperboardsDisplayProfileByUri` | uri: `String!` | Get a single org.hyperboards.displayProfile by AT-URI |
 | `orgHypercertsClaimActivity` | after: `String`, before: `String`, first: `Int`, last: `Int`, sortBy: `OrgHypercertsClaimActivitySortField`, sortDirection: `SortDirection`, where: `OrgHypercertsClaimActivityWhereInput` | Query org.hypercerts.claim.activity records |
 | `orgHypercertsClaimActivityByUri` | uri: `String!` | Get a single org.hypercerts.claim.activity by AT-URI |
 | `orgHypercertsClaimContribution` | after: `String`, before: `String`, first: `Int`, last: `Int`, sortBy: `OrgHypercertsClaimContributionSortField`, sortDirection: `SortDirection`, where: `OrgHypercertsClaimContributionWhereInput` | Query org.hypercerts.claim.contribution records |
@@ -69,6 +75,9 @@ Last updated on 2026-07-30 for pending record validation gate and record author 
 | `app.certified.graph.follow` | `appCertifiedGraphFollow` | `appCertifiedGraphFollowByUri` | `AppCertifiedGraphFollow` |
 | `app.certified.link.evm` | `appCertifiedLinkEvm` | `appCertifiedLinkEvmByUri` | `AppCertifiedLinkEvm` |
 | `app.certified.location` | `appCertifiedLocation` | `appCertifiedLocationByUri` | `AppCertifiedLocation` |
+| `app.certified.signature.proof` | `appCertifiedSignatureProof` | `appCertifiedSignatureProofByUri` | `AppCertifiedSignatureProof` |
+| `org.hyperboards.board` | `orgHyperboardsBoard` | `orgHyperboardsBoardByUri` | `OrgHyperboardsBoard` |
+| `org.hyperboards.displayProfile` | `orgHyperboardsDisplayProfile` | `orgHyperboardsDisplayProfileByUri` | `OrgHyperboardsDisplayProfile` |
 | `org.hypercerts.claim.activity` | `orgHypercertsClaimActivity` | `orgHypercertsClaimActivityByUri` | `OrgHypercertsClaimActivity` |
 | `org.hypercerts.claim.contribution` | `orgHypercertsClaimContribution` | `orgHypercertsClaimContributionByUri` | `OrgHypercertsClaimContribution` |
 | `org.hypercerts.claim.contributorInformation` | `orgHypercertsClaimContributorInformation` | `orgHypercertsClaimContributorInformationByUri` | `OrgHypercertsClaimContributorInformation` |
@@ -83,6 +92,8 @@ Last updated on 2026-07-30 for pending record validation gate and record author 
 
 Typed list queries accept Relay-style pagination arguments (`first`, `after`, `last`, `before`), plus `where`, `sortBy`, and `sortDirection` when the collection exposes those inputs. Typed list queries, typed single-record queries, typed collection counts, relationship hydration, and typed create/update subscriptions only expose rows whose saved validation status is `valid`. Typed delete subscriptions emit only for rows that were valid before deletion. Typed single-record queries return `null` when a raw row exists but is `invalid`, `unknown_schema`, or `validation_error`.
 
+Generated record metadata reserves `uri`, `cid`, `did`, `rkey`, `externalLabels`, `author`, `authorLabels`, and `certifiedProfileData`. A top-level Lexicon property with one of those names is omitted from the typed object and its generated filter. `app.certified.signature.proof` currently has this conflict: typed `cid` is the indexed proof record's own CID, while the schema's attested-content `cid` is available only in generic record/search JSON.
+
 ## Record validation gate
 
 Hyperindex stores every observed AT Protocol record in the raw `record` table. Validation metadata controls whether the row is safe to serve through generated, typed GraphQL fields:
@@ -94,7 +105,7 @@ Hyperindex stores every observed AT Protocol record in the raw `record` table. V
 | `unknown_schema` | Hidden | The startup snapshot contains no saved Lexicon for the collection. |
 | `validation_error` | Hidden | Hyperindex could not complete validation against the startup snapshot because of malformed data, an incomplete local Lexicon set, or an internal validation error. |
 
-Validation uses saved Lexicons only. Normal ingestion does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or any other remote schema source while classifying records.
+Validation uses the CID-pinned bundled Lexicons plus optional directory and database overrides selected at startup. Normal ingestion does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or any other remote schema source while classifying records.
 
 The generic `records(collection: ...)` query returns all raw records for the collection, including rows hidden from typed GraphQL. `search(...)` uses the same raw visibility and metadata contract. Generic record nodes expose these validation metadata fields:
 
@@ -105,7 +116,7 @@ The generic `records(collection: ...)` query returns all raw records for the col
 | `validatedAt` | `String` | Timestamp when Hyperindex last classified the record against its saved startup Lexicon snapshot. |
 | `lexiconHash` | `String` | SHA-256 validation fingerprint for the exact saved collection Lexicon bytes and transitive referenced Lexicons in that startup snapshot. |
 
-Public typed GraphQL, Indigo record validation, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Lexicon upload/register/delete changes only saved configuration; restart or redeploy Hyperindex to apply the change everywhere together.
+Public typed GraphQL, Indigo record validation, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. The bundled set is the baseline, `LEXICON_DIR` may override it, and saved database documents override both. Lexicon upload/register/delete changes only saved database configuration; restart or redeploy Hyperindex to apply the change everywhere together.
 
 Generic `recordEvents` receives all observed raw events. Typed collection subscriptions filter those events to valid create/update records and deletes that were valid before removal.
 

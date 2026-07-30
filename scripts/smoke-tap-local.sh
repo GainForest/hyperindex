@@ -127,8 +127,8 @@ if ! docker compose version >/dev/null 2>&1; then
   fail "Docker Compose v2 is required. Install Docker with the 'docker compose' plugin and ensure the Docker daemon is running."
 fi
 
-if [[ ! -f "${repo_root}/testdata/lexicons/app/certified/graph/follow.json" ]]; then
-  fail "missing app.certified.graph.follow lexicon fixture"
+if [[ ! -f "${repo_root}/lexicons.json" || ! -f "${repo_root}/lexicons/app/certified/graph/follow.json" ]]; then
+  fail "missing CID-pinned bundled Lexicons; run 'npx --yes @atproto/lex@0.3.0 install --ci'"
 fi
 
 if [[ -z "${ADMIN_API_KEY}" ]]; then
@@ -156,7 +156,7 @@ Hyperindex port: ${HYPERINDEX_HOST_PORT}
 Tap admin port:  ${TAP_HOST_PORT}
 Tap signal:      ${TAP_SIGNAL_COLLECTION}
 Tap filters:     ${TAP_COLLECTION_FILTERS}
-Lexicons:        ${repo_root}/testdata/lexicons mounted at /app/testdata/lexicons
+Lexicons:        CID-pinned bundle embedded in the Hyperindex binary
 EOF
 
 "${compose[@]}" up --build -d

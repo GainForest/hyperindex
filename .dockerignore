@@ -13,6 +13,8 @@
 !cmd/**
 !internal
 !internal/**
+!lexicons
+!lexicons/**
 
 # Test files are not needed to compile the production backend image.
 **/*_test.go

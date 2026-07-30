@@ -1,0 +1,51 @@
+{
+  "id": "org.hypercerts.claim.contribution",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "createdAt"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Role or title of the contributor."
+          },
+          "endDate": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When this contribution finished. Should fall within the parent hypercert's timeframe."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created."
+          },
+          "startDate": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When this contribution started. Should fall within the parent hypercert's timeframe."
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "contributionDescription": {
+            "type": "string",
+            "maxLength": 10000,
+            "description": "Description of what the contribution concretely involved.",
+            "maxGraphemes": 1000
+          }
+        }
+      },
+      "description": "Details about a specific contribution including role, description, and timeframe."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

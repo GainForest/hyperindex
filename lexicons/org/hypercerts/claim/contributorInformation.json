@@ -1,0 +1,48 @@
+{
+  "id": "org.hypercerts.claim.contributorInformation",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "createdAt"
+        ],
+        "properties": {
+          "image": {
+            "refs": [
+              "org.hypercerts.defs#uri",
+              "org.hypercerts.defs#smallImage"
+            ],
+            "type": "union",
+            "description": "The contributor visual representation as a URI or image blob."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created."
+          },
+          "identifier": {
+            "type": "string",
+            "maxLength": 2048,
+            "description": "DID (did:plc:...) or URI to a social profile of the contributor."
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "displayName": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Human-readable name for the contributor as it should appear in UI."
+          }
+        }
+      },
+      "description": "Contributor information including identifier, display name, and image."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

@@ -1,0 +1,97 @@
+{
+  "id": "app.certified.actor.organization",
+  "defs": {
+    "main": {
+      "key": "literal:self",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "createdAt"
+        ],
+        "properties": {
+          "urls": {
+            "type": "array",
+            "items": {
+              "ref": "#urlItem",
+              "type": "ref"
+            },
+            "description": "Additional reference URLs (social media profiles, contact pages, donation links, etc.) with a display label for each URL."
+          },
+          "location": {
+            "ref": "com.atproto.repo.strongRef",
+            "type": "ref",
+            "description": "A strong reference to the location where the organization is based. The record referenced must conform with the lexicon app.certified.location."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created."
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "visibility": {
+            "type": "string",
+            "description": "Controls whether the organization or project is publicly discoverable on platforms that honor this setting.",
+            "knownValues": [
+              "public",
+              "unlisted"
+            ]
+          },
+          "foundedDate": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When the organization was established. Stored as datetime per ATProto conventions (no date-only format exists). Clients should use midnight UTC (e.g., '2005-01-01T00:00:00.000Z'); consumers should treat only the date portion as canonical."
+          },
+          "longDescription": {
+            "refs": [
+              "org.hypercerts.defs#descriptionString",
+              "pub.leaflet.pages.linearDocument",
+              "com.atproto.repo.strongRef"
+            ],
+            "type": "union",
+            "description": "Long-form description of the organization, such as its mission, history, or detailed project narrative. An inline string for plain text or markdown, a Leaflet linear document record embedded directly, or a strong reference to an existing document record."
+          },
+          "organizationType": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 128,
+              "maxGraphemes": 100
+            },
+            "maxLength": 10,
+            "description": "Legal or operational structures of the organization (e.g. 'nonprofit', 'ngo', 'government', 'social-enterprise', 'cooperative')."
+          }
+        }
+      },
+      "description": "Extended metadata for an organization actor. Complements the base actor profile with organization-specific fields like legal structure and reference links."
+    },
+    "urlItem": {
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 10000,
+          "description": "The URL.",
+          "maxGraphemes": 2048
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 640,
+          "description": "Optional human-readable label for this URL (e.g. 'Support page', 'Donation page').",
+          "maxGraphemes": 64
+        }
+      },
+      "description": "A labeled URL reference."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

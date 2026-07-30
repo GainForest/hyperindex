@@ -1,6 +1,4 @@
+# Local Tap smoke tests intentionally use the CID-pinned Lexicons embedded in
+# the Hyperindex binary so the smoke environment matches production startup.
 services:
-  hyperindex:
-    environment:
-      LEXICON_DIR: /app/testdata/lexicons
-    volumes:
-      - ./testdata/lexicons:/app/testdata/lexicons:ro
+  hyperindex: {}

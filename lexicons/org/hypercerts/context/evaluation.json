@@ -1,0 +1,109 @@
+{
+  "id": "org.hypercerts.context.evaluation",
+  "defs": {
+    "main": {
+      "key": "tid",
+      "type": "record",
+      "record": {
+        "type": "object",
+        "required": [
+          "evaluators",
+          "summary",
+          "createdAt"
+        ],
+        "properties": {
+          "score": {
+            "ref": "#score",
+            "type": "ref",
+            "description": "Optional overall score for this evaluation on a numeric scale."
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "refs": [
+                "org.hypercerts.defs#uri",
+                "org.hypercerts.defs#smallBlob"
+              ],
+              "type": "union"
+            },
+            "maxLength": 100,
+            "description": "Evaluation data (URIs or blobs) containing detailed reports or methodology"
+          },
+          "subject": {
+            "ref": "com.atproto.repo.strongRef",
+            "type": "ref",
+            "description": "A strong reference to what is being evaluated (e.g. activity, measurement, contribution, etc.)"
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 5000,
+            "description": "Brief evaluation summary",
+            "maxGraphemes": 1000
+          },
+          "location": {
+            "ref": "com.atproto.repo.strongRef",
+            "type": "ref",
+            "description": "An optional reference for georeferenced evaluations. The record referenced must conform with the lexicon app.certified.location."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Client-declared timestamp when this record was originally created"
+          },
+          "evaluators": {
+            "type": "array",
+            "items": {
+              "ref": "app.certified.defs#did",
+              "type": "ref"
+            },
+            "maxLength": 1000,
+            "description": "DIDs of the evaluators"
+          },
+          "signatures": {
+            "ref": "app.certified.signature.defs#list",
+            "type": "ref",
+            "description": "Optional cryptographic signatures attesting to this record's content."
+          },
+          "measurements": {
+            "type": "array",
+            "items": {
+              "ref": "com.atproto.repo.strongRef",
+              "type": "ref"
+            },
+            "maxLength": 100,
+            "description": "Optional references to the measurements that contributed to this evaluation. The record(s) referenced must conform with the lexicon org.hypercerts.context.measurement"
+          }
+        }
+      },
+      "description": "An evaluation of a hypercert record (e.g. an activity and its impact)."
+    },
+    "score": {
+      "type": "object",
+      "required": [
+        "min",
+        "max",
+        "value"
+      ],
+      "properties": {
+        "max": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "Maximum value of the scale as a numeric string (e.g. '5', '10')."
+        },
+        "min": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "Minimum value of the scale as a numeric string (e.g. '0', '1')."
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "Score within the inclusive range [min, max] as a numeric string (e.g. '3.7')."
+        }
+      },
+      "description": "Overall score for an evaluation on a numeric scale."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}
