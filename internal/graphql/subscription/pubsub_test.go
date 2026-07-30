@@ -14,6 +14,7 @@ func TestPubSub_SubscribeUnsubscribe(t *testing.T) {
 	sub := ps.Subscribe("")
 	if sub == nil {
 		t.Fatal("Subscribe returned nil")
+		return
 	}
 
 	if ps.SubscriberCount() != 1 {

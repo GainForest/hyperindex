@@ -48,6 +48,7 @@ func TestParseSimpleRecordLexicon(t *testing.T) {
 	textProp := lexicon.Defs.Main.GetProperty("text")
 	if textProp == nil {
 		t.Fatal("Expected 'text' property")
+		return
 	}
 	if !textProp.Required {
 		t.Error("Expected 'text' to be required")
@@ -57,6 +58,7 @@ func TestParseSimpleRecordLexicon(t *testing.T) {
 	createdAtProp := lexicon.Defs.Main.GetProperty("createdAt")
 	if createdAtProp == nil {
 		t.Fatal("Expected 'createdAt' property")
+		return
 	}
 	if createdAtProp.Required {
 		t.Error("Expected 'createdAt' to be optional")
