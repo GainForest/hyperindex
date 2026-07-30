@@ -290,10 +290,6 @@ func (b *Backfiller) resolveAndGroupByPDS(ctx context.Context, repos []string) m
 				PDS:    doc.GetPDSEndpoint(),
 			}
 
-			// Default handle to DID if not found
-			if data.Handle == "" {
-				data.Handle = did
-			}
 			// Default PDS if not found
 			if data.PDS == "" {
 				data.PDS = "https://bsky.social"
@@ -682,8 +678,9 @@ func (b *Backfiller) BackfillActor(ctx context.Context, did string) (int, error)
 		return 0, err
 	}
 
-	// Ensure actor exists
-	if err := b.actorsRepo.Upsert(ctx, data.DID, data.Handle); err != nil {
+	// Persist resolved identity metadata when available. A DID document without
+	// a handle must not erase a newer handle already populated by Tap.
+	if err := b.storeResolvedActor(ctx, data); err != nil {
 		slog.Warn("[backfill] Failed to upsert actor", "did", did, "error", err)
 	}
 
@@ -757,6 +754,13 @@ func (b *Backfiller) BackfillActor(ctx context.Context, did string) (int, error)
 	)
 
 	return len(filteredRecords), nil
+}
+
+func (b *Backfiller) storeResolvedActor(ctx context.Context, data *AtprotoData) error {
+	if strings.TrimSpace(data.Handle) == "" {
+		return b.actorsRepo.Ensure(ctx, data.DID)
+	}
+	return b.actorsRepo.UpsertIdentity(ctx, data.DID, data.Handle)
 }
 
 // backfillActorLegacy uses per-collection listRecords (fallback).

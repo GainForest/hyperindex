@@ -222,6 +222,38 @@ func TestIndexHandler_HandleRecord_Create_UpsertActor(t *testing.T) {
 	}
 }
 
+func TestIndexHandler_HandleRecord_PreservesIdentityHandle(t *testing.T) {
+	handler, db, _ := setupHandler(t)
+	ctx := context.Background()
+
+	if err := handler.HandleIdentity(ctx, &tap.IdentityEvent{
+		DID:      "did:plc:alice",
+		Handle:   "alice.example",
+		IsActive: true,
+		Status:   "active",
+	}); err != nil {
+		t.Fatalf("HandleIdentity() error = %v", err)
+	}
+	if err := handler.HandleRecord(ctx, &tap.RecordEvent{
+		DID:        "did:plc:alice",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post-after-identity",
+		Action:     tap.ActionCreate,
+		CID:        "bafyreipreservehandle",
+		Record:     json.RawMessage(`{"text":"hello"}`),
+	}); err != nil {
+		t.Fatalf("HandleRecord() error = %v", err)
+	}
+
+	actor, err := db.Actors.GetByDID(ctx, "did:plc:alice")
+	if err != nil {
+		t.Fatalf("GetByDID() error = %v", err)
+	}
+	if actor.Handle != "alice.example" {
+		t.Fatalf("actor.Handle = %q, want alice.example", actor.Handle)
+	}
+}
+
 func TestIndexHandler_HandleRecord_ActivityLogged(t *testing.T) {
 	handler, db, _ := setupHandler(t)
 	ctx := context.Background()

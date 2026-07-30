@@ -376,8 +376,9 @@ func (r *Resolver) BackfillActor(ctx context.Context, did string) (bool, error) 
 		return false, fmt.Errorf("invalid DID format")
 	}
 
-	// Ensure actor exists (creates if not)
-	if err := r.repos.Actors.Upsert(ctx, did, ""); err != nil {
+	// Ensure the actor exists without erasing identity metadata already stored
+	// for an actor being re-backfilled.
+	if err := r.repos.Actors.Ensure(ctx, did); err != nil {
 		return false, fmt.Errorf("failed to register actor: %w", err)
 	}
 
