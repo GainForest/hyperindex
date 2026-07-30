@@ -222,6 +222,38 @@ func TestIndexHandler_HandleRecord_Create_UpsertActor(t *testing.T) {
 	}
 }
 
+func TestIndexHandler_HandleRecord_PreservesIdentityHandle(t *testing.T) {
+	handler, db, _ := setupHandler(t)
+	ctx := context.Background()
+
+	if err := handler.HandleIdentity(ctx, &tap.IdentityEvent{
+		DID:      "did:plc:alice",
+		Handle:   "alice.example",
+		IsActive: true,
+		Status:   "active",
+	}); err != nil {
+		t.Fatalf("HandleIdentity() error = %v", err)
+	}
+	if err := handler.HandleRecord(ctx, &tap.RecordEvent{
+		DID:        "did:plc:alice",
+		Collection: "app.bsky.feed.post",
+		RKey:       "post-after-identity",
+		Action:     tap.ActionCreate,
+		CID:        "bafyreipreservehandle",
+		Record:     json.RawMessage(`{"text":"hello"}`),
+	}); err != nil {
+		t.Fatalf("HandleRecord() error = %v", err)
+	}
+
+	actor, err := db.Actors.GetByDID(ctx, "did:plc:alice")
+	if err != nil {
+		t.Fatalf("GetByDID() error = %v", err)
+	}
+	if actor.Handle != "alice.example" {
+		t.Fatalf("actor.Handle = %q, want alice.example", actor.Handle)
+	}
+}
+
 func TestIndexHandler_HandleRecord_ActivityLogged(t *testing.T) {
 	handler, db, _ := setupHandler(t)
 	ctx := context.Background()
@@ -596,6 +628,50 @@ func TestIndexHandler_HandleIdentity_PurgePolicy(t *testing.T) {
 				t.Fatalf("expected updated handle %q, got %q", "new-handle.bsky.social", actor.Handle)
 			}
 		})
+	}
+}
+
+func TestIndexHandler_HandleIdentity_PurgeRollsBackWhenActorDeleteFails(t *testing.T) {
+	handler, db, _ := setupHandler(t)
+	ctx := context.Background()
+	did := "did:plc:atomic-purge"
+	uri := "at://did:plc:atomic-purge/app.certified.actor.profile/p1"
+
+	if err := db.Actors.Upsert(ctx, did, "atomic-purge.bsky.social"); err != nil {
+		t.Fatalf("failed to seed actor: %v", err)
+	}
+	if _, err := db.Records.Insert(ctx, uri, "bafyreiatomicpurge", did, "app.certified.actor.profile", `{"displayName":"Atomic Purge"}`); err != nil {
+		t.Fatalf("failed to seed record: %v", err)
+	}
+	if _, err := db.Executor.Exec(ctx, `
+		CREATE TRIGGER fail_atomic_purge_actor_delete
+		BEFORE DELETE ON actor
+		WHEN OLD.did = 'did:plc:atomic-purge'
+		BEGIN
+			SELECT RAISE(ABORT, 'injected actor delete failure');
+		END
+	`, nil); err != nil {
+		t.Fatalf("failed to create actor delete trigger: %v", err)
+	}
+
+	err := handler.HandleIdentity(ctx, &tap.IdentityEvent{
+		DID:      did,
+		IsActive: false,
+		Status:   "deleted",
+	})
+	if err == nil {
+		t.Fatal("HandleIdentity returned nil error, want actor delete failure")
+	}
+
+	records, err := db.Records.GetByDID(ctx, did)
+	if err != nil {
+		t.Fatalf("GetByDID(records) error: %v", err)
+	}
+	if len(records) != 1 || records[0].URI != uri {
+		t.Fatalf("expected record delete rolled back, got records=%v", records)
+	}
+	if _, err := db.Actors.GetByDID(ctx, did); err != nil {
+		t.Fatalf("expected actor retained after failed purge: %v", err)
 	}
 }
 

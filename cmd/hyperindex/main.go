@@ -787,7 +787,7 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 				allowedOrigins[i] = strings.TrimSpace(allowedOrigins[i])
 			}
 		}
-		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema(), pubsub, allowedOrigins)
+		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema(), pubsub, repos, allowedOrigins)
 		r.Handle("/graphql/ws", subscriptionHandler)
 		slog.Info("GraphQL subscriptions enabled", "path", "/graphql/ws")
 	}
@@ -990,6 +990,41 @@ func startTap(
 	tapHTTPURL := strings.Replace(strings.Replace(tapURL, "ws://", "http://", 1), "wss://", "https://", 1)
 	adminClient := tap.NewAdminClient(tapHTTPURL, cfg.TapAdminPassword)
 	bg.tapAdminClient = adminClient
+
+	// Reconcile handles that older record events may have overwritten. Wait for
+	// Tap to become healthy, then perform one bounded, idempotent pass in the
+	// background without delaying API startup.
+	go func() {
+		const healthRetryInterval = 5 * time.Second
+		for {
+			if err := adminClient.Health(tapCtx); err == nil {
+				break
+			} else {
+				slog.Debug("Waiting for Tap before actor handle reconciliation", "error", err)
+			}
+			select {
+			case <-tapCtx.Done():
+				return
+			case <-time.After(healthRetryInterval):
+			}
+		}
+
+		slog.Info("Starting actor handle reconciliation from Tap")
+		stats, err := tap.ReconcileActorHandles(tapCtx, svc.actors, adminClient)
+		if err != nil {
+			if tapCtx.Err() == nil {
+				slog.Error("Actor handle reconciliation failed", "error", err)
+			}
+			return
+		}
+		slog.Info("Actor handle reconciliation complete",
+			"scanned", stats.Scanned,
+			"updated", stats.Updated,
+			"unresolved", stats.Unresolved,
+			"already_resolved", stats.AlreadyResolved,
+			"failed", stats.Failed,
+		)
+	}()
 
 	// Wire admin backfill callbacks to use Tap's /repos/add API.
 	if adminHandler != nil {

@@ -119,6 +119,8 @@ TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.ym
 
 Tap Docker deployments also require `ADMIN_API_KEY` in `.env` because Hyperindex requires admin authentication at startup. `TAP_COLLECTION_FILTERS` is read by the Tap sidecar only; legacy `JETSTREAM_COLLECTIONS` remains part of Jetstream mode and is not used as a Tap filtering fallback.
 
+When Tap mode starts, Hyperindex performs a bounded background reconciliation for actor rows whose handle is missing. It reads current identity metadata from Tap's local `/info/:did` API, never delays API startup, and never replaces a handle populated concurrently by a newer identity event.
+
 **Local isolated Tap smoke stack (requires Docker):**
 
 Use this when you want to test current local changes against Tap with the Hypercerts/Certified lexicon set mounted into the backend container:
@@ -306,6 +308,28 @@ query {
 
 `where.externalLabels` decides which records qualify. The `node.externalLabels(...)` field decides which labels are displayed on each returned record, so repeat the same source/value constraints on the field if you only want to display labels used for filtering.
 
+Generated record types, `GenericRecord`, `RecordTimelineNode`, and record subscriptions expose structured author identity metadata:
+
+```graphql
+query {
+  orgHypercertsClaimActivity(first: 20) {
+    edges {
+      node {
+        uri
+        author {
+          did
+          handle
+        }
+      }
+    }
+  }
+}
+```
+
+`author` is always present because every record has an author DID. `author.handle` is nullable when Hyperindex has not resolved a current handle or Tap reports `handle.invalid`. The legacy top-level `did` output field remains functional but is deprecated in favor of `author.did`; `where.did` filters are unchanged.
+
+`author` is now reserved record metadata. A registered Lexicon property named `author` is not exposed as a generated output field or `where` filter; rename that Lexicon property before adopting this schema version.
+
 Generated record types and `GenericRecord` also include a virtual `certifiedProfileData` field when the `app.certified.actor.profile` lexicon is registered. This field resolves the author's `at://<did>/app.certified.actor.profile/self` record and can include external labels attached to that profile record:
 
 ```graphql
@@ -314,7 +338,7 @@ query {
     edges {
       node {
         uri
-        did
+        author { did handle }
         certifiedProfileData {
           displayName
           description

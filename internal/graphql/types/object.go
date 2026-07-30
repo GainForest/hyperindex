@@ -7,6 +7,7 @@ import (
 
 	"github.com/graphql-go/graphql"
 
+	"github.com/GainForest/hyperindex/internal/graphql/authoridentity"
 	"github.com/GainForest/hyperindex/internal/graphql/certifiedprofiles"
 	"github.com/GainForest/hyperindex/internal/graphql/externallabels"
 	"github.com/GainForest/hyperindex/internal/lexicon"
@@ -19,6 +20,7 @@ var ReservedRecordFields = map[string]bool{
 	"did":                  true,
 	"rkey":                 true,
 	"externalLabels":       true,
+	"author":               true,
 	"authorLabels":         true,
 	"certifiedProfileData": true,
 }
@@ -123,9 +125,11 @@ func (b *ObjectBuilder) buildRecordFields(lexiconID string, def *lexicon.RecordD
 			Description: "CID of this record version",
 		},
 		"did": &graphql.Field{
-			Type:        graphql.NewNonNull(graphql.String),
-			Description: "DID of the record author",
+			Type:              graphql.NewNonNull(graphql.String),
+			Description:       "DID of the record author",
+			DeprecationReason: authoridentity.DIDDeprecationReason,
 		},
+		"author": authoridentity.Field(),
 		"rkey": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "Record key (last segment of AT-URI)",

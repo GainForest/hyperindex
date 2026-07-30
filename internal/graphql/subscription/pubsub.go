@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -121,6 +122,10 @@ func (ps *PubSub) PublishRecord(eventType EventType, uri, cid, did, collection s
 	if record != nil {
 		record["uri"] = uri
 		record["cid"] = cid
+		record["did"] = did
+		if slash := strings.LastIndex(uri, "/"); slash >= 0 && slash+1 < len(uri) {
+			record["rkey"] = uri[slash+1:]
+		}
 	}
 
 	ps.Publish(&RecordEvent{

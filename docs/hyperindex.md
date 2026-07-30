@@ -59,7 +59,8 @@ Use these identifiers carefully:
 | --- | --- | --- |
 | `uri` | The AT-URI of a record, usually `at://<did>/<collection>/<rkey>` | Stable record identity and links between records |
 | `cid` | The CID of the indexed record version | Version-sensitive reads and cache validation |
-| `did` | The DID of the account that owns the record | Author/account filtering |
+| `author` | Structured author identity with non-null `did` and nullable current `handle` | Rendering and linking the account that owns the record |
+| `did` | Deprecated direct DID output; use `author.did` instead | Compatibility with existing consumers; `where.did` filters remain supported |
 | `rkey` | The record key, the last segment of the AT-URI | Low-level AT Protocol workflows |
 | `createdAt` | Timestamp declared inside the record | User-facing chronology |
 | `indexed_at` | Hyperindex arrival order | Indexer-facing chronology |
@@ -79,6 +80,19 @@ Hyperindex dynamically builds its public GraphQL schema from AT Protocol Lexicon
 | `app.certified.link.evm` | `appCertifiedLinkEvm` | `appCertifiedLinkEvmByUri` |
 
 Use typed queries first. They provide typed fields, filters, sorting, and pagination. Use the generic `records(collection: ...)` query when you need raw JSON or when a typed query is not available.
+
+All generated record types, generic record results, timeline nodes, and record subscription payloads expose:
+
+```graphql
+author {
+  did
+  handle
+}
+```
+
+`author` is non-null, while `author.handle` is nullable when no current verified handle is available. The direct record-level `did` field is deprecated but remains functional during the transition to `author.did`. This output-field deprecation does not affect `where.did` filters.
+
+`author` is reserved metadata on generated record types. Lexicons that define their own top-level `author` property must rename it because that property and its generated filter are skipped in favor of `ActorIdentity`.
 
 ### Relationships between records
 

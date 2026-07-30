@@ -406,19 +406,9 @@ func (c *Consumer) handleCommit(ctx context.Context, event *Event) error {
 	return nil
 }
 
-// ensureActor ensures the actor exists in the database.
+// ensureActor ensures the actor exists without changing identity metadata.
 func (c *Consumer) ensureActor(ctx context.Context, did string) error {
-	// Check if actor exists
-	exists, err := c.actorsRepo.Exists(ctx, did)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-
-	// Upsert actor (without handle resolution per user request)
-	return c.actorsRepo.Upsert(ctx, did, "") // Empty handle
+	return c.actorsRepo.Ensure(ctx, did)
 }
 
 // cursorFlusher periodically flushes the cursor to the database.

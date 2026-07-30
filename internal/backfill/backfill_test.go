@@ -1,7 +1,10 @@
 package backfill
 
 import (
+	"context"
 	"testing"
+
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 func TestPLCDocument_ToAtprotoData(t *testing.T) {
@@ -44,7 +47,7 @@ func TestPLCDocument_ToAtprotoData(t *testing.T) {
 			did: "did:plc:abc123",
 			want: AtprotoData{
 				DID:    "did:plc:abc123",
-				Handle: "did:plc:abc123", // Falls back to DID
+				Handle: "",
 				PDS:    "https://pds.example.com",
 			},
 		},
@@ -116,6 +119,28 @@ func TestPLCDocument_ToAtprotoData(t *testing.T) {
 				t.Errorf("PDS = %q, want %q", got.PDS, tt.want.PDS)
 			}
 		})
+	}
+}
+
+func TestBackfillerStoreResolvedActorPreservesHandleWhenResolutionHasNone(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	did := "did:plc:alice"
+	if err := db.Actors.UpsertIdentity(ctx, did, "alice.example"); err != nil {
+		t.Fatalf("UpsertIdentity() error = %v", err)
+	}
+
+	backfiller := &Backfiller{actorsRepo: db.Actors}
+	if err := backfiller.storeResolvedActor(ctx, &AtprotoData{DID: did}); err != nil {
+		t.Fatalf("storeResolvedActor() error = %v", err)
+	}
+
+	actor, err := db.Actors.GetByDID(ctx, did)
+	if err != nil {
+		t.Fatalf("GetByDID() error = %v", err)
+	}
+	if actor.Handle != "alice.example" {
+		t.Fatalf("actor.Handle = %q, want alice.example", actor.Handle)
 	}
 }
 

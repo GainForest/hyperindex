@@ -11,6 +11,8 @@ import (
 	"github.com/GainForest/hyperindex/internal/database"
 )
 
+const missingHandlePredicateSQL = "(handle IS NULL OR TRIM(handle) = '' OR handle = did)"
+
 // Actor represents an AT Protocol user/actor.
 type Actor struct {
 	DID       string
@@ -28,8 +30,30 @@ func NewActorsRepository(db database.Executor) *ActorsRepository {
 	return &ActorsRepository{db: db}
 }
 
-// Upsert inserts or updates an actor.
-func (r *ActorsRepository) Upsert(ctx context.Context, did, handle string) error {
+// Ensure inserts an actor when it does not exist without changing identity
+// metadata already stored for that DID.
+func (r *ActorsRepository) Ensure(ctx context.Context, did string) error {
+	p1 := r.db.Placeholder(1)
+
+	var sqlStr string
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		sqlStr = fmt.Sprintf(`INSERT INTO actor (did, handle, indexed_at)
+			VALUES (%s, NULL, NOW())
+			ON CONFLICT(did) DO NOTHING`, p1)
+	default:
+		sqlStr = fmt.Sprintf(`INSERT INTO actor (did, handle, indexed_at)
+			VALUES (%s, NULL, datetime('now'))
+			ON CONFLICT(did) DO NOTHING`, p1)
+	}
+
+	_, err := r.db.Exec(ctx, sqlStr, []database.Value{database.Text(did)})
+	return err
+}
+
+// UpsertIdentity inserts an actor or replaces its handle with identity metadata
+// received from an authoritative identity source.
+func (r *ActorsRepository) UpsertIdentity(ctx context.Context, did, handle string) error {
 	p1 := r.db.Placeholder(1)
 	p2 := r.db.Placeholder(2)
 
@@ -54,6 +78,35 @@ func (r *ActorsRepository) Upsert(ctx context.Context, did, handle string) error
 		database.Text(handle),
 	})
 	return err
+}
+
+// Upsert inserts or updates an actor identity. New ingestion code should use
+// Ensure when it only needs to establish that an actor exists.
+func (r *ActorsRepository) Upsert(ctx context.Context, did, handle string) error {
+	return r.UpsertIdentity(ctx, did, handle)
+}
+
+// SetHandleIfMissing updates an actor only while its handle is still absent.
+// This prevents startup reconciliation from overwriting a newer identity event.
+func (r *ActorsRepository) SetHandleIfMissing(ctx context.Context, did, handle string) (bool, error) {
+	p1 := r.db.Placeholder(1)
+	p2 := r.db.Placeholder(2)
+	sqlStr := fmt.Sprintf(`UPDATE actor
+		SET handle = %s, indexed_at = %s
+		WHERE did = %s AND %s`, p1, r.db.Now(), p2, missingHandlePredicateSQL)
+
+	result, err := r.db.Exec(ctx, sqlStr, []database.Value{
+		database.Text(handle),
+		database.Text(did),
+	})
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rowsAffected > 0, nil
 }
 
 // ActorData holds DID and Handle for batch operations.
@@ -117,13 +170,13 @@ func (r *ActorsRepository) batchUpsertChunk(ctx context.Context, actors []ActorD
 		sqlStr = fmt.Sprintf(`INSERT INTO actor (did, handle, indexed_at)
 			VALUES %s
 			ON CONFLICT(did) DO UPDATE SET
-				handle = EXCLUDED.handle,
+				handle = CASE WHEN EXCLUDED.handle = '' THEN actor.handle ELSE EXCLUDED.handle END,
 				indexed_at = NOW()`, strings.Join(valueSets, ", "))
 	default:
 		sqlStr = fmt.Sprintf(`INSERT INTO actor (did, handle, indexed_at)
 			VALUES %s
 			ON CONFLICT(did) DO UPDATE SET
-				handle = excluded.handle,
+				handle = CASE WHEN excluded.handle = '' THEN actor.handle ELSE excluded.handle END,
 				indexed_at = datetime('now')`, strings.Join(valueSets, ", "))
 	}
 
@@ -136,10 +189,10 @@ func (r *ActorsRepository) GetByDID(ctx context.Context, did string) (*Actor, er
 	var sqlStr string
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
-		sqlStr = fmt.Sprintf("SELECT did, handle, indexed_at::text FROM actor WHERE did = %s",
+		sqlStr = fmt.Sprintf("SELECT did, COALESCE(handle, ''), indexed_at::text FROM actor WHERE did = %s",
 			r.db.Placeholder(1))
 	default:
-		sqlStr = fmt.Sprintf("SELECT did, handle, indexed_at FROM actor WHERE did = %s",
+		sqlStr = fmt.Sprintf("SELECT did, COALESCE(handle, ''), indexed_at FROM actor WHERE did = %s",
 			r.db.Placeholder(1))
 	}
 
@@ -153,6 +206,80 @@ func (r *ActorsRepository) GetByDID(ctx context.Context, did string) (*Actor, er
 
 	actor.IndexedAt, _ = time.Parse(time.RFC3339, indexedAtStr)
 	return &actor, nil
+}
+
+// GetByDIDs retrieves actors keyed by DID. Missing actors are omitted.
+func (r *ActorsRepository) GetByDIDs(ctx context.Context, dids []string) (map[string]*Actor, error) {
+	actors := make(map[string]*Actor)
+	if len(dids) == 0 {
+		return actors, nil
+	}
+
+	params := make([]database.Value, len(dids))
+	for i, did := range dids {
+		params[i] = database.Text(did)
+	}
+
+	indexedAt := "indexed_at"
+	if r.db.Dialect() == database.PostgreSQL {
+		indexedAt = "indexed_at::text"
+	}
+	sqlStr := fmt.Sprintf(
+		"SELECT did, COALESCE(handle, ''), %s FROM actor WHERE did IN (%s)",
+		indexedAt,
+		r.db.Placeholders(len(dids), 1),
+	)
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var actor Actor
+		var indexedAtStr string
+		if err := rows.Scan(&actor.DID, &actor.Handle, &indexedAtStr); err != nil {
+			return nil, err
+		}
+		actor.IndexedAt, _ = time.Parse(time.RFC3339, indexedAtStr)
+		actors[actor.DID] = &actor
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return actors, nil
+}
+
+// ListDIDsMissingHandle returns a stable page of actors whose handle has not
+// been populated yet.
+func (r *ActorsRepository) ListDIDsMissingHandle(ctx context.Context, afterDID string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	sqlStr := fmt.Sprintf(`SELECT did FROM actor
+		WHERE %s AND did > %s
+		ORDER BY did ASC
+		LIMIT %s`, missingHandlePredicateSQL, r.db.Placeholder(1), r.db.Placeholder(2))
+	params := []database.Value{database.Text(afterDID), database.Int(int64(limit))}
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var dids []string
+	for rows.Next() {
+		var did string
+		if err := rows.Scan(&did); err != nil {
+			return nil, err
+		}
+		dids = append(dids, did)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return dids, nil
 }
 
 // GetByHandle retrieves an actor by their handle.
