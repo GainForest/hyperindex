@@ -198,6 +198,8 @@ Rows are ordered by top-level record JSON `createdAt` descending, then `uri` des
 | `did` | `String!` | DID of the predecessor account. |
 | `certifiedProfileData` | `AppCertifiedActorProfile` | Certified profile for the predecessor account, or null when no profile record exists. |
 
+`endorsementClosure` only uses badge awards, badge definitions, and badge responses whose `validationStatus` is `valid`. Invalid or unclassified awards and definitions cannot create edges, and invalid or unclassified responses cannot suppress them.
+
 Example:
 
 ```graphql

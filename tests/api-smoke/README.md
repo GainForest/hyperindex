@@ -79,14 +79,14 @@ The expectations file is read, decoded, and validated before requests are sent. 
 - `/stats`
 - GraphQL `__typename`
 - Introspection query fields
-- Generic records
+- Generic raw records, arbitrary JSON values, and validation metadata
 - Data shape
-- `collectionStats`
-- Search
+- Raw `collectionStats` alongside typed valid-record minimums
+- Search validation metadata
 - Strict pagination
 - `recordTimeline` schema, minimum record sanity check, pagination, author filtering, and Certified profile hydration
 - Activity claim external label querying, value filtering, and pagination
-- Typed `ByUri` roundtrip
+- Typed `ByUri` roundtrip using records whose `validationStatus` is `valid`, plus hidden-record checks when the target has a recent invalid, unknown-schema, or validation-error row
 - `app.certified.graph.follow` typed pagination, filters, and sorting
 - `org.hypercerts.claim.activity` image filters expose `isNull` for presence checks
 - Three-level nested filters for `org.hypercerts.collection`, including same-element `any` semantics for `where: { items: { any: { itemIdentifier: { uri: { eq: ... }, cid: { eq: ... } } } } }`
@@ -114,7 +114,7 @@ If `HYPERINDEX_SMOKE_EXTERNAL_LABEL_SOURCE_DID` is unset, the external label smo
 
 ## Endorsement closure smoke check
 
-The default expectations file enables the `endorsementClosure` behavior check. It derives active Certified endorsement edges from indexed badge awards, definitions, and responses, finds a root DID with an indirect path, then verifies the API returns the expected bounded closure. Environment-specific expectations can override `endorsementClosure.minimumActiveEdges` or disable indirect-path requirements with `endorsementClosure.requireIndirect: false`.
+The default expectations file enables the `endorsementClosure` behavior check. It derives active Certified endorsement edges from validated badge awards, definitions, and responses, finds a root DID with an indirect path, then verifies the API returns the expected bounded closure. Invalid, unknown-schema, and validation-error records do not create or suppress endorsement edges. Environment-specific expectations can override `endorsementClosure.minimumActiveEdges` or disable indirect-path requirements with `endorsementClosure.requireIndirect: false`.
 
 ## Author label smoke check
 
@@ -151,7 +151,7 @@ Helper, object-only, and query/procedure lexicons listed in `nonRecordNSIDs` are
 
 ## Production data assumptions
 
-The target deployment must have enough public data for read-path checks. These collections must each contain at least 20 records:
+The target deployment must have enough public data for read-path checks. These collections must each contain at least 20 records that passed validation and are visible through typed GraphQL:
 
 - `org.hypercerts.claim.activity`
 - `app.certified.actor.profile`
