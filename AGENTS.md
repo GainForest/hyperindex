@@ -89,7 +89,7 @@ Run verification based on what changed.
 
 - `ADMIN_API_KEY` is required at startup.
 - `SECRET_KEY_BASE` must be at least 64 characters.
-- `TAP_ENABLED=true` switches record ingestion to Tap mode.
+- `TAP_ENABLED=true` switches record ingestion to Tap mode. After Tap becomes healthy, Hyperindex runs one bounded background pass that fills missing `actor.handle` values from Tap's local `/info/:did` metadata without delaying API startup.
 - `LABELER_SUBSCRIBE_ENABLED=true` with `LABELER_SUBSCRIBE_URLS` starts optional external `com.atproto.label.subscribeLabels` ingestion.
 - Migrations run automatically on startup.
 - Be careful with `ALLOWED_ORIGINS`: current code allows all origins when unset, even if older prose suggests stricter defaults.
@@ -106,7 +106,8 @@ Run verification based on what changed.
 
 - Release notes are produced from `.changes/unreleased/*.yaml`, not commit history.
 - Prefer `make changie-new` when creating a fragment.
-- Follow `docs/changelog-workflow.md` directly; there is no separate Changie skill.
+- Follow `docs/changelog-workflow.md` directly when deciding whether to create or skip fragments.
+- When polishing generated notes on `release/changelog`, use `.agents/skills/release-notes/SKILL.md` to make the release entry human-friendly while keeping the version file and `CHANGELOG.md` synchronized.
 
 ## Keeping this file current
 

@@ -7,12 +7,13 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/database"
 	"github.com/GainForest/hyperindex/internal/database/migrations"
+	"github.com/GainForest/hyperindex/internal/database/postgres"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/database/sqlite"
 )
 
-// TestDB holds an in-memory SQLite database with all migrations applied
-// and pre-constructed repository instances.
+// TestDB holds a test database with all migrations applied and
+// pre-constructed repository instances.
 type TestDB struct {
 	Executor         database.Executor
 	Records          *repositories.RecordsRepository
@@ -32,8 +33,23 @@ type TestDB struct {
 // The database is automatically closed when the test completes.
 func SetupTestDB(t *testing.T) *TestDB {
 	t.Helper()
+	return SetupTestDBWithURL(t, "sqlite::memory:")
+}
 
-	exec, err := sqlite.NewExecutor("sqlite::memory:")
+// SetupTestDBWithURL creates a test database for the supplied SQLite or
+// PostgreSQL URL with all migrations applied. The database is automatically
+// closed when the test completes.
+func SetupTestDBWithURL(t *testing.T, databaseURL string) *TestDB {
+	t.Helper()
+
+	var exec database.Executor
+	var err error
+	switch database.ParseDialect(databaseURL) {
+	case database.PostgreSQL:
+		exec, err = postgres.NewExecutor(databaseURL)
+	default:
+		exec, err = sqlite.NewExecutor(databaseURL)
+	}
 	if err != nil {
 		t.Fatalf("Failed to create test database: %v", err)
 	}

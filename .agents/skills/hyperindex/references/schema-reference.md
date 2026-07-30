@@ -1,6 +1,6 @@
 # Hyperindex GraphQL Schema Reference
 
-Last updated on 2026-07-01 for pending record validation gate schema changes. Baseline generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10.
+Last updated on 2026-07-30 for pending record validation gate and record author identity changes. Baseline generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10; validation and `author` metadata described below reflect the current branch and may not yet be deployed.
 
 ## Endpoints
 
@@ -156,7 +156,8 @@ Rows are ordered by top-level record JSON `createdAt` descending, then `uri` des
 | --- | --- | --- |
 | `uri` | `String!` | AT-URI of the record. |
 | `cid` | `String!` | CID of the current record value. |
-| `did` | `String!` | DID of the record author. |
+| `author` | `ActorIdentity!` | Record author identity. `did` is non-null; `handle` is nullable when unavailable or invalid. |
+| `did` | `String!` | Deprecated DID of the record author; use `author.did`. |
 | `collection` | `String!` | ATProto collection NSID. |
 | `rkey` | `String` | Record key from the AT-URI. |
 | `createdAt` | `DateTime!` | Normalized top-level record `createdAt` timestamp used for timeline ordering. |
@@ -363,6 +364,19 @@ Production exposes external ATProto labels through the root `externalLabels` que
 | `ver` | `Int` | Optional label schema version. |
 
 ## Record types
+
+Every generated record type includes `author: ActorIdentity!`. `ActorIdentity.did` is non-null and `ActorIdentity.handle` is nullable. The direct `did` field shown in the per-record tables below remains available but is deprecated in favor of `author.did`; `where.did` filters are not deprecated.
+
+`author` is reserved metadata. Registered Lexicon properties named `author` and their generated filters are skipped; schema owners must rename colliding properties.
+
+The same author metadata is available on `GenericRecord`, `RecordTimelineNode`, `RecordEvent`, and typed record subscriptions. List and timeline resolvers batch actor lookups so selecting `author` adds at most one actor query per result page.
+
+## `ActorIdentity`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `did` | `String!` | DID of the record author. |
+| `handle` | `String` | Current verified AT Protocol handle, or null when missing or represented internally as `handle.invalid`. |
 
 ## `AppCertifiedActorOrganization`
 

@@ -14,7 +14,7 @@ const smokeSchemaQuery = `
 query SmokeSchema {
   __schema {
     queryType {
-      fields {
+      fields(includeDeprecated: true) {
         name
         args {
           name
@@ -56,8 +56,22 @@ query SmokeSchema {
     types {
       kind
       name
-      fields {
+      fields(includeDeprecated: true) {
         name
+        isDeprecated
+        deprecationReason
+        type {
+          kind
+          name
+          ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+            }
+          }
+        }
       }
       inputFields {
         name
@@ -112,9 +126,11 @@ type schemaType struct {
 }
 
 type schemaField struct {
-	Name string           `json:"name"`
-	Args []schemaArgument `json:"args"`
-	Type schemaTypeRef    `json:"type"`
+	Name              string           `json:"name"`
+	Args              []schemaArgument `json:"args"`
+	Type              schemaTypeRef    `json:"type"`
+	IsDeprecated      bool             `json:"isDeprecated"`
+	DeprecationReason string           `json:"deprecationReason"`
 }
 
 type schemaArgument struct {
@@ -165,6 +181,60 @@ func TestSchemaExposesExpectedTypedCollections(t *testing.T) {
 			requireSchemaArgument(t, byURIField, "uri")
 		})
 	}
+}
+
+func TestSchemaExposesRecordAuthorIdentity(t *testing.T) {
+	config := loadSmokeConfig(t)
+	schema := fetchGraphQLSchema(t, config)
+	types := typesByName(schema.Types)
+
+	actorIdentity := requireSchemaType(t, types, "ActorIdentity")
+	actorFields := fieldsByName(actorIdentity.Fields)
+	actorDID := requireSchemaField(t, actorFields, "did")
+	if actorDID.Type.Kind != "NON_NULL" {
+		t.Fatalf("ActorIdentity.did kind = %q, want NON_NULL", actorDID.Type.Kind)
+	}
+	actorHandle := requireSchemaField(t, actorFields, "handle")
+	if actorHandle.Type.Kind == "NON_NULL" {
+		t.Fatal("ActorIdentity.handle is non-null, want nullable String")
+	}
+
+	for nsid := range config.expectations.TypedQueryFields {
+		nsid := nsid
+		t.Run(nsid, func(t *testing.T) {
+			recordType := requireSchemaType(t, types, typeNameFromNSID(nsid))
+			recordFields := fieldsByName(recordType.Fields)
+			authorField := requireSchemaField(t, recordFields, "author")
+			if got := namedTypeName(authorField.Type); got != "ActorIdentity" {
+				t.Fatalf("%s.author type = %q, want ActorIdentity", recordType.Name, got)
+			}
+			if authorField.Type.Kind != "NON_NULL" {
+				t.Fatalf("%s.author kind = %q, want NON_NULL", recordType.Name, authorField.Type.Kind)
+			}
+			didField := requireSchemaField(t, recordFields, "did")
+			if !didField.IsDeprecated || didField.DeprecationReason != "Use author.did instead." {
+				t.Fatalf("%s.did deprecation = (%v, %q)", recordType.Name, didField.IsDeprecated, didField.DeprecationReason)
+			}
+		})
+	}
+
+	for _, typeName := range []string{"GenericRecord", "RecordTimelineNode", "RecordEvent"} {
+		recordType := requireSchemaType(t, types, typeName)
+		recordFields := fieldsByName(recordType.Fields)
+		authorField := requireSchemaField(t, recordFields, "author")
+		if got := namedTypeName(authorField.Type); got != "ActorIdentity" {
+			t.Fatalf("%s.author type = %q, want ActorIdentity", typeName, got)
+		}
+		if authorField.Type.Kind != "NON_NULL" {
+			t.Fatalf("%s.author kind = %q, want NON_NULL", typeName, authorField.Type.Kind)
+		}
+		didField := requireSchemaField(t, recordFields, "did")
+		if !didField.IsDeprecated || didField.DeprecationReason != "Use author.did instead." {
+			t.Fatalf("%s.did deprecation = (%v, %q)", typeName, didField.IsDeprecated, didField.DeprecationReason)
+		}
+	}
+
+	smokeLog("✓ Record schemas expose structured author identity")
 }
 
 func TestSchemaExposesURIWhereFilter(t *testing.T) {

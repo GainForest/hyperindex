@@ -1,4 +1,0 @@
-kind: fixed
-body: Fix activity retention cleanup so long-running deployments delete activity log entries older than seven days every hour instead of only at startup.
-custom:
-  Affects: operator

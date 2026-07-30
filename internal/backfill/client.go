@@ -289,9 +289,8 @@ type PLCService struct {
 // ToAtprotoData converts a PLC document to AtprotoData.
 func (d *PLCDocument) ToAtprotoData(did string) *AtprotoData {
 	data := &AtprotoData{
-		DID:    did,
-		Handle: did,                   // Default to DID if no handle found
-		PDS:    "https://bsky.social", // Default PDS
+		DID: did,
+		PDS: "https://bsky.social", // Default PDS
 	}
 
 	// Find AtprotoPersonalDataServer service

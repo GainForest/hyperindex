@@ -223,8 +223,7 @@ func (c *wsClient) handleSubscribe(msg *wsMessage) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx = resolver.WithRepositories(ctx, c.repos)
+	ctx, cancel := context.WithCancel(resolver.WithRepositories(context.Background(), c.repos))
 	op := &subscriptionOperation{cancel: cancel}
 
 	c.mu.Lock()
@@ -257,7 +256,10 @@ func (c *wsClient) runSubscription(ctx context.Context, id string, op *subscript
 				return
 			}
 
-			rootObject := map[string]interface{}{"__recordEvent": event}
+			rootObject := map[string]interface{}{
+				"__recordEvent": event,
+				"recordEvents":  event.RawGraphQLValue(),
+			}
 			result := graphql.Do(graphql.Params{
 				Schema:         *c.schema,
 				RequestString:  payload.Query,

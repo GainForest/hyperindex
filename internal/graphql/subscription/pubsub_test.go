@@ -223,6 +223,12 @@ func TestPublishRecord(t *testing.T) {
 		if rawRecord["title"] != "Test Record" {
 			t.Fatalf("typed payload mutation changed raw record: %#v", rawRecord)
 		}
+		if event.TypedRecord["uri"] != "at://did:plc:test/col/123" {
+			t.Errorf("typedRecord.uri = %v", event.TypedRecord["uri"])
+		}
+		if event.TypedRecord["cid"] != "bafytest" {
+			t.Errorf("typedRecord.cid = %v", event.TypedRecord["cid"])
+		}
 	case <-time.After(time.Second):
 		t.Error("Timed out waiting for event")
 	}

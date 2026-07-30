@@ -59,7 +59,8 @@ Use these identifiers carefully:
 | --- | --- | --- |
 | `uri` | The AT-URI of a record, usually `at://<did>/<collection>/<rkey>` | Stable record identity and links between records |
 | `cid` | The CID of the indexed record version | Version-sensitive reads and cache validation |
-| `did` | The DID of the account that owns the record | Author/account filtering |
+| `author` | Structured author identity with non-null `did` and nullable current `handle` | Rendering and linking the account that owns the record |
+| `did` | Deprecated direct DID output; use `author.did` instead | Compatibility with existing consumers; `where.did` filters remain supported |
 | `rkey` | The record key, the last segment of the AT-URI | Low-level AT Protocol workflows |
 | `createdAt` | Timestamp declared inside the record | User-facing chronology |
 | `indexed_at` | Hyperindex arrival order | Indexer-facing chronology |
@@ -94,6 +95,19 @@ Validation is local-only. During normal ingestion Hyperindex uses Indigo to vali
 Public typed GraphQL, record validation, startup record refresh, and default Jetstream collection filters use one fixed Lexicon set loaded at startup. Uploading, registering, or deleting a Lexicon changes only the saved configuration; restart or redeploy Hyperindex to apply the change to all of those runtime surfaces together. In a multi-replica deployment, coordinate a Lexicon-changing rollout so old-snapshot and new-snapshot backend replicas never serve concurrently against the shared validation metadata.
 
 The generic `recordEvents` subscription receives all observed raw create/update/delete events, including events for invalid or unknown-schema records. Typed collection subscriptions filter that stream to valid create/update rows and deletes that were valid before removal.
+
+All generated record types, generic record results, timeline nodes, and record subscription payloads expose:
+
+```graphql
+author {
+  did
+  handle
+}
+```
+
+`author` is non-null, while `author.handle` is nullable when no current verified handle is available. The direct record-level `did` field is deprecated but remains functional during the transition to `author.did`. This output-field deprecation does not affect `where.did` filters.
+
+`author` is reserved metadata on generated record types. Lexicons that define their own top-level `author` property must rename it because that property and its generated filter are skipped in favor of `ActorIdentity`.
 
 ### Relationships between records
 
