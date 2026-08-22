@@ -92,6 +92,7 @@ Run verification based on what changed.
 - `TAP_ENABLED=true` switches record ingestion to Tap mode. After Tap becomes healthy, Hyperindex runs one bounded background pass that fills missing `actor.handle` values from Tap's local `/info/:did` metadata without delaying API startup.
 - `LABELER_SUBSCRIBE_ENABLED=true` with `LABELER_SUBSCRIBE_URLS` starts optional external `com.atproto.label.subscribeLabels` ingestion.
 - Migrations run automatically on startup.
+- Backend container images bundle published helper Lexicons from `lexicons/`, pinned by `lexicons.json`, and set `LEXICON_DIR=/app/lexicons`. Database Lexicons override bundled documents with the same NSID.
 - Be careful with `ALLOWED_ORIGINS`: current code allows all origins when unset, even if older prose suggests stricter defaults.
 
 ## Documentation and agent skills

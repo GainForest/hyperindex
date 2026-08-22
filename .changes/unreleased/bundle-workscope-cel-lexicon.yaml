@@ -1,0 +1,4 @@
+kind: fixed
+body: Bundle the published `org.hypercerts.workscope.cel` Lexicon and its strong-reference dependency in backend container images. Deployments whose saved claim activity schema references this helper can now build a complete startup schema instead of failing during startup reference validation.
+custom:
+  Affects: operator

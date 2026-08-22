@@ -41,8 +41,9 @@ WORKDIR /app
 # Install runtime dependencies
 RUN apk add --no-cache ca-certificates tzdata
 
-# Copy binary from builder
+# Copy binary and bundled Lexicon dependencies from builder
 COPY --from=builder /hyperindex /app/hyperindex
+COPY --from=builder /app/lexicons /app/lexicons
 
 # Copy static files (Quickslice client UI) if they exist
 # Note: static directory may not exist yet during development
@@ -61,6 +62,7 @@ EXPOSE 8080
 ENV HOST=0.0.0.0
 ENV PORT=8080
 ENV DATABASE_URL=sqlite:/app/data/hyperindex.db
+ENV LEXICON_DIR=/app/lexicons
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
