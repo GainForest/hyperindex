@@ -10,6 +10,7 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 // ConsumerConfig configures the Jetstream consumer.
@@ -37,7 +38,8 @@ type Consumer struct {
 	activityRepo *repositories.IndexingActivityRepository
 
 	// Pub/sub for GraphQL subscriptions
-	pubsub *subscription.PubSub
+	pubsub    *subscription.PubSub
+	validator validation.RecordValidator
 
 	// Cursor tracking
 	cursor     int64
@@ -73,9 +75,15 @@ func NewConsumer(
 	configRepo *repositories.ConfigRepository,
 	activityRepo *repositories.IndexingActivityRepository,
 	pubsub *subscription.PubSub,
+	validators ...validation.RecordValidator,
 ) *Consumer {
 	if config.CursorFlushInterval == 0 {
 		config.CursorFlushInterval = 5 * time.Second
+	}
+
+	var validator validation.RecordValidator
+	if len(validators) > 0 {
+		validator = validators[0]
 	}
 
 	return &Consumer{
@@ -85,6 +93,7 @@ func NewConsumer(
 		configRepo:   configRepo,
 		activityRepo: activityRepo,
 		pubsub:       pubsub,
+		validator:    validator,
 		cursorDone:   make(chan struct{}),
 		statsStart:   time.Now(),
 	}
@@ -351,16 +360,26 @@ func (c *Consumer) handleCommit(ctx context.Context, event *Event) error {
 			// Continue anyway - record storage is more important
 		}
 
-		// Store the record
-		result, err := c.recordsRepo.Insert(ctx, uri, commit.CID, event.DID, commit.Collection, string(commit.Record))
+		validationResult := validation.ClassifyRecord(c.validator, commit.Collection, commit.RKey, commit.Record)
+		writeResult, err := c.recordsRepo.UpsertWithValidation(ctx, repositories.RecordWrite{
+			URI:              uri,
+			CID:              commit.CID,
+			DID:              event.DID,
+			Collection:       commit.Collection,
+			RKey:             commit.RKey,
+			JSON:             string(commit.Record),
+			ValidationStatus: validationResult.Status,
+			ValidationError:  validationResult.Error,
+			LexiconHash:      validationResult.LexiconHash,
+		})
 		if err != nil {
 			errMsg := err.Error()
 			updateActivityStatus("error", &errMsg)
-			return fmt.Errorf("failed to insert record: %w", err)
+			return fmt.Errorf("failed to store record with validation metadata: %w", err)
 		}
 
 		c.statsMu.Lock()
-		if result == repositories.Inserted {
+		if writeResult == repositories.Inserted {
 			if commit.Operation == OpCreate {
 				c.stats.RecordsCreated++
 			} else {
@@ -369,12 +388,14 @@ func (c *Consumer) handleCommit(ctx context.Context, event *Event) error {
 		}
 		c.statsMu.Unlock()
 
-		// Publish to GraphQL subscriptions
+		// Publish every stored raw event. Typed resolvers apply validation gating.
 		eventType := subscription.EventCreate
 		if commit.Operation == OpUpdate {
 			eventType = subscription.EventUpdate
 		}
-		c.pubsub.PublishRecord(eventType, uri, commit.CID, event.DID, commit.Collection, commit.Record)
+		if c.pubsub != nil {
+			c.pubsub.PublishRecordWithValidation(eventType, uri, commit.CID, event.DID, commit.Collection, commit.Record, validationResult.Status == validation.StatusValid)
+		}
 
 		updateActivityStatus("success", nil)
 
@@ -385,7 +406,8 @@ func (c *Consumer) handleCommit(ctx context.Context, event *Event) error {
 		)
 
 	case OpDelete:
-		if err := c.recordsRepo.Delete(ctx, uri); err != nil {
+		deleted, err := c.recordsRepo.DeleteReturning(ctx, uri)
+		if err != nil {
 			errMsg := err.Error()
 			updateActivityStatus("error", &errMsg)
 			return fmt.Errorf("failed to delete record: %w", err)
@@ -395,8 +417,23 @@ func (c *Consumer) handleCommit(ctx context.Context, event *Event) error {
 		c.stats.RecordsDeleted++
 		c.statsMu.Unlock()
 
-		// Publish delete to GraphQL subscriptions
-		c.pubsub.PublishRecord(subscription.EventDelete, uri, commit.CID, event.DID, commit.Collection, nil)
+		// Publish every raw delete with visibility derived atomically from the
+		// deleted row. Duplicate deletes therefore cannot emit typed events twice.
+		if c.pubsub != nil {
+			previousCID := commit.CID
+			deleteDID := event.DID
+			deleteCollection := commit.Collection
+			var previousJSON []byte
+			wasValid := false
+			if deleted != nil {
+				previousCID = deleted.CID
+				deleteDID = deleted.DID
+				deleteCollection = deleted.Collection
+				previousJSON = []byte(deleted.JSON)
+				wasValid = deleted.ValidationStatus == validation.StatusValid
+			}
+			c.pubsub.PublishDelete(uri, previousCID, deleteDID, deleteCollection, previousJSON, wasValid)
+		}
 
 		updateActivityStatus("success", nil)
 

@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -42,6 +43,8 @@ import (
 	"github.com/GainForest/hyperindex/internal/oauth"
 	"github.com/GainForest/hyperindex/internal/server"
 	"github.com/GainForest/hyperindex/internal/tap"
+	"github.com/GainForest/hyperindex/internal/validation"
+	"github.com/GainForest/hyperindex/internal/validationrefresh"
 	"github.com/GainForest/hyperindex/internal/workers"
 )
 
@@ -56,18 +59,20 @@ func main() {
 // Created once in initServices and threaded through all setup functions,
 // eliminating duplicate repository instantiation.
 type services struct {
-	db               database.Executor
-	records          *repositories.RecordsRepository
-	actors           *repositories.ActorsRepository
-	lexicons         *repositories.LexiconsRepository
-	config           *repositories.ConfigRepository
-	activity         *repositories.IndexingActivityRepository
-	oauthClients     *repositories.OAuthClientsRepository
-	labels           *repositories.LabelsRepository
-	externalLabels   *repositories.ExternalLabelsRepository
-	labelDefinitions *repositories.LabelDefinitionsRepository
-	labelPreferences *repositories.LabelPreferencesRepository
-	reports          *repositories.ReportsRepository
+	db                database.Executor
+	records           *repositories.RecordsRepository
+	actors            *repositories.ActorsRepository
+	lexicons          *repositories.LexiconsRepository
+	config            *repositories.ConfigRepository
+	activity          *repositories.IndexingActivityRepository
+	oauthClients      *repositories.OAuthClientsRepository
+	labels            *repositories.LabelsRepository
+	externalLabels    *repositories.ExternalLabelsRepository
+	labelDefinitions  *repositories.LabelDefinitionsRepository
+	labelPreferences  *repositories.LabelPreferencesRepository
+	reports           *repositories.ReportsRepository
+	validator         *validation.Validator
+	validationRefresh *validationrefresh.Scheduler
 }
 
 // backgroundServices tracks cancellable background goroutines for clean shutdown.
@@ -148,7 +153,13 @@ func run() error {
 
 	// Load lexicons and set up public GraphQL + subscriptions
 	pubsub := subscription.NewPubSub()
-	collections := setupGraphQL(r, cfg, svc, pubsub)
+	collections, err := setupGraphQL(r, cfg, svc, pubsub, adminHandler)
+	if err != nil {
+		return err
+	}
+	if adminHandler != nil {
+		configureBackfillCallbacks(adminHandler, cfg, svc, collections)
+	}
 
 	// Start background workers (activity cleanup)
 	startWorkers(svc, bg)
@@ -161,7 +172,7 @@ func run() error {
 		startTap(cfg, svc, pubsub, adminHandler, bg)
 	} else {
 		// Start Jetstream consumer for real-time events
-		startJetstream(cfg, svc, pubsub, collections, adminHandler, bg)
+		startJetstream(cfg, svc, pubsub, collections, bg)
 
 		// Start backfill if configured
 		startBackfill(cfg, svc)
@@ -611,9 +622,6 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 
 	adminHandler.Resolver().SetLabelerSubscribeConfig(cfg.LabelerSubscribeEnabled, cfg.LabelerSubscribeURLs)
 
-	// Wire up backfill callbacks for the admin UI
-	configureBackfillCallbacks(adminHandler, cfg, svc)
-
 	// Admin endpoint with optional auth (allows introspection without auth)
 	r.Handle("/admin/graphql", adminHandler.OptionalAuth())
 	r.Handle("/admin/graphql/", adminHandler.OptionalAuth())
@@ -669,42 +677,31 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 
 // configureBackfillCallbacks sets up single-actor and full-network backfill
 // callbacks on the admin handler's resolver, used by the admin UI.
-func configureBackfillCallbacks(adminHandler *admin.Handler, cfg *config.Config, svc *services) {
+func configureBackfillCallbacks(adminHandler *admin.Handler, cfg *config.Config, svc *services, startupCollections []string) {
 	bfConfig := backfill.NewConfigFromApp(cfg)
-	if bfConfig.Collections == nil {
-		bfConfig.Collections = atproto.ParseCollections(cfg.JetstreamCollections)
+	if len(bfConfig.Collections) == 0 {
+		bfConfig.Collections = append([]string(nil), startupCollections...)
 	}
-
-	actorBackfiller := backfill.NewBackfiller(bfConfig, svc.records, svc.actors, svc.activity)
 
 	// Single actor backfill
 	adminHandler.Resolver().SetBackfillCallback(func(ctx context.Context, did string) error {
+		actorBackfiller := backfill.NewBackfiller(bfConfig, svc.records, svc.actors, svc.activity, svc.validator)
+		defer actorBackfiller.Close()
 		_, err := actorBackfiller.BackfillActor(ctx, did)
 		return err
 	})
 
 	// Full network backfill (runs in background)
 	adminHandler.Resolver().SetFullBackfillCallback(func(ctx context.Context) error {
-		collections := bfConfig.Collections
+		collections := append([]string(nil), bfConfig.Collections...)
 		if len(collections) == 0 {
-			lexicons, err := svc.lexicons.GetAll(ctx)
-			if err != nil {
-				slog.Error("[backfill] Failed to get lexicons", "error", err)
-				return err
-			}
-			for _, lex := range lexicons {
-				collections = append(collections, lex.ID)
-			}
-		}
-
-		if len(collections) == 0 {
-			slog.Warn("[backfill] No collections configured - register lexicons first or set BACKFILL_COLLECTIONS")
+			slog.Warn("[backfill] No startup collections configured; save Lexicons and restart, or set BACKFILL_COLLECTIONS")
 			return nil
 		}
 
 		fullConfig := bfConfig
 		fullConfig.Collections = collections
-		bf := backfill.NewBackfiller(fullConfig, svc.records, svc.actors, svc.activity)
+		bf := backfill.NewBackfiller(fullConfig, svc.records, svc.actors, svc.activity, svc.validator)
 		defer bf.Close()
 
 		slog.Info("[backfill] Starting full network backfill", "collections", collections)
@@ -728,40 +725,66 @@ func configureBackfillCallbacks(adminHandler *admin.Handler, cfg *config.Config,
 // setupGraphQL loads lexicons from disk and database, creates the public GraphQL
 // handler with WebSocket subscriptions, and returns the resolved collection list
 // for Jetstream configuration.
-func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscription.PubSub) []string {
-	// Load lexicons from filesystem
-	registry := lexicon.NewRegistry()
+func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscription.PubSub, adminHandler *admin.Handler) ([]string, error) {
+	// Select one fixed set of saved Lexicons for this process. Database rows
+	// override filesystem documents with the same NSID.
+	filesystemLexicons := make(map[string][]byte)
+	savedLexicons := make(map[string][]byte)
 	lexiconDir := cfg.LexiconDir
 	if lexiconDir == "" {
 		lexiconDir = "testdata/lexicons"
 	}
 
-	if _, err := os.Stat(lexiconDir); err == nil {
-		if err := loadLexiconsFromDir(lexiconDir, registry); err != nil {
-			slog.Warn("Failed to load lexicons from directory", "dir", lexiconDir, "error", err)
-		} else {
-			slog.Info("Loaded lexicons from directory", "count", registry.Count(), "dir", lexiconDir)
+	if info, err := os.Stat(lexiconDir); err != nil {
+		if cfg.LexiconDir != "" || !os.IsNotExist(err) {
+			return nil, fmt.Errorf("failed to access lexicon directory %s: %w", lexiconDir, err)
 		}
+	} else if !info.IsDir() {
+		return nil, fmt.Errorf("lexicon path %s is not a directory", lexiconDir)
+	} else {
+		loaded, err := loadLexiconsFromDir(lexiconDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load lexicons from directory %s: %w", lexiconDir, err)
+		}
+		for id, raw := range loaded {
+			filesystemLexicons[id] = raw
+			savedLexicons[id] = raw
+		}
+		slog.Info("Loaded lexicons from directory", "count", len(loaded), "dir", lexiconDir)
 	}
 
-	// Load lexicons from database (uploaded via admin UI)
 	ctx := context.Background()
 	dbLexicons, err := svc.lexicons.GetAll(ctx)
 	if err != nil {
-		slog.Warn("Failed to load lexicons from database", "error", err)
-	} else if len(dbLexicons) > 0 {
-		dbLoaded := 0
-		for _, dbLex := range dbLexicons {
-			if _, err := registry.ParseAndRegister(dbLex.JSON); err != nil {
-				slog.Warn("Failed to parse database lexicon", "id", dbLex.ID, "error", err)
-			} else {
-				dbLoaded++
-			}
-		}
-		slog.Info("Loaded lexicons from database", "count", dbLoaded, "total", len(dbLexicons))
+		return nil, fmt.Errorf("failed to load saved database lexicons: %w", err)
+	}
+	for _, dbLex := range dbLexicons {
+		savedLexicons[dbLex.ID] = []byte(dbLex.JSON)
+	}
+	if len(dbLexicons) > 0 {
+		slog.Info("Loaded lexicons from database", "count", len(dbLexicons))
+	}
+	if adminHandler != nil {
+		adminHandler.Resolver().SetFilesystemLexicons(filesystemLexicons)
 	}
 
-	slog.Info("Total lexicons registered", "count", registry.Count())
+	svc.validator, err = validation.NewValidatorFromLexiconBytes(savedLexicons)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build startup Lexicon snapshot: %w", err)
+	}
+	registry := svc.validator.GraphQLRegistry()
+	collectionLexicons := registry.GetCollectionLexicons()
+	recordCollections := make([]string, 0, len(collectionLexicons))
+	for _, collection := range collectionLexicons {
+		recordCollections = append(recordCollections, collection.ID)
+	}
+	sort.Strings(recordCollections)
+	slog.Info("Startup Lexicon set ready", "lexicons", registry.Count(), "record_collections", len(recordCollections))
+
+	svc.validationRefresh = validationrefresh.NewScheduler(svc.records, svc.validator)
+	if err := svc.validationRefresh.RefreshCollections(ctx, recordCollections, "startup"); err != nil {
+		return nil, fmt.Errorf("startup validation refresh failed: %w", err)
+	}
 
 	// Create GraphQL handler
 	repos := &resolver.Repositories{
@@ -773,36 +796,32 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 
 	graphqlHandler, err := hgraphql.NewHandler(registry, repos)
 	if err != nil {
-		slog.Error("Failed to create GraphQL handler", "error", err)
-	} else {
-		r.Handle("/graphql", graphqlHandler)
-		r.Handle("/graphql/", graphqlHandler)
-		slog.Info("GraphQL endpoint enabled", "path", "/graphql")
-
-		// WebSocket subscription endpoint
-		var allowedOrigins []string
-		if cfg.AllowedOrigins != "" {
-			allowedOrigins = strings.Split(cfg.AllowedOrigins, ",")
-			for i := range allowedOrigins {
-				allowedOrigins[i] = strings.TrimSpace(allowedOrigins[i])
-			}
-		}
-		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema(), pubsub, repos, allowedOrigins)
-		r.Handle("/graphql/ws", subscriptionHandler)
-		slog.Info("GraphQL subscriptions enabled", "path", "/graphql/ws")
+		return nil, fmt.Errorf("failed to create GraphQL handler: %w", err)
 	}
+	r.Handle("/graphql", graphqlHandler)
+	r.Handle("/graphql/", graphqlHandler)
+	slog.Info("GraphQL endpoint enabled", "path", "/graphql")
 
-	// Resolve collections for Jetstream
-	var collections []string
+	// WebSocket subscription endpoint
+	var allowedOrigins []string
+	if cfg.AllowedOrigins != "" {
+		allowedOrigins = strings.Split(cfg.AllowedOrigins, ",")
+		for i := range allowedOrigins {
+			allowedOrigins[i] = strings.TrimSpace(allowedOrigins[i])
+		}
+	}
+	subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema(), pubsub, repos, allowedOrigins)
+	r.Handle("/graphql/ws", subscriptionHandler)
+	slog.Info("GraphQL subscriptions enabled", "path", "/graphql/ws")
+
+	// Keep Jetstream on the same startup collection set as GraphQL and
+	// validation unless an explicit fixed override was configured.
+	collections := recordCollections
 	if cfg.JetstreamCollections != "" {
 		collections = atproto.ParseCollections(cfg.JetstreamCollections)
-	} else {
-		for _, lex := range dbLexicons {
-			collections = append(collections, lex.ID)
-		}
 	}
 
-	return collections
+	return collections, nil
 }
 
 // startWorkers launches background worker goroutines (activity cleanup).
@@ -835,15 +854,13 @@ func startLabelerSubscribers(cfg *config.Config, svc *services, bg *backgroundSe
 	slog.Info("Labeler subscriptions started", "urls", logsafe.URLs(urls))
 }
 
-// startJetstream creates and starts the Jetstream consumer for real-time AT Protocol
-// events. It also wires up the lexicon change callback on the admin handler so that
-// adding/removing lexicons dynamically updates the consumer's collection filter.
+// startJetstream creates and starts the Jetstream consumer for the fixed
+// collection set selected at startup.
 func startJetstream(
 	cfg *config.Config,
 	svc *services,
 	pubsub *subscription.PubSub,
 	collections []string,
-	adminHandler *admin.Handler,
 	bg *backgroundServices,
 ) {
 	jsURL := cfg.JetstreamURL
@@ -863,6 +880,7 @@ func startJetstream(
 			svc.config,
 			svc.activity,
 			pubsub,
+			svc.validator,
 		)
 
 		jsCtx, jsCancel := context.WithCancel(context.Background())
@@ -879,39 +897,7 @@ func startJetstream(
 			}
 		}()
 	} else {
-		slog.Info("Jetstream consumer disabled (no collections - register lexicons or set JETSTREAM_COLLECTIONS)")
-	}
-
-	// Wire up lexicon change callback for dynamic Jetstream updates
-	if adminHandler != nil {
-		adminHandler.Resolver().SetLexiconChangeCallback(func(updatedCollections []string) error {
-			if bg.jsConsumer == nil {
-				bg.jsConsumer = jetstream.NewConsumer(
-					jetstream.ConsumerConfig{
-						JetstreamURL:  jsURL,
-						Collections:   updatedCollections,
-						DisableCursor: cfg.JetstreamDisableCursor,
-					},
-					svc.records,
-					svc.actors,
-					svc.config,
-					svc.activity,
-					pubsub,
-				)
-
-				go func() {
-					slog.Info("Starting Jetstream consumer (dynamic)",
-						"collections", updatedCollections,
-					)
-					if err := bg.jsConsumer.Start(context.Background()); err != nil {
-						slog.Error("Jetstream consumer error", "error", err)
-					}
-				}()
-				return nil
-			}
-			return bg.jsConsumer.UpdateCollections(updatedCollections)
-		})
-		slog.Info("Lexicon change callback configured for dynamic Jetstream updates")
+		slog.Info("Jetstream consumer disabled (no startup collections; save Lexicons and restart, or set JETSTREAM_COLLECTIONS)")
 	}
 }
 
@@ -931,7 +917,7 @@ func startBackfill(cfg *config.Config, svc *services) {
 		return
 	}
 
-	backfiller := backfill.NewBackfiller(bfConfig, svc.records, svc.actors, svc.activity)
+	backfiller := backfill.NewBackfiller(bfConfig, svc.records, svc.actors, svc.activity, svc.validator)
 
 	go func() {
 		slog.Info("Starting backfill operation",
@@ -964,7 +950,7 @@ func startTap(
 	tapURL := cfg.TapURL
 
 	// Create handler that stores records and publishes to subscriptions.
-	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub)
+	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub, svc.validator)
 
 	// Create consumer.
 	consumer := tap.NewConsumer(tap.ConsumerConfig{
@@ -1092,9 +1078,12 @@ func serve(r *chi.Mux, cfg *config.Config, bg *backgroundServices) error {
 	return nil
 }
 
-// loadLexiconsFromDir loads all lexicon JSON files from a directory tree.
-func loadLexiconsFromDir(dir string, registry *lexicon.Registry) error {
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+// loadLexiconsFromDir loads saved Lexicon JSON from a directory tree. Files
+// that are valid JSON but not Lexicon documents are ignored.
+func loadLexiconsFromDir(dir string) (map[string][]byte, error) {
+	saved := make(map[string][]byte)
+	origins := make(map[string]string)
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -1107,15 +1096,31 @@ func loadLexiconsFromDir(dir string, registry *lexicon.Registry) error {
 			return err
 		}
 
-		lex, parseErr := lexicon.ParseBytes(data)
-		if parseErr != nil {
-			// Skip non-lexicon JSON files
-			return nil //nolint:nilerr // intentionally skip parse errors
+		var marker struct {
+			Lexicon json.RawMessage `json:"lexicon"`
+			ID      string          `json:"id"`
+		}
+		if err := json.Unmarshal(data, &marker); err != nil {
+			return fmt.Errorf("invalid JSON file %s: %w", path, err)
+		}
+		if len(marker.Lexicon) == 0 || marker.ID == "" {
+			slog.Warn("Skipping JSON file that is not a Lexicon document", "path", path)
+			return nil
 		}
 
-		registry.Register(lex)
+		lex, parseErr := lexicon.ParseBytes(data)
+		if parseErr != nil {
+			return fmt.Errorf("invalid Lexicon file %s: %w", path, parseErr)
+		}
+		if existingPath, duplicate := origins[lex.ID]; duplicate {
+			return fmt.Errorf("duplicate Lexicon id %s declared by both %s and %s", lex.ID, existingPath, path)
+		}
+
+		origins[lex.ID] = path
+		saved[lex.ID] = data
 		return nil
 	})
+	return saved, err
 }
 
 // populateActivityFromRecords creates activity entries from existing records.

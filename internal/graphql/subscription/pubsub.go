@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strconv"
-	"strings"
 	"sync"
 )
 
@@ -21,19 +20,25 @@ const (
 	EventDelete EventType = "delete"
 
 	// SubscriberBufferSize is the per-subscriber event channel buffer.
-	// PubSub drops events (non-blocking) for slow subscribers to avoid
-	// blocking the publisher. Subscribers reconnect to catch up.
+	// PubSub delivery is best-effort and lossy: events are dropped rather than
+	// blocking the publisher when a matching subscriber's buffer is full.
 	SubscriberBufferSize = 100
 )
 
 // RecordEvent represents a record change event.
 type RecordEvent struct {
-	Type       EventType              `json:"type"`
-	URI        string                 `json:"uri"`
-	CID        string                 `json:"cid"`
-	DID        string                 `json:"did"`
-	Collection string                 `json:"collection"`
-	Record     map[string]interface{} `json:"record,omitempty"`
+	Type       EventType   `json:"type"`
+	URI        string      `json:"uri"`
+	CID        string      `json:"cid"`
+	DID        string      `json:"did"`
+	Collection string      `json:"collection"`
+	Record     interface{} `json:"record,omitempty"`
+
+	// TypedRecord carries the validated create/update record or the previously
+	// visible record for a delete. It is internal subscription-routing metadata.
+	TypedRecord  map[string]interface{} `json:"-"`
+	TypedVisible bool                   `json:"-"`
+	WasValid     bool                   `json:"-"`
 }
 
 // Subscriber is a channel that receives events.
@@ -111,31 +116,78 @@ func (ps *PubSub) Publish(event *RecordEvent) {
 	}
 }
 
-// PublishRecord is a convenience method to publish a record event.
+// RawGraphQLValue returns the generic recordEvents payload. Internal typed
+// visibility metadata is intentionally excluded.
+func (event *RecordEvent) RawGraphQLValue() map[string]interface{} {
+	return map[string]interface{}{
+		"type":       string(event.Type),
+		"uri":        event.URI,
+		"cid":        event.CID,
+		"did":        event.DID,
+		"collection": event.Collection,
+		"record":     event.Record,
+	}
+}
+
+// PublishRecord publishes a raw create/update event that is eligible for typed
+// delivery. Ingestion should use PublishRecordWithValidation with the actual
+// classification result.
 func (ps *PubSub) PublishRecord(eventType EventType, uri, cid, did, collection string, recordJSON []byte) {
-	var record map[string]interface{}
-	if len(recordJSON) > 0 && eventType != EventDelete {
-		_ = json.Unmarshal(recordJSON, &record)
-	}
+	ps.PublishRecordWithValidation(eventType, uri, cid, did, collection, recordJSON, true)
+}
 
-	// Add standard fields
-	if record != nil {
-		record["uri"] = uri
-		record["cid"] = cid
-		record["did"] = did
-		if slash := strings.LastIndex(uri, "/"); slash >= 0 && slash+1 < len(uri) {
-			record["rkey"] = uri[slash+1:]
-		}
-	}
-
+// PublishRecordWithValidation publishes every raw create/update event and
+// carries its write-time typed visibility to prevent later URI updates from
+// changing eligibility for an earlier queued event.
+func (ps *PubSub) PublishRecordWithValidation(eventType EventType, uri, cid, did, collection string, recordJSON []byte, typedVisible bool) {
 	ps.Publish(&RecordEvent{
-		Type:       eventType,
-		URI:        uri,
-		CID:        cid,
-		DID:        did,
-		Collection: collection,
-		Record:     record,
+		Type:         eventType,
+		URI:          uri,
+		CID:          cid,
+		DID:          did,
+		Collection:   collection,
+		Record:       decodeRawSubscriptionRecord(recordJSON),
+		TypedRecord:  decodeTypedSubscriptionRecord(recordJSON, uri, cid),
+		TypedVisible: typedVisible,
 	})
+}
+
+// PublishDelete publishes a raw delete and carries the pre-delete typed record
+// only for typed subscription eligibility and payload resolution.
+func (ps *PubSub) PublishDelete(uri, cid, did, collection string, previousRecordJSON []byte, wasValid bool) {
+	ps.Publish(&RecordEvent{
+		Type:        EventDelete,
+		URI:         uri,
+		CID:         cid,
+		DID:         did,
+		Collection:  collection,
+		TypedRecord: decodeTypedSubscriptionRecord(previousRecordJSON, uri, cid),
+		WasValid:    wasValid,
+	})
+}
+
+func decodeRawSubscriptionRecord(recordJSON []byte) interface{} {
+	if len(recordJSON) == 0 {
+		return nil
+	}
+	var record interface{}
+	if err := json.Unmarshal(recordJSON, &record); err != nil {
+		return nil
+	}
+	return record
+}
+
+func decodeTypedSubscriptionRecord(recordJSON []byte, uri, cid string) map[string]interface{} {
+	if len(recordJSON) == 0 {
+		return nil
+	}
+	var record map[string]interface{}
+	if err := json.Unmarshal(recordJSON, &record); err != nil || record == nil {
+		return nil
+	}
+	record["uri"] = uri
+	record["cid"] = cid
+	return record
 }
 
 // SubscriberCount returns the current number of subscribers.

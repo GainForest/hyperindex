@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 const smokeRecordsQuery = `
@@ -22,6 +23,10 @@ query SmokeRecords($collection: String!, $first: Int!, $after: String) {
         collection
         rkey
         value
+        validationStatus
+        validationError
+        validatedAt
+        lexiconHash
       }
     }
     pageInfo {
@@ -105,17 +110,11 @@ func TestTypedByURIRoundTrip(t *testing.T) {
 		collection := collection
 		t.Run(collection.NSID, func(t *testing.T) {
 			typedField := config.expectations.TypedQueryFields[collection.NSID]
-			genericResponse := fetchGenericRecords(t, config, collection.NSID, 1)
-			if len(genericResponse.Records.Edges) != 1 {
-				t.Fatalf("records(%q, first: 1) returned %d edges, want exactly 1", collection.NSID, len(genericResponse.Records.Edges))
-			}
-
-			genericRecord := genericResponse.Records.Edges[0].Node
-			assertGenericRecordShape(t, collection.NSID, 0, genericRecord)
+			genericRecord := fetchFirstValidGenericRecord(t, config, collection.NSID)
 
 			typedRecord := fetchTypedRecordByURI(t, config, typedField, genericRecord.URI)
 			if typedRecord == nil {
-				t.Fatalf("%sByUri(%q) returned null", typedField, genericRecord.URI)
+				t.Fatalf("%sByUri(%q) returned null for raw record with validationStatus=valid", typedField, genericRecord.URI)
 			}
 
 			assertMatchingRecordMetadata(t, typedField+"ByUri", genericRecord, *typedRecord)
@@ -130,13 +129,7 @@ func TestTypedURIWhereFilterRoundTrip(t *testing.T) {
 		collection := collection
 		t.Run(collection.NSID, func(t *testing.T) {
 			typedField := config.expectations.TypedQueryFields[collection.NSID]
-			genericResponse := fetchGenericRecords(t, config, collection.NSID, 1)
-			if len(genericResponse.Records.Edges) != 1 {
-				t.Fatalf("records(%q, first: 1) returned %d edges, want exactly 1", collection.NSID, len(genericResponse.Records.Edges))
-			}
-
-			genericRecord := genericResponse.Records.Edges[0].Node
-			assertGenericRecordShape(t, collection.NSID, 0, genericRecord)
+			genericRecord := fetchFirstValidGenericRecord(t, config, collection.NSID)
 
 			eqRecords := fetchTypedRecordsByURIWhereEQ(t, config, typedField, genericRecord.URI)
 			assertSingleURIWhereMatch(t, typedField+" where.uri.eq", genericRecord, eqRecords)
@@ -149,9 +142,81 @@ func TestTypedURIWhereFilterRoundTrip(t *testing.T) {
 	smokeLog("✓ Typed uri where filters work for eq and in")
 }
 
+func TestTypedQueriesHideEncounteredNonValidRecords(t *testing.T) {
+	config := loadSmokeConfig(t)
+	hiddenRecordsChecked := 0
+
+	for _, collection := range config.expectations.DataBearingCollections {
+		collection := collection
+		t.Run(collection.NSID, func(t *testing.T) {
+			genericRecord, ok := fetchFirstHiddenGenericRecord(t, config, collection.NSID)
+			if !ok {
+				smokeLog("○ %s has no hidden record in its newest 1000 raw rows", collection.NSID)
+				return
+			}
+
+			typedField := config.expectations.TypedQueryFields[collection.NSID]
+			if typedRecord := fetchTypedRecordByURI(t, config, typedField, genericRecord.URI); typedRecord != nil {
+				t.Fatalf("%sByUri(%q) returned a record with validationStatus=%q, want null", typedField, genericRecord.URI, genericRecord.ValidationStatus)
+			}
+			if records := fetchTypedRecordsByURIWhereEQ(t, config, typedField, genericRecord.URI); len(records) != 0 {
+				t.Fatalf("%s where.uri.eq returned %d records for hidden uri %q, want 0", typedField, len(records), genericRecord.URI)
+			}
+			if records := fetchTypedRecordsByURIWhereIn(t, config, typedField, genericRecord.URI); len(records) != 0 {
+				t.Fatalf("%s where.uri.in returned %d records for hidden uri %q, want 0", typedField, len(records), genericRecord.URI)
+			}
+
+			hiddenRecordsChecked++
+			smokeLog("✓ %s hides raw %s record %s from typed queries", collection.NSID, genericRecord.ValidationStatus, genericRecord.URI)
+		})
+	}
+
+	if hiddenRecordsChecked == 0 {
+		smokeLog("○ No hidden records were available for typed visibility checks")
+	}
+}
+
 func fetchGenericRecords(t testing.TB, config smokeConfig, collection string, first int) recordsQueryResponse {
 	t.Helper()
 	return fetchGenericRecordsPage(t, config, collection, first, "")
+}
+
+func fetchFirstValidGenericRecord(t testing.TB, config smokeConfig, collection string) Record {
+	t.Helper()
+
+	after := ""
+	for {
+		page := fetchGenericRecordsPage(t, config, collection, 1000, after)
+		for edgeIndex, edge := range page.Records.Edges {
+			assertGenericRecordShape(t, collection, edgeIndex, edge.Node)
+			if edge.Node.ValidationStatus == "valid" {
+				return edge.Node
+			}
+		}
+		if !page.Records.PageInfo.HasNextPage {
+			break
+		}
+		if page.Records.PageInfo.EndCursor == "" {
+			t.Fatalf("records(%q) has next page without an end cursor while finding a valid record", collection)
+		}
+		after = page.Records.PageInfo.EndCursor
+	}
+
+	t.Fatalf("records(%q) contains no validationStatus=valid record for typed smoke checks", collection)
+	return Record{}
+}
+
+func fetchFirstHiddenGenericRecord(t testing.TB, config smokeConfig, collection string) (Record, bool) {
+	t.Helper()
+
+	page := fetchGenericRecords(t, config, collection, 1000)
+	for edgeIndex, edge := range page.Records.Edges {
+		assertGenericRecordShape(t, collection, edgeIndex, edge.Node)
+		if edge.Node.ValidationStatus != "valid" {
+			return edge.Node, true
+		}
+	}
+	return Record{}, false
 }
 
 func fetchAllGenericRecords(t testing.TB, config smokeConfig, collection string) []recordEdge {
@@ -161,6 +226,9 @@ func fetchAllGenericRecords(t testing.TB, config smokeConfig, collection string)
 	after := ""
 	for {
 		page := fetchGenericRecordsPage(t, config, collection, 1000, after)
+		for edgeIndex, edge := range page.Records.Edges {
+			assertGenericRecordShape(t, collection, len(edges)+edgeIndex, edge.Node)
+		}
 		edges = append(edges, page.Records.Edges...)
 		if !page.Records.PageInfo.HasNextPage {
 			return edges
@@ -305,18 +373,83 @@ func assertGenericRecordShape(t testing.TB, collection string, edgeIndex int, re
 	if record.RKey == "" {
 		t.Fatalf("record shape %s: rkey is empty", location)
 	}
-	if record.Value == nil {
-		t.Fatalf("record shape %s: value is null, want JSON object", location)
+
+	assertGenericRecordValidationMetadata(t, location, record)
+	if record.ValidationStatus != "valid" {
+		return
 	}
-	if rawType, ok := record.Value["$type"]; ok {
-		typeName, ok := rawType.(string)
-		if !ok {
-			t.Fatalf("record shape %s: value $type = %T(%v), want string %q", location, rawType, rawType, collection)
-		}
-		if typeName != collection {
-			t.Fatalf("record shape %s: value $type = %q, want %q", location, typeName, collection)
+
+	value, ok := record.Value.(map[string]any)
+	if !ok {
+		t.Fatalf("record shape %s: valid value = %T(%v), want JSON object", location, record.Value, record.Value)
+	}
+	rawType, ok := value["$type"]
+	if !ok {
+		t.Fatalf("record shape %s: valid value is missing $type %q", location, collection)
+	}
+	typeName, ok := rawType.(string)
+	if !ok {
+		t.Fatalf("record shape %s: valid value $type = %T(%v), want string %q", location, rawType, rawType, collection)
+	}
+	if typeName != collection {
+		t.Fatalf("record shape %s: valid value $type = %q, want %q", location, typeName, collection)
+	}
+}
+
+func assertGenericRecordValidationMetadata(t testing.TB, location string, record Record) {
+	t.Helper()
+
+	validatedAt := optionalString(record.ValidatedAt)
+	if validatedAt != "" {
+		if _, err := time.Parse(time.RFC3339, validatedAt); err != nil {
+			t.Fatalf("record validation %s: validatedAt = %q, want RFC3339 timestamp: %v", location, validatedAt, err)
 		}
 	}
+
+	validationError := optionalString(record.ValidationError)
+	lexiconHash := optionalString(record.LexiconHash)
+	switch record.ValidationStatus {
+	case "valid":
+		if validatedAt == "" {
+			t.Fatalf("record validation %s: valid record has empty validatedAt", location)
+		}
+		if validationError != "" {
+			t.Fatalf("record validation %s: valid record has validationError %q", location, validationError)
+		}
+		if lexiconHash == "" {
+			t.Fatalf("record validation %s: valid record has empty lexiconHash", location)
+		}
+	case "invalid":
+		if validatedAt == "" {
+			t.Fatalf("record validation %s: invalid record has empty validatedAt", location)
+		}
+		if validationError == "" {
+			t.Fatalf("record validation %s: invalid record has empty validationError", location)
+		}
+		if lexiconHash == "" {
+			t.Fatalf("record validation %s: invalid record has empty lexiconHash", location)
+		}
+	case "unknown_schema":
+		if lexiconHash != "" {
+			t.Fatalf("record validation %s: unknown_schema record has lexiconHash %q, want empty", location, lexiconHash)
+		}
+	case "validation_error":
+		if validatedAt == "" {
+			t.Fatalf("record validation %s: validation_error record has empty validatedAt", location)
+		}
+		if validationError == "" {
+			t.Fatalf("record validation %s: validation_error record has empty validationError", location)
+		}
+	default:
+		t.Fatalf("record validation %s: validationStatus = %q, want valid, invalid, unknown_schema, or validation_error", location, record.ValidationStatus)
+	}
+}
+
+func optionalString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func assertSingleURIWhereMatch(t testing.TB, label string, generic Record, records []typedByURIRecord) {

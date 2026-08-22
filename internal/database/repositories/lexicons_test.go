@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/GainForest/hyperindex/internal/database"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/testutil"
 )
@@ -37,6 +40,9 @@ func TestLexiconsRepository_Upsert(t *testing.T) {
 	if lex.JSON != jsonData {
 		t.Errorf("JSON = %q, want %q", lex.JSON, jsonData)
 	}
+	if lex.CreatedAt.IsZero() {
+		t.Fatal("CreatedAt is zero after insert")
+	}
 
 	// Update existing lexicon with new JSON
 	updatedJSON := `{"lexicon":1,"id":"app.bsky.feed.post","revision":2}`
@@ -51,6 +57,74 @@ func TestLexiconsRepository_Upsert(t *testing.T) {
 	}
 	if lex.JSON != updatedJSON {
 		t.Errorf("JSON after upsert = %q, want %q", lex.JSON, updatedJSON)
+	}
+}
+
+func TestLexiconsRepository_UpsertPreservesExactJSON(t *testing.T) {
+	repo := setupLexiconsTest(t)
+	ctx := context.Background()
+	const raw = "{\n  \"lexicon\": 1,\n  \"id\": \"app.example.formatted\",\n  \"defs\": {}\n}\n"
+
+	if err := repo.Upsert(ctx, "app.example.formatted", raw); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	lex, err := repo.GetByID(ctx, "app.example.formatted")
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if lex.JSON != raw {
+		t.Fatalf("GetByID().JSON = %q, want exact saved bytes %q", lex.JSON, raw)
+	}
+}
+
+func TestLexiconsRepository_UpsertMany(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	writes := []repositories.LexiconWrite{
+		{ID: "app.example.first", JSON: `{"lexicon":1,"id":"app.example.first"}`},
+		{ID: "app.example.second", JSON: `{"lexicon":1,"id":"app.example.second"}`},
+	}
+
+	if err := db.Lexicons.UpsertMany(ctx, writes); err != nil {
+		t.Fatalf("UpsertMany() error = %v", err)
+	}
+	for _, write := range writes {
+		lex, err := db.Lexicons.GetByID(ctx, write.ID)
+		if err != nil {
+			t.Fatalf("GetByID(%s) error = %v", write.ID, err)
+		}
+		if lex.JSON != write.JSON {
+			t.Fatalf("GetByID(%s).JSON = %q, want %q", write.ID, lex.JSON, write.JSON)
+		}
+	}
+}
+
+func TestLexiconsRepository_UpsertManyRollsBackOnFailure(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	if db.Executor.Dialect() != database.SQLite {
+		t.Skip("SQLite trigger provides deterministic mid-batch failure coverage")
+	}
+	ctx := context.Background()
+	if _, err := db.Executor.DB().ExecContext(ctx, `
+		CREATE TRIGGER fail_lexicon_batch
+		BEFORE INSERT ON lexicon
+		WHEN NEW.id = 'app.example.fail'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced batch failure');
+		END;
+	`); err != nil {
+		t.Fatalf("create failure trigger: %v", err)
+	}
+
+	err := db.Lexicons.UpsertMany(ctx, []repositories.LexiconWrite{
+		{ID: "app.example.first", JSON: `{"lexicon":1,"id":"app.example.first"}`},
+		{ID: "app.example.fail", JSON: `{"lexicon":1,"id":"app.example.fail"}`},
+	})
+	if err == nil {
+		t.Fatal("UpsertMany() error = nil, want forced failure")
+	}
+	if exists, existsErr := db.Lexicons.Exists(ctx, "app.example.first"); existsErr != nil || exists {
+		t.Fatalf("first Lexicon exists = %v, error = %v; want false after rollback", exists, existsErr)
 	}
 }
 
@@ -128,7 +202,85 @@ func TestLexiconsRepository_GetAll(t *testing.T) {
 		if lexicons[1].ID != "app.bsky.feed.post" {
 			t.Errorf("lexicons[1].ID = %q, want %q", lexicons[1].ID, "app.bsky.feed.post")
 		}
+		for _, lex := range lexicons {
+			if lex.CreatedAt.IsZero() {
+				t.Fatalf("GetAll(%s).CreatedAt is zero", lex.ID)
+			}
+		}
 	})
+}
+
+func TestLexiconsRepository_MalformedCreatedAtReturnsError(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	const id = "app.example.malformed-time"
+	if err := db.Lexicons.Upsert(ctx, id, `{"lexicon":1,"id":"app.example.malformed-time"}`); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	if _, err := db.Executor.DB().ExecContext(ctx, "UPDATE lexicon SET created_at = ? WHERE id = ?", "not-a-time", id); err != nil {
+		t.Fatalf("set malformed created_at: %v", err)
+	}
+
+	if _, err := db.Lexicons.GetByID(ctx, id); err == nil || !strings.Contains(err.Error(), "parse Lexicon "+id+" created_at") {
+		t.Fatalf("GetByID() error = %v, want contextual created_at parse error", err)
+	}
+	if _, err := db.Lexicons.GetAll(ctx); err == nil || !strings.Contains(err.Error(), "parse Lexicon "+id+" created_at") {
+		t.Fatalf("GetAll() error = %v, want contextual created_at parse error", err)
+	}
+	if err := db.Lexicons.MutateValidated(ctx,
+		func([]*repositories.Lexicon) (repositories.LexiconMutation, error) {
+			return repositories.LexiconMutation{}, nil
+		},
+		func([]*repositories.Lexicon) error { return nil },
+	); err == nil || !strings.Contains(err.Error(), "parse Lexicon "+id+" created_at") {
+		t.Fatalf("MutateValidated() error = %v, want contextual created_at parse error", err)
+	}
+}
+
+func TestLexiconsRepository_CreatedAtPostgres(t *testing.T) {
+	exec := newPostgresRecordsTestExecutor(t)
+	repo := repositories.NewLexiconsRepository(exec)
+	ctx := context.Background()
+	const id = "app.example.postgres-time"
+	if err := repo.Upsert(ctx, id, `{"lexicon":1,"id":"app.example.postgres-time"}`); err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	want := time.Date(2026, time.July, 29, 4, 30, 15, 123456000, time.UTC)
+	if _, err := exec.DB().ExecContext(ctx, "UPDATE lexicon SET created_at = $1 WHERE id = $2", want, id); err != nil {
+		t.Fatalf("set created_at: %v", err)
+	}
+
+	lex, err := repo.GetByID(ctx, id)
+	if err != nil {
+		t.Fatalf("GetByID() error = %v", err)
+	}
+	if !lex.CreatedAt.Equal(want) {
+		t.Fatalf("GetByID().CreatedAt = %s, want %s", lex.CreatedAt, want)
+	}
+	all, err := repo.GetAll(ctx)
+	if err != nil {
+		t.Fatalf("GetAll() error = %v", err)
+	}
+	if len(all) != 1 || !all[0].CreatedAt.Equal(want) {
+		t.Fatalf("GetAll() = %+v, want one Lexicon with CreatedAt %s", all, want)
+	}
+
+	var currentCreatedAt, prospectiveCreatedAt time.Time
+	if err := repo.MutateValidated(ctx,
+		func(current []*repositories.Lexicon) (repositories.LexiconMutation, error) {
+			currentCreatedAt = current[0].CreatedAt
+			return repositories.LexiconMutation{}, nil
+		},
+		func(prospective []*repositories.Lexicon) error {
+			prospectiveCreatedAt = prospective[0].CreatedAt
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("MutateValidated() error = %v", err)
+	}
+	if !currentCreatedAt.Equal(want) || !prospectiveCreatedAt.Equal(want) {
+		t.Fatalf("MutateValidated() CreatedAt values = %s/%s, want %s", currentCreatedAt, prospectiveCreatedAt, want)
+	}
 }
 
 func TestLexiconsRepository_Delete(t *testing.T) {

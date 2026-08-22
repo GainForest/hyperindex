@@ -12,6 +12,13 @@ import (
 	"github.com/GainForest/hyperindex/internal/database/postgres"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/validation"
+)
+
+const (
+	endorsementTestBadgeAwardCollection      = "app.certified.badge.award"
+	endorsementTestBadgeDefinitionCollection = "app.certified.badge.definition"
+	endorsementTestBadgeResponseCollection   = "app.certified.badge.response"
 )
 
 func TestEndorsementAdjacencyForSQLite(t *testing.T) {
@@ -26,6 +33,52 @@ func TestEndorsementAdjacencyForPostgres(t *testing.T) {
 	}
 
 	runEndorsementAdjacencyCore(t, repo, testSuffix(t))
+}
+
+func TestEndorsementAdjacencyForValidationGateSQLite(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	runEndorsementAdjacencyValidationGate(t, db.Records, testSuffix(t))
+}
+
+func TestEndorsementAdjacencyForValidationGatePostgres(t *testing.T) {
+	repo, ok := setupPostgresRecordsRepository(t)
+	if !ok {
+		t.Skip("PostgreSQL endorsement adjacency validation gate test requires DATABASE_URL pointing at a postgres database named test or ending with _test/-test")
+	}
+
+	runEndorsementAdjacencyValidationGate(t, repo, testSuffix(t))
+}
+
+func runEndorsementAdjacencyValidationGate(t *testing.T, repo *repositories.RecordsRepository, suffix string) {
+	t.Helper()
+	ctx := context.Background()
+
+	validDefinitionURI := "at://did:plc:issuer/app.certified.badge.definition/valid-" + suffix
+	invalidDefinitionURI := "at://did:plc:issuer/app.certified.badge.definition/invalid-" + suffix
+	validAwardURI := "at://did:plc:issuer/app.certified.badge.award/valid-" + suffix
+	invalidAwardURI := "at://did:plc:issuer/app.certified.badge.award/invalid-" + suffix
+	invalidDefinitionAwardURI := "at://did:plc:issuer/app.certified.badge.award/invalid-definition-" + suffix
+	invalidResponseURI := "at://did:plc:alice/app.certified.badge.response/invalid-" + suffix
+
+	insertRecord(t, repo, validDefinitionURI, "cid-valid-definition-"+suffix, "did:plc:issuer", endorsementTestBadgeDefinitionCollection, `{"badgeType":"endorsement"}`)
+	insertRecord(t, repo, invalidDefinitionURI, "cid-invalid-definition-"+suffix, "did:plc:issuer", endorsementTestBadgeDefinitionCollection, `{"badgeType":"endorsement"}`)
+	insertRecord(t, repo, validAwardURI, "cid-valid-award-"+suffix, "did:plc:issuer", endorsementTestBadgeAwardCollection, `{"badge":{"uri":"`+validDefinitionURI+`"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:alice"}}`)
+	insertRecord(t, repo, invalidAwardURI, "cid-invalid-award-"+suffix, "did:plc:issuer", endorsementTestBadgeAwardCollection, `{"badge":{"uri":"`+validDefinitionURI+`"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:bob"}}`)
+	insertRecord(t, repo, invalidDefinitionAwardURI, "cid-invalid-definition-award-"+suffix, "did:plc:issuer", endorsementTestBadgeAwardCollection, `{"badge":{"uri":"`+invalidDefinitionURI+`"},"subject":{"$type":"app.certified.defs#did","did":"did:plc:carol"}}`)
+	insertRecord(t, repo, invalidResponseURI, "cid-invalid-response-"+suffix, "did:plc:alice", endorsementTestBadgeResponseCollection, `{"badgeAward":{"uri":"`+validAwardURI+`"},"response":"rejected"}`)
+
+	markRecordNonValid(t, repo, invalidDefinitionURI, validation.StatusUnknownSchema)
+	markRecordNonValid(t, repo, invalidAwardURI, validation.StatusValidationError)
+	markRecordNonValid(t, repo, invalidResponseURI, validation.StatusInvalid)
+
+	got, err := repo.EndorsementAdjacencyFor(ctx, []string{"did:plc:issuer"})
+	if err != nil {
+		t.Fatalf("EndorsementAdjacencyFor() error = %v", err)
+	}
+	want := map[string][]string{"did:plc:issuer": {"did:plc:alice"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("EndorsementAdjacencyFor() = %#v, want %#v", got, want)
+	}
 }
 
 func TestEndorsementAdjacencyForRequiresDIDSubjectSQLite(t *testing.T) {
@@ -238,6 +291,17 @@ func safePostgresTestDatabaseURL(t *testing.T) (string, bool) {
 func isSafePostgresTestDatabaseName(databaseName string) bool {
 	name := strings.ToLower(strings.TrimSpace(databaseName))
 	return name == "test" || strings.HasSuffix(name, "_test") || strings.HasSuffix(name, "-test")
+}
+
+func markRecordNonValid(t *testing.T, repo *repositories.RecordsRepository, uri string, status validation.Status) {
+	t.Helper()
+	lexiconHash := "test-lexicon-hash"
+	if status == validation.StatusUnknownSchema {
+		lexiconHash = ""
+	}
+	if err := repo.UpdateValidationStatus(context.Background(), uri, status, "non-valid test fixture", lexiconHash); err != nil {
+		t.Fatalf("failed to mark record %s as %s: %v", uri, status, err)
+	}
 }
 
 func testSuffix(t *testing.T) string {

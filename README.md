@@ -54,9 +54,13 @@ Lexicons define the AT Protocol record types you want to index. Hyperindex suppo
    }
    ```
 
-Or place lexicon JSON files in a directory and set the `LEXICON_DIR` environment variable.
+Or place lexicon JSON files in a directory and set the `LEXICON_DIR` environment variable. The backend Docker image includes the dependency Lexicons pinned in `lexicons.json`. Refresh them with:
 
-After registering by NSID or uploading a ZIP file, restart/redeploy the backend indexer for the new lexicons to appear in the public GraphQL schema and query list. The admin lexicon list updates immediately, but typed GraphQL queries are generated at backend startup.
+```bash
+npm exec --yes --package=@atproto/lex@0.3.6 -- lex install --update --lexicons ./lexicons --manifest ./lexicons.json
+```
+
+After registering, uploading, or deleting Lexicons, restart/redeploy the backend indexer. The admin Lexicon list updates immediately, but public GraphQL, Indigo record validation, and default Jetstream collection filters all keep using the Lexicon set loaded at startup until the process restarts. For multi-replica deployments, coordinate Lexicon-changing rollouts so replicas using the old and new startup snapshots never serve concurrently against the shared validation metadata.
 
 **Example lexicons:**
 - `org.hypercerts.claim.activity` - Hypercert claim activity

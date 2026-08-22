@@ -20,8 +20,10 @@ import (
 	"github.com/GainForest/hyperindex/internal/database/repositories"
 	"github.com/GainForest/hyperindex/internal/graphql/authoridentity"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
+	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/lexicon"
 	"github.com/GainForest/hyperindex/internal/testutil"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 // loadLexiconsFromDir loads all lexicon JSON files from a directory tree.
@@ -1577,6 +1579,11 @@ func setupSchemaRecordsTestDB(t *testing.T, recordsToInsert []*repositories.Reco
 	db := testutil.SetupTestDB(t)
 	if err := db.Records.BatchInsert(ctx, recordsToInsert); err != nil {
 		t.Fatalf("setupSchemaRecordsTestDB: failed to insert records: %v", err)
+	}
+	for _, rec := range recordsToInsert {
+		if err := db.Records.UpdateValidationStatus(ctx, rec.URI, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("setupSchemaRecordsTestDB: failed to mark record valid: %v", err)
+		}
 	}
 
 	repos := &resolver.Repositories{
@@ -3188,6 +3195,9 @@ func TestCertifiedProfileDataMissingProfileReturnsNull(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert record: %v", err)
 	}
+	if err := db.Records.UpdateValidationStatus(ctx, "at://did:plc:missing/com.example.certified.consumer/rkey1", validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+		t.Fatalf("mark record valid: %v", err)
+	}
 	repos := &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels}
 	ctx = resolver.WithRepositories(ctx, repos)
 
@@ -3204,6 +3214,43 @@ func TestCertifiedProfileDataMissingProfileReturnsNull(t *testing.T) {
 	node := firstConnectionNode(t, data["comExampleCertifiedConsumer"], "comExampleCertifiedConsumer")
 	if got := node["certifiedProfileData"]; got != nil {
 		t.Fatalf("certifiedProfileData = %#v, want nil", got)
+	}
+}
+
+func TestCertifiedProfileDataInvalidProfileReturnsNull(t *testing.T) {
+	schema := buildCertifiedProfileTestSchema(t)
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	consumerURI := "at://did:plc:invalid-profile/com.example.certified.consumer/rkey1"
+	profileURI := "at://did:plc:invalid-profile/app.certified.actor.profile/self"
+	if err := db.Records.BatchInsert(ctx, []*repositories.Record{
+		{URI: consumerURI, CID: "cid-consumer", DID: "did:plc:invalid-profile", Collection: "com.example.certified.consumer", JSON: `{"text":"hello invalid profile"}`},
+		{URI: profileURI, CID: "cid-profile", DID: "did:plc:invalid-profile", Collection: "app.certified.actor.profile", JSON: `{"displayName":"Hidden Profile"}`},
+	}); err != nil {
+		t.Fatalf("BatchInsert() error = %v", err)
+	}
+	if err := db.Records.UpdateValidationStatus(ctx, consumerURI, validation.StatusValid, "", "hash-current"); err != nil {
+		t.Fatalf("mark consumer valid: %v", err)
+	}
+	if err := db.Records.UpdateValidationStatus(ctx, profileURI, validation.StatusInvalid, "missing createdAt", "hash-current"); err != nil {
+		t.Fatalf("mark profile invalid: %v", err)
+	}
+	ctx = resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels})
+
+	query := `{
+		comExampleCertifiedConsumer(first: 10) { edges { node { certifiedProfileData { displayName } } } }
+		search(query: "hello", collection: "com.example.certified.consumer", first: 10) { edges { node { certifiedProfileData { displayName } } } }
+	}`
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	for _, field := range []string{"comExampleCertifiedConsumer", "search"} {
+		node := firstConnectionNode(t, data[field], field)
+		if got := node["certifiedProfileData"]; got != nil {
+			t.Fatalf("%s certifiedProfileData = %#v, want nil for invalid profile", field, got)
+		}
 	}
 }
 
@@ -3242,6 +3289,9 @@ func TestRecordAuthorIdentityAcrossQueries(t *testing.T) {
 	} {
 		if _, err := db.Records.Insert(ctx, record.uri, record.cid, record.did, "com.example.certified.consumer", record.json); err != nil {
 			t.Fatalf("Insert(%s) error = %v", record.did, err)
+		}
+		if err := db.Records.UpdateValidationStatus(ctx, record.uri, validation.StatusValid, "", "hash-current"); err != nil {
+			t.Fatalf("mark %s valid: %v", record.did, err)
 		}
 	}
 
@@ -3301,13 +3351,21 @@ func TestRecordAuthorIdentityAcrossQueries(t *testing.T) {
 		}
 	}
 
+	authorEvent := &subscription.RecordEvent{
+		Type:         subscription.EventCreate,
+		URI:          "at://did:plc:alice/com.example.certified.consumer/alice-record",
+		CID:          "cid-author-alice",
+		DID:          "did:plc:alice",
+		Collection:   "com.example.certified.consumer",
+		Record:       map[string]interface{}{"text": "hello from alice"},
+		TypedRecord:  map[string]interface{}{"text": "hello from alice"},
+		TypedVisible: true,
+	}
 	subscriptionResult := graphql.Do(graphql.Params{
 		Schema:        *schema,
 		RequestString: `subscription { recordEvents { did author { did handle } } }`,
 		Context:       ctx,
-		RootObject: map[string]interface{}{
-			"recordEvents": map[string]interface{}{"did": "did:plc:alice"},
-		},
+		RootObject:    map[string]interface{}{"__recordEvent": authorEvent},
 	})
 	if len(subscriptionResult.Errors) > 0 {
 		t.Fatalf("subscription author returned errors: %v", subscriptionResult.Errors)
@@ -3319,17 +3377,7 @@ func TestRecordAuthorIdentityAcrossQueries(t *testing.T) {
 		Schema:        *schema,
 		RequestString: `subscription { comExampleCertifiedConsumerEvents { did author { did handle } } }`,
 		Context:       ctx,
-		RootObject: map[string]interface{}{
-			"recordEvents": map[string]interface{}{
-				"collection": "com.example.certified.consumer",
-				"record": map[string]interface{}{
-					"uri":  "at://did:plc:alice/com.example.certified.consumer/alice-record",
-					"cid":  "cid-author-alice",
-					"did":  "did:plc:alice",
-					"rkey": "alice-record",
-				},
-			},
-		},
+		RootObject:    map[string]interface{}{"__recordEvent": authorEvent},
 	})
 	if len(typedSubscriptionResult.Errors) > 0 {
 		t.Fatalf("typed subscription author returned errors: %v", typedSubscriptionResult.Errors)
@@ -3347,9 +3395,14 @@ func TestTypedSubscriptionDoesNotMutateSharedRecord(t *testing.T) {
 		"rkey": "self",
 	}
 	rootObject := map[string]interface{}{
-		"recordEvents": map[string]interface{}{
-			"collection": "app.certified.actor.profile",
-			"record":     sharedRecord,
+		"__recordEvent": &subscription.RecordEvent{
+			Type:        subscription.EventDelete,
+			URI:         "at://did:plc:alice/app.certified.actor.profile/self",
+			CID:         "cid-profile-alice",
+			DID:         "did:plc:alice",
+			Collection:  "app.certified.actor.profile",
+			TypedRecord: sharedRecord,
+			WasValid:    true,
 		},
 	}
 
@@ -3556,6 +3609,11 @@ func setupCertifiedProfileGraphQLTestDB(t *testing.T) context.Context {
 	}); err != nil {
 		t.Fatalf("setupCertifiedProfileGraphQLTestDB: insert records: %v", err)
 	}
+	for _, uri := range []string{consumerURI, profileURI} {
+		if err := db.Records.UpdateValidationStatus(ctx, uri, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("setupCertifiedProfileGraphQLTestDB: mark valid: %v", err)
+		}
+	}
 
 	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
 	if err := db.ExternalLabels.PersistEvent(ctx, url, 1, []repositories.ExternalLabelInput{
@@ -3662,6 +3720,11 @@ func setupExternalLabelsLargePageGraphQLTestDB(t *testing.T) (context.Context, m
 	if err := records.BatchInsert(ctx, allRecords); err != nil {
 		t.Fatalf("setupExternalLabelsLargePageGraphQLTestDB: failed to insert records: %v", err)
 	}
+	for _, rec := range allRecords {
+		if err := records.UpdateValidationStatus(ctx, rec.URI, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("setupExternalLabelsLargePageGraphQLTestDB: failed to mark valid: %v", err)
+		}
+	}
 
 	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
 	if err := externalLabels.PersistEvent(ctx, url, 1, labelInputs); err != nil {
@@ -3690,6 +3753,9 @@ func setupExternalLabelsGraphQLTestDB(t *testing.T) context.Context {
 		RKey:       "rkey1",
 	}}); err != nil {
 		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to insert record: %v", err)
+	}
+	if err := records.UpdateValidationStatus(ctx, recordURI, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+		t.Fatalf("setupExternalLabelsGraphQLTestDB: failed to mark valid: %v", err)
 	}
 
 	url := "wss://labeler.example/xrpc/com.atproto.label.subscribeLabels"
@@ -3992,6 +4058,9 @@ func setupAuthorLabelsWhereTestDB(t *testing.T) (context.Context, map[string]str
 		if _, err := db.Executor.DB().ExecContext(ctx, "UPDATE record SET indexed_at = ? WHERE uri = ?", indexedAt, uri); err != nil {
 			t.Fatalf("setupAuthorLabelsWhereTestDB: set indexed_at %s: %v", rkey, err)
 		}
+		if err := records.UpdateValidationStatus(ctx, uri, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("setupAuthorLabelsWhereTestDB: mark valid %s: %v", rkey, err)
+		}
 	}
 
 	cidSpecificAccountLabel := "account-label-cid"
@@ -4031,6 +4100,9 @@ func setupExternalLabelsWhereTestDB(t *testing.T) (context.Context, map[string]s
 		indexedAt := fmt.Sprintf("2025-01-02T03:04:%02dZ", i+1)
 		if _, err := db.Executor.DB().ExecContext(ctx, "UPDATE record SET indexed_at = ? WHERE uri = ?", indexedAt, uri); err != nil {
 			t.Fatalf("setupExternalLabelsWhereTestDB: set indexed_at %s: %v", rkey, err)
+		}
+		if err := records.UpdateValidationStatus(ctx, uri, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("setupExternalLabelsWhereTestDB: mark valid %s: %v", rkey, err)
 		}
 	}
 
@@ -4078,6 +4150,14 @@ func setupRecordTimelineGraphQLTest(t *testing.T) (*graphql.Schema, context.Cont
 	}
 	if err := db.Records.BatchInsert(ctx, records); err != nil {
 		t.Fatalf("failed to insert timeline test records: %v", err)
+	}
+	for _, uri := range []string{
+		"at://did:plc:alice/app.certified.actor.profile/self",
+		"at://did:plc:bob/app.certified.actor.profile/self",
+	} {
+		if err := db.Records.UpdateValidationStatus(ctx, uri, validation.StatusValid, "", "test-lexicon-hash"); err != nil {
+			t.Fatalf("mark timeline profile valid: %v", err)
+		}
 	}
 	if _, err := db.Executor.DB().ExecContext(ctx, `
 		INSERT INTO record (uri, cid, did, collection, json, record_created_at)
@@ -4237,5 +4317,327 @@ func TestRecordTimelineGraphQLValidationAndShape(t *testing.T) {
 	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ recordTimeline(where: { collection: { in: [] } }, first: 1) { edges { cursor } } }`, Context: context.Background()})
 	if len(result.Errors) == 0 || !strings.Contains(result.Errors[0].Message, "where.collection.in must include at least one") {
 		t.Fatalf("no-repository validation errors = %v, want validation before empty connection", result.Errors)
+	}
+}
+
+func TestTypedSubscriptionValidationGate(t *testing.T) {
+	registry := lexicon.NewRegistry()
+	registry.Register(&lexicon.Lexicon{ID: "com.example.subscription.record", Defs: lexicon.Defs{Main: &lexicon.RecordDef{Type: "record", Key: "tid", Properties: []lexicon.PropertyEntry{{Name: "text", Property: lexicon.Property{Type: lexicon.TypeString}}}}}})
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	uri := "at://did:plc:test/com.example.subscription.record/one"
+	if _, err := db.Records.Insert(ctx, uri, "cid", "did:plc:test", "com.example.subscription.record", `{"text":"hello"}`); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+	if err := db.Records.UpdateValidationStatus(ctx, uri, validation.StatusValid, "", "hash-current"); err != nil {
+		t.Fatalf("mark valid: %v", err)
+	}
+	ctx = resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records})
+	query := `subscription { comExampleSubscriptionRecordEvents { uri text } }`
+
+	validEvent := &subscription.RecordEvent{
+		Type: subscription.EventCreate, URI: uri, CID: "cid", DID: "did:plc:test", Collection: "com.example.subscription.record",
+		Record: map[string]interface{}{"uri": uri, "cid": "cid", "text": "hello"}, TypedRecord: map[string]interface{}{"uri": uri, "cid": "cid", "text": "hello"}, TypedVisible: true,
+	}
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx, RootObject: map[string]interface{}{"__recordEvent": validEvent}})
+	if len(result.Errors) > 0 {
+		t.Fatalf("valid typed subscription errors: %v", result.Errors)
+	}
+	if got := result.Data.(map[string]interface{})["comExampleSubscriptionRecordEvents"]; got == nil {
+		t.Fatal("valid typed subscription payload is nil")
+	}
+
+	if err := db.Records.UpdateValidationStatus(ctx, uri, validation.StatusInvalid, "bad", "hash-current"); err != nil {
+		t.Fatalf("mark invalid: %v", err)
+	}
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx, RootObject: map[string]interface{}{"__recordEvent": validEvent}})
+	if len(result.Errors) > 0 {
+		t.Fatalf("invalid typed subscription errors: %v", result.Errors)
+	}
+	if got := result.Data.(map[string]interface{})["comExampleSubscriptionRecordEvents"]; got != nil {
+		t.Fatalf("invalid typed subscription payload = %#v, want nil", got)
+	}
+
+	deleteEvent := &subscription.RecordEvent{
+		Type: subscription.EventDelete, URI: uri, CID: "cid", DID: "did:plc:test", Collection: "com.example.subscription.record",
+		TypedRecord: map[string]interface{}{"uri": uri, "cid": "cid", "text": "deleted"}, WasValid: true,
+	}
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx, RootObject: map[string]interface{}{"__recordEvent": deleteEvent}})
+	if len(result.Errors) > 0 {
+		t.Fatalf("visible delete subscription errors: %v", result.Errors)
+	}
+	if got := result.Data.(map[string]interface{})["comExampleSubscriptionRecordEvents"]; got == nil {
+		t.Fatal("previously valid delete typed subscription payload is nil")
+	}
+	deleteEvent.WasValid = false
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx, RootObject: map[string]interface{}{"__recordEvent": deleteEvent}})
+	if got := result.Data.(map[string]interface{})["comExampleSubscriptionRecordEvents"]; got != nil {
+		t.Fatalf("invalid delete typed subscription payload = %#v, want nil", got)
+	}
+
+	rawQuery := `subscription { recordEvents { type uri collection } }`
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: rawQuery, Context: ctx, RootObject: map[string]interface{}{"__recordEvent": validEvent}})
+	if len(result.Errors) > 0 || result.Data.(map[string]interface{})["recordEvents"] == nil {
+		t.Fatalf("raw subscription result = data:%#v errors:%v", result.Data, result.Errors)
+	}
+}
+
+func TestRecordValidationGateGraphQLVisibility(t *testing.T) {
+	registry := lexicon.NewRegistry()
+	registry.Register(&lexicon.Lexicon{ID: "com.example.validation.record", Defs: lexicon.Defs{Main: &lexicon.RecordDef{Type: "record", Key: "tid", Properties: []lexicon.PropertyEntry{{Name: "text", Property: lexicon.Property{Type: lexicon.TypeString}}}}}})
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	validURI := "at://did:plc:test/com.example.validation.record/valid"
+	invalidURI := "at://did:plc:test/com.example.validation.record/invalid"
+	if err := db.Records.BatchInsert(ctx, []*repositories.Record{
+		{URI: validURI, CID: "cid-valid", DID: "did:plc:test", Collection: "com.example.validation.record", JSON: `{"text":"valid"}`, RKey: "valid"},
+		{URI: invalidURI, CID: "cid-invalid", DID: "did:plc:test", Collection: "com.example.validation.record", JSON: `{"text":"invalid"}`, RKey: "invalid"},
+	}); err != nil {
+		t.Fatalf("BatchInsert() error = %v", err)
+	}
+	if err := db.Records.UpdateValidationStatus(ctx, validURI, validation.StatusValid, "", "hash-current"); err != nil {
+		t.Fatalf("mark valid: %v", err)
+	}
+	if err := db.Records.UpdateValidationStatus(ctx, invalidURI, validation.StatusInvalid, "missing required field: name", "hash-current"); err != nil {
+		t.Fatalf("mark invalid: %v", err)
+	}
+	ctx = resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels})
+
+	query := `{
+		comExampleValidationRecord(first: 10) { totalCount edges { node { uri text } } }
+		invalid: comExampleValidationRecordByUri(uri: "` + invalidURI + `") { uri }
+		raw: records(collection: "com.example.validation.record", first: 10) {
+			totalCount
+			edges { node { uri validationStatus validationError validatedAt lexiconHash } }
+		}
+		search(query: "valid", collection: "com.example.validation.record", first: 10) {
+			edges { node { uri validationStatus validationError validatedAt lexiconHash } }
+		}
+	}`
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	typed := data["comExampleValidationRecord"].(map[string]interface{})
+	if got := typed["totalCount"]; got != 1 {
+		t.Fatalf("typed totalCount = %v, want 1", got)
+	}
+	typedEdges := typed["edges"].([]interface{})
+	if len(typedEdges) != 1 {
+		t.Fatalf("typed edges = %d, want 1", len(typedEdges))
+	}
+	if got := typedEdges[0].(map[string]interface{})["node"].(map[string]interface{})["uri"]; got != validURI {
+		t.Fatalf("typed URI = %v, want %s", got, validURI)
+	}
+	if data["invalid"] != nil {
+		t.Fatalf("invalid typed byUri = %#v, want nil", data["invalid"])
+	}
+
+	raw := data["raw"].(map[string]interface{})
+	if got := raw["totalCount"]; got != 2 {
+		t.Fatalf("raw totalCount = %v, want 2", got)
+	}
+	rawEdges := raw["edges"].([]interface{})
+	statuses := map[string]string{}
+	errorsByURI := map[string]string{}
+	for _, edge := range rawEdges {
+		node := edge.(map[string]interface{})["node"].(map[string]interface{})
+		uri := node["uri"].(string)
+		statuses[uri] = node["validationStatus"].(string)
+		if errText, ok := node["validationError"].(string); ok {
+			errorsByURI[uri] = errText
+		}
+	}
+	if statuses[validURI] != string(validation.StatusValid) || statuses[invalidURI] != string(validation.StatusInvalid) {
+		t.Fatalf("raw statuses = %#v", statuses)
+	}
+	if errorsByURI[invalidURI] != "missing required field: name" {
+		t.Fatalf("raw invalid validationError = %q", errorsByURI[invalidURI])
+	}
+
+	search := data["search"].(map[string]interface{})
+	searchEdges := search["edges"].([]interface{})
+	searchStatuses := map[string]string{}
+	for _, edge := range searchEdges {
+		node := edge.(map[string]interface{})["node"].(map[string]interface{})
+		if node["validatedAt"] == nil {
+			t.Fatalf("search node %v missing validatedAt", node["uri"])
+		}
+		searchStatuses[node["uri"].(string)] = node["validationStatus"].(string)
+	}
+	if searchStatuses[validURI] != string(validation.StatusValid) || searchStatuses[invalidURI] != string(validation.StatusInvalid) {
+		t.Fatalf("search statuses = %#v", searchStatuses)
+	}
+}
+
+func TestGenericRecordsAndSearchExposeRawArraysAndScalars(t *testing.T) {
+	registry := lexicon.NewRegistry()
+	registry.Register(&lexicon.Lexicon{ID: "com.example.raw", Defs: lexicon.Defs{Main: &lexicon.RecordDef{Type: "record", Key: "tid", Properties: []lexicon.PropertyEntry{{Name: "text", Property: lexicon.Property{Type: lexicon.TypeString}}}}}})
+	schema, err := NewBuilder(registry).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	writes := []repositories.RecordWrite{
+		{URI: "at://did:plc:test/com.example.raw/array", CID: "cid-array", DID: "did:plc:test", Collection: "com.example.raw", JSON: `["raw-match-array"]`, ValidationStatus: validation.StatusInvalid, ValidationError: "record must be an object", LexiconHash: "hash-current"},
+		{URI: "at://did:plc:test/com.example.raw/scalar", CID: "cid-scalar", DID: "did:plc:test", Collection: "com.example.raw", JSON: `"raw-match-scalar"`, ValidationStatus: validation.StatusInvalid, ValidationError: "record must be an object", LexiconHash: "hash-current"},
+	}
+	if err := db.Records.BatchUpsertWithValidation(ctx, writes); err != nil {
+		t.Fatalf("BatchUpsertWithValidation() error = %v", err)
+	}
+	ctx = resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels})
+
+	pageQuery := `query RawPage($after: String) {
+		records(collection: "com.example.raw", first: 1, after: $after) {
+			totalCount
+			pageInfo { hasNextPage endCursor }
+			edges { node { uri value validationStatus validationError validatedAt lexiconHash } }
+		}
+	}`
+	first := graphql.Do(graphql.Params{Schema: *schema, RequestString: pageQuery, Context: ctx})
+	if len(first.Errors) > 0 {
+		t.Fatalf("first raw page errors: %v", first.Errors)
+	}
+	firstConnection := first.Data.(map[string]interface{})["records"].(map[string]interface{})
+	if firstConnection["totalCount"] != 2 {
+		t.Fatalf("first raw totalCount = %v, want 2", firstConnection["totalCount"])
+	}
+	firstEdges := firstConnection["edges"].([]interface{})
+	if len(firstEdges) != 1 || firstConnection["pageInfo"].(map[string]interface{})["hasNextPage"] != true {
+		t.Fatalf("first raw page = %#v, want one edge with next page", firstConnection)
+	}
+	cursor := firstConnection["pageInfo"].(map[string]interface{})["endCursor"].(string)
+	second := graphql.Do(graphql.Params{Schema: *schema, RequestString: pageQuery, Context: ctx, VariableValues: map[string]interface{}{"after": cursor}})
+	if len(second.Errors) > 0 {
+		t.Fatalf("second raw page errors: %v", second.Errors)
+	}
+	secondEdges := second.Data.(map[string]interface{})["records"].(map[string]interface{})["edges"].([]interface{})
+	if len(secondEdges) != 1 {
+		t.Fatalf("second raw page edges = %d, want 1", len(secondEdges))
+	}
+
+	nodes := []map[string]interface{}{
+		firstEdges[0].(map[string]interface{})["node"].(map[string]interface{}),
+		secondEdges[0].(map[string]interface{})["node"].(map[string]interface{}),
+	}
+	values := map[string]interface{}{}
+	for _, node := range nodes {
+		uri := node["uri"].(string)
+		values[uri] = node["value"]
+		if node["validationStatus"] != string(validation.StatusInvalid) || node["validationError"] == nil || node["validatedAt"] == nil || node["lexiconHash"] != "hash-current" {
+			t.Fatalf("raw node metadata = %#v", node)
+		}
+	}
+	if _, ok := values[writes[0].URI].([]interface{}); !ok {
+		t.Fatalf("array raw value = %#v, want []interface{}", values[writes[0].URI])
+	}
+	if values[writes[1].URI] != "raw-match-scalar" {
+		t.Fatalf("scalar raw value = %#v, want raw-match-scalar", values[writes[1].URI])
+	}
+
+	search := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ search(query: "raw-match", collection: "com.example.raw", first: 10) { edges { node { uri value validationStatus } } } }`, Context: ctx})
+	if len(search.Errors) > 0 {
+		t.Fatalf("raw search errors: %v", search.Errors)
+	}
+	searchEdges := search.Data.(map[string]interface{})["search"].(map[string]interface{})["edges"].([]interface{})
+	if len(searchEdges) != 2 {
+		t.Fatalf("raw search edges = %d, want 2", len(searchEdges))
+	}
+}
+
+func TestGenericRecordsAndSearchSerializePrimitiveJSON(t *testing.T) {
+	schema, err := NewBuilder(lexicon.NewRegistry()).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	writes := []repositories.RecordWrite{
+		{URI: "at://did:plc:test/com.example.primitives/number", CID: "cid-number", DID: "did:plc:test", Collection: "com.example.primitives", JSON: `424`, ValidationStatus: validation.StatusInvalid, ValidationError: "object required"},
+		{URI: "at://did:plc:test/com.example.primitives/boolean", CID: "cid-boolean", DID: "did:plc:test", Collection: "com.example.primitives", JSON: `true`, ValidationStatus: validation.StatusInvalid, ValidationError: "object required"},
+		{URI: "at://did:plc:test/com.example.primitives/null", CID: "cid-null", DID: "did:plc:test", Collection: "com.example.primitives", JSON: `null`, ValidationStatus: validation.StatusInvalid, ValidationError: "object required"},
+	}
+	if err := db.Records.BatchUpsertWithValidation(ctx, writes); err != nil {
+		t.Fatalf("BatchUpsertWithValidation() error = %v", err)
+	}
+	ctx = resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels})
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: `{ records(collection: "com.example.primitives", first: 10) { totalCount edges { node { uri value validationStatus } } } }`, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("primitive records errors: %v", result.Errors)
+	}
+	connection := result.Data.(map[string]interface{})["records"].(map[string]interface{})
+	if connection["totalCount"] != 3 || len(connection["edges"].([]interface{})) != 3 {
+		t.Fatalf("primitive records connection = %#v", connection)
+	}
+	values := map[string]interface{}{}
+	for _, edge := range connection["edges"].([]interface{}) {
+		node := edge.(map[string]interface{})["node"].(map[string]interface{})
+		values[node["uri"].(string)] = node["value"]
+	}
+	if values[writes[0].URI] != float64(424) || values[writes[1].URI] != true || values[writes[2].URI] != nil {
+		t.Fatalf("primitive values = %#v", values)
+	}
+	for query, uri := range map[string]string{"424": writes[0].URI, "true": writes[1].URI, "null": writes[2].URI} {
+		search := graphql.Do(graphql.Params{Schema: *schema, RequestString: `query Primitive($query: String!) { search(query: $query, collection: "com.example.primitives", first: 10) { edges { node { uri value } } } }`, VariableValues: map[string]interface{}{"query": query}, Context: ctx})
+		if len(search.Errors) > 0 {
+			t.Fatalf("search(%s) errors: %v", query, search.Errors)
+		}
+		edges := search.Data.(map[string]interface{})["search"].(map[string]interface{})["edges"].([]interface{})
+		if len(edges) != 1 || edges[0].(map[string]interface{})["node"].(map[string]interface{})["uri"] != uri {
+			t.Fatalf("search(%s) edges = %#v, want %s", query, edges, uri)
+		}
+	}
+}
+
+func TestGraphQLSearchCursorPreservesFractionalSeconds(t *testing.T) {
+	schema, err := NewBuilder(lexicon.NewRegistry()).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	newerURI := "at://did:plc:test/com.example.search/newer"
+	olderURI := "at://did:plc:test/com.example.search/older"
+	for _, uri := range []string{newerURI, olderURI} {
+		if _, err := db.Records.Insert(ctx, uri, "cid-"+uri[strings.LastIndex(uri, "/")+1:], "did:plc:test", "com.example.search", `{"text":"fractional search"}`); err != nil {
+			t.Fatalf("Insert(%s) error = %v", uri, err)
+		}
+	}
+	if _, err := db.Executor.DB().ExecContext(ctx, `UPDATE record SET indexed_at = ? WHERE uri = ?`, "2026-01-15T10:00:00.900Z", newerURI); err != nil {
+		t.Fatalf("set newer indexed_at: %v", err)
+	}
+	if _, err := db.Executor.DB().ExecContext(ctx, `UPDATE record SET indexed_at = ? WHERE uri = ?`, "2026-01-15T10:00:00.100Z", olderURI); err != nil {
+		t.Fatalf("set older indexed_at: %v", err)
+	}
+	ctx = resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels})
+	query := `query SearchPage($after: String) { search(query: "fractional", collection: "com.example.search", first: 1, after: $after) { pageInfo { endCursor } edges { node { uri } } } }`
+	first := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(first.Errors) > 0 {
+		t.Fatalf("first search errors: %v", first.Errors)
+	}
+	firstConnection := first.Data.(map[string]interface{})["search"].(map[string]interface{})
+	firstNode := firstConnection["edges"].([]interface{})[0].(map[string]interface{})["node"].(map[string]interface{})
+	if firstNode["uri"] != newerURI {
+		t.Fatalf("first search URI = %v, want newer", firstNode["uri"])
+	}
+	cursor := firstConnection["pageInfo"].(map[string]interface{})["endCursor"].(string)
+	second := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx, VariableValues: map[string]interface{}{"after": cursor}})
+	if len(second.Errors) > 0 {
+		t.Fatalf("second search errors: %v", second.Errors)
+	}
+	secondNode := second.Data.(map[string]interface{})["search"].(map[string]interface{})["edges"].([]interface{})[0].(map[string]interface{})["node"].(map[string]interface{})
+	if secondNode["uri"] != olderURI {
+		t.Fatalf("second search URI = %v, want older; cursor lost fractional precision", secondNode["uri"])
 	}
 }

@@ -1,0 +1,4 @@
+kind: changed
+body: Add an Indigo-backed record validation gate that atomically stores raw records with validation metadata while typed GraphQL and typed subscriptions expose only valid data. Generic records, search, and raw subscriptions retain invalid and unknown-schema data for diagnostics; admin Lexicon changes are validated and staged for the next process snapshot, so operators must restart or redeploy to apply them and coordinate multi-replica rollouts so old and new snapshots do not serve concurrently. PostgreSQL operators with large record tables can pre-create the validation refresh paging index before rollout to avoid a write-blocking startup index build.
+custom:
+  Affects: user

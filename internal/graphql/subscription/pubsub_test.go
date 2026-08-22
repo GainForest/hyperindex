@@ -14,6 +14,7 @@ func TestPubSub_SubscribeUnsubscribe(t *testing.T) {
 	sub := ps.Subscribe("")
 	if sub == nil {
 		t.Fatal("Subscribe returned nil")
+		return
 	}
 
 	if ps.SubscriberCount() != 1 {
@@ -208,21 +209,25 @@ func TestPublishRecord(t *testing.T) {
 		if event.URI != "at://did:plc:test/col/123" {
 			t.Errorf("URI = %s", event.URI)
 		}
-		if event.Record == nil {
-			t.Error("Record should not be nil")
+		rawRecord, ok := event.Record.(map[string]interface{})
+		if !ok {
+			t.Fatalf("Record = %T, want object", event.Record)
 		}
-		if event.Record["title"] != "Test Record" {
-			t.Errorf("title = %v", event.Record["title"])
+		if rawRecord["title"] != "Test Record" {
+			t.Errorf("title = %v", rawRecord["title"])
 		}
-		// Check that uri and cid are added to record
-		if event.Record["uri"] != "at://did:plc:test/col/123" {
-			t.Errorf("record.uri = %v", event.Record["uri"])
+		if _, exists := rawRecord["uri"]; exists {
+			t.Fatalf("raw record unexpectedly contains injected metadata: %#v", rawRecord)
 		}
-		if event.Record["did"] != "did:plc:test" {
-			t.Errorf("record.did = %v", event.Record["did"])
+		event.TypedRecord["title"] = "coerced typed value"
+		if rawRecord["title"] != "Test Record" {
+			t.Fatalf("typed payload mutation changed raw record: %#v", rawRecord)
 		}
-		if event.Record["rkey"] != "123" {
-			t.Errorf("record.rkey = %v", event.Record["rkey"])
+		if event.TypedRecord["uri"] != "at://did:plc:test/col/123" {
+			t.Errorf("typedRecord.uri = %v", event.TypedRecord["uri"])
+		}
+		if event.TypedRecord["cid"] != "bafytest" {
+			t.Errorf("typedRecord.cid = %v", event.TypedRecord["cid"])
 		}
 	case <-time.After(time.Second):
 		t.Error("Timed out waiting for event")
@@ -251,6 +256,33 @@ func TestPublishRecord_Delete(t *testing.T) {
 	}
 
 	ps.Unsubscribe(sub)
+}
+
+func TestPublishDeleteCarriesTypedVisibility(t *testing.T) {
+	ps := NewPubSub()
+	sub := ps.Subscribe("")
+	defer ps.Unsubscribe(sub)
+
+	ps.PublishDelete(
+		"at://did:plc:test/col/123",
+		"bafytest",
+		"did:plc:test",
+		"col",
+		[]byte(`{"title":"Deleted Record"}`),
+		true,
+	)
+
+	select {
+	case event := <-sub.Events:
+		if event.Record != nil {
+			t.Fatalf("raw delete Record = %#v, want nil", event.Record)
+		}
+		if !event.WasValid || event.TypedRecord == nil || event.TypedRecord["title"] != "Deleted Record" {
+			t.Fatalf("typed delete metadata = wasValid:%v record:%#v", event.WasValid, event.TypedRecord)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for delete event")
+	}
 }
 
 func TestNewPubSub(t *testing.T) {

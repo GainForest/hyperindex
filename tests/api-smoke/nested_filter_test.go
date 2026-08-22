@@ -95,38 +95,12 @@ query SmokeActivityContributorIdentityNestedFilter($identity: String!) {
   }
 }`
 
-// TODO(#86): Re-enable broad activity candidate discovery once lexicon-invalid
-// records are quarantined before typed GraphQL exposure.
-//
-// This smoke test originally used one broad query for contributor, rights, and image
-// candidates:
-//
-//	query SmokeActivityNestedFilterCandidates {
-//	  orgHypercertsClaimActivity(first: 100) {
-//	    edges { node { uri contributors { contributorIdentity { ... } } rights { ... } image { ... } } }
-//	  }
-//	}
-//
-// That broad read is the correct long-term smoke coverage because it catches typed
-// GraphQL contract violations. It currently fails on old test records whose
-// contributors are direct strongRef-like objects instead of the current
-// { contributorIdentity: ... } shape, producing:
-//
-//	Cannot return null for non-nullable field
-//	OrgHypercertsClaimActivityContributor.contributorIdentity
-//
-// Until https://github.com/GainForest/hyperindex/issues/86 is fixed, keep the
-// contributor candidate query narrowed to records with a non-null nested identity
-// so nested-filter smoke coverage can run without hiding the known invalid-record
-// quarantine work. When #86 is done, remove this narrowed query, restore the broad
-// candidate query, and make this smoke test prove broad typed collection reads do
-// not crash on malformed stored records.
+// This intentionally performs one broad typed read across all nested fields
+// used by the positive filter checks. The validation gate must quarantine
+// schema-divergent stored rows before GraphQL resolves non-null nested fields.
 const smokeActivityContributorIdentityCandidatesQuery = `
-query SmokeActivityContributorIdentityCandidates {
-  orgHypercertsClaimActivity(
-    first: 20
-    where: { contributors: { any: { contributorIdentity: { identity: { isNull: false } } } } }
-  ) {
+query SmokeActivityNestedFilterCandidates {
+  orgHypercertsClaimActivity(first: 100) {
     edges {
       node {
         uri
@@ -136,6 +110,16 @@ query SmokeActivityContributorIdentityCandidates {
             ... on OrgHypercertsClaimActivityContributorIdentity {
               identity
             }
+          }
+        }
+        rights {
+          uri
+          cid
+        }
+        image {
+          __typename
+          ... on OrgHypercertsDefsUri {
+            uri
           }
         }
       }
@@ -679,11 +663,11 @@ func TestNestedWhereAnyPredicatesMatchSameArrayElement(t *testing.T) {
 func fetchActivityContributorIdentityCandidates(t testing.TB, config smokeConfig) activityNestedCandidateResponse {
 	t.Helper()
 
-	response := postGraphQL(t, context.Background(), config, "SmokeActivityContributorIdentityCandidates", smokeActivityContributorIdentityCandidatesQuery, nil)
+	response := postGraphQL(t, context.Background(), config, "SmokeActivityNestedFilterCandidates", smokeActivityContributorIdentityCandidatesQuery, nil)
 
 	var candidates activityNestedCandidateResponse
 	if err := json.Unmarshal(response.Data, &candidates); err != nil {
-		t.Fatalf("decode SmokeActivityContributorIdentityCandidates data: %v", err)
+		t.Fatalf("decode SmokeActivityNestedFilterCandidates data: %v", err)
 	}
 	return candidates
 }

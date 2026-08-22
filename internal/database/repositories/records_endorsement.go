@@ -6,6 +6,7 @@ import (
 
 	"github.com/GainForest/hyperindex/internal/database"
 	"github.com/GainForest/hyperindex/internal/oauth"
+	"github.com/GainForest/hyperindex/internal/validation"
 )
 
 const (
@@ -16,10 +17,11 @@ const (
 )
 
 // EndorsementAdjacencyFor returns active Certified endorsement edges grouped by
-// issuer DID. An active edge is an app.certified.badge.award whose referenced
-// badge definition has badgeType "endorsement", whose subject is an account DID,
-// whose issuer is allowed to issue that badge, whose issuer is not the subject,
-// and whose subject has not rejected the award.
+// issuer DID. Validated awards, definitions, and responses participate in the
+// graph. An active edge is an app.certified.badge.award whose referenced badge
+// definition has badgeType "endorsement", whose subject is an account DID, whose
+// issuer is allowed to issue that badge, whose issuer is not the subject, and
+// whose subject has not rejected the award.
 func (r *RecordsRepository) EndorsementAdjacencyFor(ctx context.Context, issuers []string) (map[string][]string, error) {
 	out, _, err := r.endorsementAdjacencyFor(ctx, issuers, endorsementAdjacencyQueryOptions{})
 	return out, err
@@ -48,7 +50,9 @@ func (r *RecordsRepository) endorsementAdjacencyFor(ctx context.Context, issuers
 
 	batchSize := len(issuers)
 	if r.db.Dialect() == database.SQLite {
-		maxBatchSize := SQLParamBatchSize
+		// Each batch also binds the valid status once for awards, definitions,
+		// and responses, plus an optional limit.
+		maxBatchSize := SQLParamBatchSize - 3
 		if options.Limit > 0 {
 			maxBatchSize--
 		}
@@ -105,9 +109,12 @@ func (r *RecordsRepository) endorsementAdjacencyBatch(ctx context.Context, issue
 	responseStateExpr := r.jsonTextPathExpr("response.json", []string{"response"})
 	validSubjectDIDExpr := didSQLPredicate("endorsement_awards.subject_did")
 
+	awardStatusPlaceholder := r.db.Placeholder(len(issuers) + 1)
+	definitionStatusPlaceholder := r.db.Placeholder(len(issuers) + 2)
+	responseStatusPlaceholder := r.db.Placeholder(len(issuers) + 3)
 	limitClause := ""
 	if options.Limit > 0 {
-		limitClause = fmt.Sprintf("\n\tLIMIT %s", r.db.Placeholder(len(issuers)+1))
+		limitClause = fmt.Sprintf("\n\tLIMIT %s", r.db.Placeholder(len(issuers)+4))
 	}
 
 	sqlStr := fmt.Sprintf(`WITH endorsement_awards AS (
@@ -119,12 +126,14 @@ func (r *RecordsRepository) endorsementAdjacencyBatch(ctx context.Context, issue
 		FROM record award
 		WHERE award.collection = '%s'
 			AND award.did IN (%s)
+			AND award.validation_status = %s
 	)
 	SELECT DISTINCT endorsement_awards.issuer_did, endorsement_awards.subject_did
 	FROM endorsement_awards
 	JOIN record definition
 		ON definition.uri = endorsement_awards.badge_uri
 		AND definition.collection = '%s'
+		AND definition.validation_status = %s
 		AND %s = '%s'
 	WHERE endorsement_awards.subject_did IS NOT NULL
 		AND endorsement_awards.subject_did <> ''
@@ -135,6 +144,7 @@ func (r *RecordsRepository) endorsementAdjacencyBatch(ctx context.Context, issue
 			SELECT 1
 			FROM record response
 			WHERE response.collection = '%s'
+				AND response.validation_status = %s
 				AND response.did = endorsement_awards.subject_did
 				AND %s = endorsement_awards.award_uri
 				AND %s = 'rejected'
@@ -144,21 +154,26 @@ func (r *RecordsRepository) endorsementAdjacencyBatch(ctx context.Context, issue
 		badgeURIExpr,
 		certifiedBadgeAwardCollection,
 		placeholders,
+		awardStatusPlaceholder,
 		certifiedBadgeDefinitionCollection,
+		definitionStatusPlaceholder,
 		definitionBadgeTypeExpr,
 		certifiedEndorsementBadgeType,
 		validSubjectDIDExpr,
 		definitionAllowsIssuerExpr,
 		certifiedBadgeResponseCollection,
+		responseStatusPlaceholder,
 		responseAwardURIExpr,
 		responseStateExpr,
 		limitClause,
 	)
 
-	args := make([]any, len(issuers), len(issuers)+1)
+	args := make([]any, len(issuers), len(issuers)+4)
 	for i, issuer := range issuers {
 		args[i] = issuer
 	}
+	validStatus := string(validation.StatusValid)
+	args = append(args, validStatus, validStatus, validStatus)
 	if options.Limit > 0 {
 		args = append(args, options.Limit+1)
 	}
