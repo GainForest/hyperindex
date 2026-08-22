@@ -8,6 +8,10 @@
 !railway.toml
 !go.mod
 !go.sum
+!lexicons.json
+
+!lexicons
+!lexicons/**
 
 !cmd
 !cmd/**

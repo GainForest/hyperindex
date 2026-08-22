@@ -1,0 +1,47 @@
+{
+  "id": "org.hypercerts.workscope.cel",
+  "defs": {
+    "main": {
+      "type": "object",
+      "required": [
+        "expression",
+        "usedTags",
+        "version",
+        "createdAt"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "maxLength": 16,
+          "description": "CEL context schema version.",
+          "knownValues": [
+            "v1"
+          ]
+        },
+        "usedTags": {
+          "type": "array",
+          "items": {
+            "ref": "com.atproto.repo.strongRef",
+            "type": "ref"
+          },
+          "maxLength": 100,
+          "description": "Strong references to org.hypercerts.workscope.tag records used in the expression. Enables fast indexing by AT-URI and provides referential integrity to the underlying tag records."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "datetime",
+          "description": "Client-declared timestamp when this expression was originally created."
+        },
+        "expression": {
+          "type": "string",
+          "maxLength": 10000,
+          "description": "A CEL expression encoding the work scope conditions. Example: scope.hasAll(['mangrove_restoration', 'environmental_education']) && location.country == 'KE'",
+          "maxGraphemes": 5000
+        }
+      },
+      "description": "A structured, machine-evaluable work scope definition using CEL (Common Expression Language). Tags referenced in the expression correspond to org.hypercerts.workscope.tag keys. See https://github.com/google/cel-spec. Note: this is intentionally type 'object' (not 'record') so it can be directly embedded inline in union types (e.g., activity.workScope) without requiring a separate collection or strongRef indirection."
+    }
+  },
+  "$type": "com.atproto.lexicon.schema",
+  "lexicon": 1
+}

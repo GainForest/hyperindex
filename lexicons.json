@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "lexicons": [
+    "org.hypercerts.workscope.cel"
+  ],
+  "resolutions": {
+    "com.atproto.repo.strongRef": {
+      "uri": "at://did:plc:6msi3pj7krzih5qxqtryxlzw/com.atproto.lexicon.schema/com.atproto.repo.strongRef",
+      "cid": "bafyreifrkdbnkvfjujntdaeigolnrjj3srrs53tfixjhmacclps72qlov4"
+    },
+    "org.hypercerts.workscope.cel": {
+      "uri": "at://did:plc:s4puetfspot742ai7y4otuel/com.atproto.lexicon.schema/org.hypercerts.workscope.cel",
+      "cid": "bafyreihufneuwperruzdv2d6v4inngi2toyaci2xkax7dok6c7ibby3tke"
+    }
+  }
+}
