@@ -13,6 +13,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/buildinfo"
 	"github.com/GainForest/hyperindex/internal/config"
 	"github.com/GainForest/hyperindex/internal/database/repositories"
+	"github.com/GainForest/hyperindex/internal/tap"
 	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
@@ -315,6 +316,63 @@ func labelerTestServices(db *testutil.TestDB) *services {
 		lexicons:       db.Lexicons,
 		config:         db.Config,
 		externalLabels: db.ExternalLabels,
+	}
+}
+
+func TestTapStatsInfoIncludesProcessingAndDatabaseDiagnostics(t *testing.T) {
+	startedAt := time.Date(2026, 8, 22, 1, 2, 3, 4, time.UTC)
+	lastReceived := startedAt.Add(-time.Second)
+	lastAck := startedAt.Add(-2 * time.Second)
+
+	got := tapStatsInfo(tap.Stats{
+		EventsReceived:      12,
+		RecordsCreated:      3,
+		RecordsUpdated:      2,
+		RecordsDeleted:      1,
+		IdentityEvents:      4,
+		Errors:              5,
+		LastEventReceivedAt: &lastReceived,
+		LastAckAt:           &lastAck,
+		InFlight: &tap.InFlightEventStats{
+			EventID:    99,
+			Type:       tap.EventTypeRecord,
+			DID:        "did:plc:blocked",
+			Collection: "org.hypercerts.claim.activity",
+			RKey:       "slow-record",
+			Action:     tap.ActionCreate,
+			Phase:      "records.insert",
+			StartedAt:  startedAt,
+			Duration:   1500 * time.Millisecond,
+		},
+		DatabasePool: &tap.DatabasePoolStats{
+			MaxOpenConnections: 25,
+			OpenConnections:    25,
+			InUse:              25,
+			Idle:               0,
+			WaitCount:          7,
+			WaitDuration:       3 * time.Second,
+		},
+	})
+
+	if got["last_event_received_at"] != lastReceived.Format(time.RFC3339Nano) {
+		t.Errorf("last_event_received_at = %#v", got["last_event_received_at"])
+	}
+	if got["last_ack_at"] != lastAck.Format(time.RFC3339Nano) {
+		t.Errorf("last_ack_at = %#v", got["last_ack_at"])
+	}
+	inFlight, ok := got["in_flight"].(map[string]any)
+	if !ok {
+		t.Fatalf("in_flight = %#v, want object", got["in_flight"])
+	}
+	if inFlight["event_id"] != int64(99) || inFlight["phase"] != "records.insert" || inFlight["duration_ms"] != int64(1500) {
+		t.Errorf("in_flight = %#v", inFlight)
+	}
+	pool, ok := got["database_pool"].(map[string]any)
+	if !ok {
+		t.Fatalf("database_pool = %#v, want object", got["database_pool"])
+	}
+	if pool["in_use"] != 25 || pool["wait_count"] != int64(7) || pool["wait_duration_ms"] != int64(3000) {
+		t.Errorf("database_pool = %#v", pool)
 	}
 }
 

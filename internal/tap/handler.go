@@ -50,11 +50,13 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 
 		// Ensure the actor exists without erasing identity metadata populated by
 		// Tap identity events.
+		setEventPhase(ctx, "actors.ensure")
 		if err := h.actors.Ensure(ctx, event.DID); err != nil {
 			slog.Debug("Failed to upsert actor", "did", event.DID, "error", err)
 		}
 
 		// Store record
+		setEventPhase(ctx, "records.insert")
 		result, err := h.records.Insert(ctx, uri, event.CID, event.DID, event.Collection, string(event.Record))
 		if err != nil {
 			return fmt.Errorf("failed to insert record: %w", err)
@@ -66,10 +68,12 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 
 		// Log activity (if activity repo available)
 		if h.activity != nil {
+			setEventPhase(ctx, "activity.log")
 			activityID, err := h.activity.LogActivity(ctx, time.Now(), string(event.Action), event.Collection, event.DID, event.RKey, string(event.Record))
 			if err != nil {
 				slog.Debug("Failed to log activity", "error", err)
 			} else {
+				setEventPhase(ctx, "activity.update_status")
 				if err := h.activity.UpdateStatus(ctx, activityID, "completed", nil); err != nil {
 					slog.Debug("Failed to update activity status", "error", err)
 				}
@@ -82,21 +86,26 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 			eventType = subscription.EventUpdate
 		}
 		if h.pubsub != nil {
+			setEventPhase(ctx, "pubsub.publish")
 			h.pubsub.PublishRecord(eventType, uri, event.CID, event.DID, event.Collection, event.Record)
 		}
 
 	case ActionDelete:
+		setEventPhase(ctx, "records.delete")
 		if err := h.records.Delete(ctx, uri); err != nil {
 			return fmt.Errorf("failed to delete record: %w", err)
 		}
 		if h.pubsub != nil {
+			setEventPhase(ctx, "pubsub.publish")
 			h.pubsub.PublishRecord(subscription.EventDelete, uri, "", event.DID, event.Collection, nil)
 		}
 		if h.activity != nil {
+			setEventPhase(ctx, "activity.log")
 			activityID, err := h.activity.LogActivity(ctx, time.Now(), "delete", event.Collection, event.DID, event.RKey, "")
 			if err != nil {
 				slog.Debug("Failed to log delete activity", "error", err)
 			} else {
+				setEventPhase(ctx, "activity.update_status")
 				if err := h.activity.UpdateStatus(ctx, activityID, "completed", nil); err != nil {
 					slog.Debug("Failed to update activity status", "error", err)
 				}
@@ -115,6 +124,7 @@ func (h *IndexHandler) HandleIdentity(ctx context.Context, event *IdentityEvent)
 	}
 
 	if shouldPurgeIdentity(event) {
+		setEventPhase(ctx, "records.purge_actor_data")
 		if err := h.records.PurgeActorData(ctx, event.DID); err != nil {
 			return fmt.Errorf("failed to purge actor data: %w", err)
 		}
@@ -127,6 +137,7 @@ func (h *IndexHandler) HandleIdentity(ctx context.Context, event *IdentityEvent)
 		return nil
 	}
 
+	setEventPhase(ctx, "actors.upsert_identity")
 	return h.actors.UpsertIdentity(ctx, event.DID, event.Handle)
 }
 

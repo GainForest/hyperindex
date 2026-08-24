@@ -1,0 +1,4 @@
+kind: added
+body: Add phase-aware Tap ingestion diagnostics for operators. Events that remain in a handler for five seconds now produce recurring warnings with their current operation and database pool state, while `/stats` exposes last-received and last-acknowledged timestamps plus any in-flight event so ingestion stalls can be diagnosed without changing delivery behavior.
+custom:
+  Affects: operator

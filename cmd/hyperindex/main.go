@@ -348,15 +348,7 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 		}
 
 		if cfg.TapEnabled && bg.tapConsumer != nil {
-			tapStats := bg.tapConsumer.Stats()
-			tapInfo := map[string]any{
-				"events_received": tapStats.EventsReceived,
-				"records_created": tapStats.RecordsCreated,
-				"records_updated": tapStats.RecordsUpdated,
-				"records_deleted": tapStats.RecordsDeleted,
-				"identity_events": tapStats.IdentityEvents,
-				"errors":          tapStats.Errors,
-			}
+			tapInfo := tapStatsInfo(bg.tapConsumer.Stats())
 			// Include Tap sidecar health in stats for observability (non-blocking).
 			if bg.tapAdminClient != nil {
 				applyTapSidecarHealth(reqCtx, tapInfo, 1500*time.Millisecond, bg.tapAdminClient.Health)
@@ -402,6 +394,47 @@ func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi
 	})
 
 	return r
+}
+
+func tapStatsInfo(stats tap.Stats) map[string]any {
+	info := map[string]any{
+		"events_received": stats.EventsReceived,
+		"records_created": stats.RecordsCreated,
+		"records_updated": stats.RecordsUpdated,
+		"records_deleted": stats.RecordsDeleted,
+		"identity_events": stats.IdentityEvents,
+		"errors":          stats.Errors,
+	}
+	if stats.LastEventReceivedAt != nil {
+		info["last_event_received_at"] = stats.LastEventReceivedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if stats.LastAckAt != nil {
+		info["last_ack_at"] = stats.LastAckAt.UTC().Format(time.RFC3339Nano)
+	}
+	if event := stats.InFlight; event != nil {
+		info["in_flight"] = map[string]any{
+			"event_id":    event.EventID,
+			"type":        event.Type,
+			"did":         event.DID,
+			"collection":  event.Collection,
+			"rkey":        event.RKey,
+			"action":      event.Action,
+			"phase":       event.Phase,
+			"started_at":  event.StartedAt.UTC().Format(time.RFC3339Nano),
+			"duration_ms": event.Duration.Milliseconds(),
+		}
+	}
+	if pool := stats.DatabasePool; pool != nil {
+		info["database_pool"] = map[string]any{
+			"max_open_connections": pool.MaxOpenConnections,
+			"open_connections":     pool.OpenConnections,
+			"in_use":               pool.InUse,
+			"idle":                 pool.Idle,
+			"wait_count":           pool.WaitCount,
+			"wait_duration_ms":     pool.WaitDuration.Milliseconds(),
+		}
+	}
+	return info
 }
 
 func databaseReady(ctx context.Context, svc *services) error {
@@ -971,6 +1004,17 @@ func startTap(
 		TapURL:      tapURL,
 		Password:    cfg.TapAdminPassword,
 		DisableAcks: cfg.TapDisableAcks,
+		DatabaseStats: func() tap.DatabasePoolStats {
+			stats := svc.db.DB().Stats()
+			return tap.DatabasePoolStats{
+				MaxOpenConnections: stats.MaxOpenConnections,
+				OpenConnections:    stats.OpenConnections,
+				InUse:              stats.InUse,
+				Idle:               stats.Idle,
+				WaitCount:          stats.WaitCount,
+				WaitDuration:       stats.WaitDuration,
+			}
+		},
 	}, handler)
 
 	// Store consumer reference for clean shutdown.

@@ -121,6 +121,10 @@ Tap Docker deployments also require `ADMIN_API_KEY` in `.env` because Hyperindex
 
 When Tap mode starts, Hyperindex performs a bounded background reconciliation for actor rows whose handle is missing. It reads current identity metadata from Tap's local `/info/:did` API, never delays API startup, and never replaces a handle populated concurrently by a newer identity event.
 
+Tap event processing has a phase-aware watchdog. If one event remains in its handler for five seconds, Hyperindex logs `Tap event processing is blocked` with the event ID, record identity, current operation phase, duration, and database pool state. It repeats the warning every 30 seconds until processing finishes, then logs `Slow Tap event processing completed`. Record bodies and credentials are never included.
+
+`GET /stats` exposes the same non-sensitive state under `tap`: `last_event_received_at`, `last_ack_at`, an optional `in_flight` event with its current phase and duration, and `database_pool` connection and wait counters. Use these fields to distinguish a blocked database operation from a disconnected or idle consumer without changing acknowledgement or retry behavior.
+
 **Local isolated Tap smoke stack (requires Docker):**
 
 Use this when you want to test current local changes against Tap with the Hypercerts/Certified lexicon set mounted into the backend container:
