@@ -42,6 +42,17 @@ The current production indexer is ATProto-first. Do **not** explain it using old
 
 Use production by default for consumer examples. `api.indexer.hypercerts.dev` is the production endpoint and currently exposes presence filters and typed queries for the collections above. Staging and production do not always run the same schema, and this skill usually reflects the default branch before every endpoint has caught up. Because ATProto data is network-wide, do not describe staging as a separate dataset unless you have verified an environment-specific indexing difference.
 
+## Operational diagnostics
+
+Use the HTTP `/stats` endpoint on the target host, without `/graphql`, when an operator needs to diagnose Tap ingestion. Deployments with phase-aware Tap diagnostics expose these non-sensitive fields under `tap`:
+
+- `last_event_received_at` — timestamp of the most recently dispatched Tap event.
+- `last_ack_at` — timestamp of the most recent successful Tap acknowledgement.
+- `in_flight` — optional current event metadata, processing phase, start time, and duration. It is absent when no event is being processed.
+- `database_pool` — connection counts plus cumulative wait count and wait duration.
+
+For example, use `https://api.indexer.hypercerts.dev/stats` for production or `https://dev.api.indexer.hypercerts.dev/stats` for staging. Confirm the target deployment includes these fields before relying on them; hosted environments may run different Hyperindex revisions. The endpoint does not expose record bodies or credentials.
+
 ## Before answering
 
 1. If the user asks for an exact field, filter, enum, or union and you are not sure, introspect the endpoint first.

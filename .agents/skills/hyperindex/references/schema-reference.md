@@ -1,11 +1,22 @@
 # Hyperindex GraphQL Schema Reference
 
-Last updated on 2026-07-28 for pending record author identity changes. Baseline generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10; `author` metadata described below reflects the current branch and may not yet be deployed.
+Last updated on 2026-08-24 for pending Tap operational diagnostics and record author identity changes. Baseline generated from live introspection of `https://api.indexer.hypercerts.dev/graphql` on 2026-06-10; current-branch behavior described below may not yet be deployed.
 
 ## Endpoints
 
 - Production GraphQL: `https://api.indexer.hypercerts.dev/graphql`
 - Staging GraphQL: `https://dev.api.indexer.hypercerts.dev/graphql`
+
+## Operational HTTP diagnostics
+
+Deployments with phase-aware Tap diagnostics expose non-sensitive ingestion state at `/stats` on the same host:
+
+- `tap.last_event_received_at` — most recently dispatched Tap event timestamp.
+- `tap.last_ack_at` — most recent successful Tap acknowledgement timestamp.
+- `tap.in_flight` — optional current event object containing `event_id`, `type`, `did`, `collection`, `rkey`, `action`, `phase`, `started_at`, and `duration_ms`; absent when no event is being processed.
+- `tap.database_pool` — `max_open_connections`, `open_connections`, `in_use`, `idle`, `wait_count`, and `wait_duration_ms`.
+
+Use `https://api.indexer.hypercerts.dev/stats` for production and `https://dev.api.indexer.hypercerts.dev/stats` for staging. Confirm field availability on the target deployment because hosted environments may run different revisions. These diagnostics do not expose record bodies or credentials.
 
 ## Query fields
 
