@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/GainForest/hyperindex/internal/testutil"
 )
 
 // upgrader is used by the mock WebSocket server.
@@ -30,9 +32,21 @@ type mockHandler struct {
 	recordErr      error
 	identityErr    error
 	recordDelay    time.Duration
+	recordPhase    string
+	recordStarted  chan struct{}
+	recordRelease  <-chan struct{}
 }
 
-func (m *mockHandler) HandleRecord(_ context.Context, event *RecordEvent) error {
+func (m *mockHandler) HandleRecord(ctx context.Context, event *RecordEvent) error {
+	if m.recordPhase != "" {
+		setEventPhase(ctx, m.recordPhase)
+	}
+	if m.recordStarted != nil {
+		close(m.recordStarted)
+	}
+	if m.recordRelease != nil {
+		<-m.recordRelease
+	}
 	if m.recordDelay > 0 {
 		time.Sleep(m.recordDelay)
 	}
@@ -392,6 +406,250 @@ func TestConsumer_StopGracefully(t *testing.T) {
 	}
 }
 
+func TestConsumer_StatsRecordsLastReceivedAndAcknowledgedTimes(t *testing.T) {
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{}, handler)
+	consumer.writeTextFn = func(_ *websocket.Conn, _ string) error { return nil }
+	event := &Event{
+		ID:   500,
+		Type: EventTypeRecord,
+		Record: &RecordEvent{
+			DID:        "did:plc:observed",
+			Collection: "org.hypercerts.claim.activity",
+			RKey:       "observed-record",
+			Action:     ActionCreate,
+			Record:     json.RawMessage(`{"title":"observed"}`),
+		},
+	}
+
+	if err := consumer.dispatch(context.Background(), nil, event); err != nil {
+		t.Fatalf("dispatch() error = %v", err)
+	}
+	stats := consumer.Stats()
+	if stats.LastEventReceivedAt == nil {
+		t.Fatal("Stats().LastEventReceivedAt = nil, want timestamp")
+	}
+	if stats.LastAckAt == nil {
+		t.Fatal("Stats().LastAckAt = nil, want timestamp")
+	}
+	if stats.LastAckAt.Before(*stats.LastEventReceivedAt) {
+		t.Errorf("LastAckAt %v is before LastEventReceivedAt %v", stats.LastAckAt, stats.LastEventReceivedAt)
+	}
+}
+
+func TestConsumer_StatsReportsInFlightEventPhaseAndClearsAfterCompletion(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	handler := &mockHandler{
+		recordPhase:   "records.insert",
+		recordStarted: started,
+		recordRelease: release,
+	}
+	consumer := NewConsumer(ConsumerConfig{DisableAcks: true}, handler)
+	event := &Event{
+		ID:   501,
+		Type: EventTypeRecord,
+		Record: &RecordEvent{
+			DID:        "did:plc:blocked",
+			Collection: "org.hypercerts.claim.activity",
+			RKey:       "slow-record",
+			Action:     ActionCreate,
+			Record:     json.RawMessage(`{"title":"slow"}`),
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.dispatch(context.Background(), nil, event)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	stats := consumer.Stats()
+	if stats.InFlight == nil {
+		t.Fatal("Stats().InFlight = nil, want active event")
+	}
+	if stats.InFlight.EventID != event.ID {
+		t.Errorf("InFlight.EventID = %d, want %d", stats.InFlight.EventID, event.ID)
+	}
+	if stats.InFlight.Phase != "records.insert" {
+		t.Errorf("InFlight.Phase = %q, want records.insert", stats.InFlight.Phase)
+	}
+	if stats.InFlight.DID != event.Record.DID || stats.InFlight.Collection != event.Record.Collection || stats.InFlight.RKey != event.Record.RKey {
+		t.Errorf("InFlight event identity = %#v, want record metadata", stats.InFlight)
+	}
+	if stats.InFlight.Duration <= 0 {
+		t.Errorf("InFlight.Duration = %v, want positive duration", stats.InFlight.Duration)
+	}
+
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("dispatch() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dispatch did not finish")
+	}
+	if got := consumer.Stats().InFlight; got != nil {
+		t.Fatalf("Stats().InFlight after completion = %#v, want nil", got)
+	}
+}
+
+func TestIndexHandler_ReportsActorEnsureAsCurrentBlockedPhase(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	heldConn, err := db.Executor.DB().Conn(context.Background())
+	if err != nil {
+		t.Fatalf("hold database connection: %v", err)
+	}
+
+	handler := NewIndexHandler(db.Records, db.Actors, nil, nil)
+	consumer := NewConsumer(ConsumerConfig{DisableAcks: true}, handler)
+	event := &Event{
+		ID:   503,
+		Type: EventTypeRecord,
+		Record: &RecordEvent{
+			DID:        "did:plc:blocked",
+			Collection: "org.hypercerts.claim.activity",
+			RKey:       "slow-record",
+			Action:     ActionCreate,
+			CID:        "bafyblocked",
+			Record:     json.RawMessage(`{"title":"slow"}`),
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.dispatch(context.Background(), nil, event)
+	}()
+
+	deadline := time.Now().Add(250 * time.Millisecond)
+	var phase string
+	for time.Now().Before(deadline) {
+		stats := consumer.Stats()
+		if stats.InFlight != nil {
+			phase = stats.InFlight.Phase
+			if phase == "actors.ensure" {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := heldConn.Close(); err != nil {
+		t.Fatalf("release database connection: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("dispatch() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dispatch did not finish after releasing database connection")
+	}
+	if phase != "actors.ensure" {
+		t.Fatalf("blocked phase = %q, want actors.ensure", phase)
+	}
+}
+
+func TestConsumer_BlockedEventWarningIncludesCurrentPhaseAndPoolStats(t *testing.T) {
+	release := make(chan struct{})
+	started := make(chan struct{})
+	handler := &mockHandler{
+		recordPhase:   "records.insert",
+		recordStarted: started,
+		recordRelease: release,
+	}
+	consumer := NewConsumer(ConsumerConfig{
+		DisableAcks:             true,
+		SlowEventThreshold:      10 * time.Millisecond,
+		BlockedEventLogInterval: 20 * time.Millisecond,
+		DatabaseStats: func() DatabasePoolStats {
+			return DatabasePoolStats{MaxOpenConnections: 25, OpenConnections: 25, InUse: 25, WaitCount: 7}
+		},
+	}, handler)
+	event := &Event{
+		ID:   502,
+		Type: EventTypeRecord,
+		Record: &RecordEvent{
+			DID:        "did:plc:blocked",
+			Collection: "org.hypercerts.claim.activity",
+			RKey:       "slow-record",
+			Action:     ActionUpdate,
+			Record:     json.RawMessage(`{"title":"slow"}`),
+		},
+	}
+
+	capturing := &capturingHandler{}
+	original := slog.Default()
+	slog.SetDefault(slog.New(capturing))
+	t.Cleanup(func() { slog.SetDefault(original) })
+
+	done := make(chan error, 1)
+	go func() {
+		done <- consumer.dispatch(context.Background(), nil, event)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("handler did not start")
+	}
+
+	var warning slog.Record
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		records := capturing.WarnRecordsContaining("Tap event processing is blocked")
+		if len(records) > 0 {
+			warning = records[0]
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if warning.Message == "" {
+		t.Fatal("blocked event warning was not emitted")
+	}
+	attrs := recordAttrs(warning)
+	if attrs["event_id"] != int64(502) || attrs["phase"] != "records.insert" {
+		t.Errorf("warning attrs = %#v, want event_id=502 phase=records.insert", attrs)
+	}
+	if attrs["database_in_use"] != int64(25) || attrs["database_wait_count"] != int64(7) {
+		t.Errorf("database warning attrs = %#v, want in-use and wait count", attrs)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(capturing.WarnRecordsContaining("Tap event processing is blocked")) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := len(capturing.WarnRecordsContaining("Tap event processing is blocked")); got < 2 {
+		t.Fatalf("blocked event warnings = %d, want recurring warning", got)
+	}
+
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("dispatch() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("dispatch did not finish")
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(capturing.WarnRecordsContaining("Slow Tap event processing completed")) > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("slow event completion warning was not emitted")
+}
+
 // TestConsumer_Stats verifies Stats() returns correct event counts.
 func TestConsumer_Stats(t *testing.T) {
 	allAcked := make(chan struct{})
@@ -699,6 +957,15 @@ func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
 
 func (h *capturingHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
 func (h *capturingHandler) WithGroup(name string) slog.Handler       { return h }
+
+func recordAttrs(record slog.Record) map[string]any {
+	attrs := make(map[string]any)
+	record.Attrs(func(attr slog.Attr) bool {
+		attrs[attr.Key] = attr.Value.Any()
+		return true
+	})
+	return attrs
+}
 
 func (h *capturingHandler) ErrorRecords() []slog.Record {
 	h.mu.Lock()

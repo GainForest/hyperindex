@@ -24,6 +24,14 @@ const (
 	// defaultReadTimeout is the timeout for WebSocket read operations.
 	defaultReadTimeout = 60 * time.Second
 
+	// defaultSlowEventThreshold is how long an event may remain in one handler
+	// before the consumer starts emitting blocked-processing diagnostics.
+	defaultSlowEventThreshold = 5 * time.Second
+
+	// defaultBlockedEventLogInterval controls follow-up diagnostics while the
+	// same event remains in flight.
+	defaultBlockedEventLogInterval = 30 * time.Second
+
 	// minBackoff is the initial reconnection backoff duration.
 	minBackoff = time.Second
 
@@ -47,6 +55,14 @@ type ConsumerConfig struct {
 
 	// DisableAcks puts the consumer in fire-and-forget mode (no acks sent).
 	DisableAcks bool
+
+	// SlowEventThreshold and BlockedEventLogInterval override the production
+	// watchdog timings. Zero values use the defaults.
+	SlowEventThreshold      time.Duration
+	BlockedEventLogInterval time.Duration
+
+	// DatabaseStats supplies a non-sensitive pool snapshot for diagnostics.
+	DatabaseStats func() DatabasePoolStats
 }
 
 // EventHandler processes Tap events. Return nil to ack, error to nack.
@@ -55,14 +71,42 @@ type EventHandler interface {
 	HandleIdentity(ctx context.Context, event *IdentityEvent) error
 }
 
-// Stats tracks consumer statistics.
+// DatabasePoolStats contains the database/sql pool state useful when an event
+// is waiting on a connection or database operation.
+type DatabasePoolStats struct {
+	MaxOpenConnections int
+	OpenConnections    int
+	InUse              int
+	Idle               int
+	WaitCount          int64
+	WaitDuration       time.Duration
+}
+
+// InFlightEventStats describes the single Tap event currently being processed.
+type InFlightEventStats struct {
+	EventID    int64
+	Type       EventType
+	DID        string
+	Collection string
+	RKey       string
+	Action     ActionType
+	Phase      string
+	StartedAt  time.Time
+	Duration   time.Duration
+}
+
+// Stats tracks consumer statistics and processing diagnostics.
 type Stats struct {
-	EventsReceived int64
-	RecordsCreated int64
-	RecordsUpdated int64
-	RecordsDeleted int64
-	IdentityEvents int64
-	Errors         int64
+	EventsReceived      int64
+	RecordsCreated      int64
+	RecordsUpdated      int64
+	RecordsDeleted      int64
+	IdentityEvents      int64
+	Errors              int64
+	LastEventReceivedAt *time.Time
+	LastAckAt           *time.Time
+	InFlight            *InFlightEventStats
+	DatabasePool        *DatabasePoolStats
 }
 
 // Consumer connects to Tap's WebSocket and dispatches events.
@@ -91,6 +135,11 @@ type Consumer struct {
 	recordsDeleted int64
 	identityEvents int64
 	errors         int64
+
+	diagnosticsMu       sync.RWMutex
+	lastEventReceivedAt time.Time
+	lastAckAt           time.Time
+	inFlight            *eventTrace
 }
 
 // NewConsumer creates a new Tap consumer.
@@ -267,17 +316,22 @@ func (c *Consumer) runOnce(ctx context.Context) (bool, bool, error) {
 }
 
 // dispatch routes an event to the appropriate handler and sends an ack on success.
-func (c *Consumer) dispatch(ctx context.Context, conn *websocket.Conn, event *Event) error {
+func (c *Consumer) dispatch(ctx context.Context, conn *websocket.Conn, event *Event) (err error) {
+	ctx, trace := c.beginEvent(ctx, event)
+	defer func() { c.finishEvent(trace, err) }()
+
 	var handlerErr error
 
 	switch {
 	case event.IsRecord():
+		setEventPhase(ctx, "handler.record")
 		handlerErr = c.handler.HandleRecord(ctx, event.Record)
 		if handlerErr == nil {
 			c.incrementRecordStat(event.Record.Action)
 		}
 
 	case event.IsIdentity():
+		setEventPhase(ctx, "handler.identity")
 		handlerErr = c.handler.HandleIdentity(ctx, event.Identity)
 		if handlerErr == nil {
 			atomic.AddInt64(&c.identityEvents, 1)
@@ -297,6 +351,7 @@ func (c *Consumer) dispatch(ctx context.Context, conn *websocket.Conn, event *Ev
 	// The Tap server expects JSON: {"type":"ack","id":<id>}
 	// See: https://github.com/bluesky-social/indigo/blob/main/cmd/tap/types.go
 	if !c.config.DisableAcks {
+		setEventPhase(ctx, "ack.write")
 		ackMsg := fmt.Sprintf(`{"type":"ack","id":%d}`, event.ID)
 		writeFn := c.writeText
 		if c.writeTextFn != nil {
@@ -305,8 +360,10 @@ func (c *Consumer) dispatch(ctx context.Context, conn *websocket.Conn, event *Ev
 		if err := writeFn(conn, ackMsg); err != nil {
 			return fmt.Errorf("failed to send ack for event %d: %w", event.ID, err)
 		}
+		c.markAcked(time.Now())
 	}
 
+	setEventPhase(ctx, "completed")
 	return nil
 }
 
@@ -358,9 +415,9 @@ func (c *Consumer) Stop() {
 	})
 }
 
-// Stats returns the current event counts.
+// Stats returns the current event counts and processing diagnostics.
 func (c *Consumer) Stats() Stats {
-	return Stats{
+	stats := Stats{
 		EventsReceived: atomic.LoadInt64(&c.eventsReceived),
 		RecordsCreated: atomic.LoadInt64(&c.recordsCreated),
 		RecordsUpdated: atomic.LoadInt64(&c.recordsUpdated),
@@ -368,4 +425,23 @@ func (c *Consumer) Stats() Stats {
 		IdentityEvents: atomic.LoadInt64(&c.identityEvents),
 		Errors:         atomic.LoadInt64(&c.errors),
 	}
+
+	c.diagnosticsMu.RLock()
+	if !c.lastEventReceivedAt.IsZero() {
+		lastReceived := c.lastEventReceivedAt
+		stats.LastEventReceivedAt = &lastReceived
+	}
+	if !c.lastAckAt.IsZero() {
+		lastAck := c.lastAckAt
+		stats.LastAckAt = &lastAck
+	}
+	if c.inFlight != nil {
+		stats.InFlight = c.inFlight.snapshot(time.Now())
+	}
+	c.diagnosticsMu.RUnlock()
+	if c.config.DatabaseStats != nil {
+		pool := c.config.DatabaseStats()
+		stats.DatabasePool = &pool
+	}
+	return stats
 }
