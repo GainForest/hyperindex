@@ -219,8 +219,8 @@ func TestMigrations_RunAndRollbackPostgres(t *testing.T) {
 	assertPostgresSequenceExists(ctx, t, exec, schemaName, "indexing_activity_id_seq")
 	assertPostgresIndexNotExists(ctx, t, exec, schemaName, "idx_record_json_gin")
 
-	// 015 (record_version) is the newest migration; roll it back, then 011.
-	for _, version := range []string{"015", "011"} {
+	// 016 and 015 (record_version) are the newest migrations; roll them back, then 011.
+	for _, version := range []string{"016", "015", "011"} {
 		if err := migrations.Rollback(ctx, exec); err != nil {
 			t.Fatalf("Rollback(%s) returned error: %v", version, err)
 		}
@@ -520,8 +520,10 @@ func TestMigrations_RecordVersionUpAndDown(t *testing.T) {
 	if indexCount() != 1 {
 		t.Fatal("migration 015 did not create record_version")
 	}
-	if err := migrations.Rollback(ctx, exec); err != nil {
-		t.Fatalf("Rollback(015) error = %v", err)
+	for _, version := range []string{"016", "015"} {
+		if err := migrations.Rollback(ctx, exec); err != nil {
+			t.Fatalf("Rollback(%s) error = %v", version, err)
+		}
 	}
 	if indexCount() != 0 {
 		t.Fatal("migration 015 schema remained after rollback")
