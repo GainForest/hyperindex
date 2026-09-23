@@ -219,8 +219,11 @@ func TestMigrations_RunAndRollbackPostgres(t *testing.T) {
 	assertPostgresSequenceExists(ctx, t, exec, schemaName, "indexing_activity_id_seq")
 	assertPostgresIndexNotExists(ctx, t, exec, schemaName, "idx_record_json_gin")
 
-	if err := migrations.Rollback(ctx, exec); err != nil {
-		t.Fatalf("Rollback() returned error: %v", err)
+	// 015 (record_version) is the newest migration; roll it back, then 011.
+	for _, version := range []string{"015", "011"} {
+		if err := migrations.Rollback(ctx, exec); err != nil {
+			t.Fatalf("Rollback(%s) returned error: %v", version, err)
+		}
 	}
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_json_gin")
 }
@@ -497,5 +500,36 @@ func assertPostgresSequenceExists(ctx context.Context, t *testing.T, exec *postg
 	}
 	if count != 1 {
 		t.Errorf("postgres sequence %q count = %d, want 1", sequenceName, count)
+	}
+}
+
+func TestMigrations_RecordVersionUpAndDown(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	indexCount := func() int {
+		t.Helper()
+		var count int
+		if err := exec.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_record_version_uri_key'`).Scan(&count); err != nil {
+			t.Fatalf("query record_version index: %v", err)
+		}
+		return count
+	}
+	if indexCount() != 1 {
+		t.Fatal("migration 015 did not create record_version")
+	}
+	if err := migrations.Rollback(ctx, exec); err != nil {
+		t.Fatalf("Rollback(015) error = %v", err)
+	}
+	if indexCount() != 0 {
+		t.Fatal("migration 015 schema remained after rollback")
+	}
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("re-Run() error = %v", err)
+	}
+	if indexCount() != 1 {
+		t.Fatal("migration 015 was not re-applied")
 	}
 }

@@ -21,6 +21,7 @@ type Repositories struct {
 	Actors         *repositories.ActorsRepository
 	Lexicons       *repositories.LexiconsRepository
 	ExternalLabels *repositories.ExternalLabelsRepository
+	RecordVersions *repositories.RecordVersionsRepository
 }
 
 // NewRepositories creates a new Repositories from a database executor.
@@ -30,6 +31,7 @@ func NewRepositories(db database.Executor) *Repositories {
 		Actors:         repositories.NewActorsRepository(db),
 		Lexicons:       repositories.NewLexiconsRepository(db),
 		ExternalLabels: repositories.NewExternalLabelsRepository(db),
+		RecordVersions: repositories.NewRecordVersionsRepository(db),
 	}
 }
 
