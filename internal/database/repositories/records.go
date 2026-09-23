@@ -2620,20 +2620,35 @@ func (r *RecordsRepository) GetByDID(ctx context.Context, did string) ([]*Record
 // missing row returns (nil, nil), allowing duplicate delete deliveries to stay
 // idempotent without reusing stale pre-delete visibility metadata.
 func (r *RecordsRepository) DeleteReturning(ctx context.Context, uri string) (*Record, error) {
-	sqlStr := fmt.Sprintf("DELETE FROM record WHERE uri = %s RETURNING %s", r.db.Placeholder(1), r.recordColumns())
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Rollback is a no-op after successful commit.
 
+	if err := r.deleteVersionHistoryTx(ctx, tx, "uri", uri); err != nil {
+		return nil, err
+	}
+
+	sqlStr := fmt.Sprintf("DELETE FROM record WHERE uri = %s RETURNING %s", r.db.Placeholder(1), r.recordColumns())
 	var rec Record
 	var indexedAtStr string
 	var validationStatus string
 	var validationError, validatedAtStr, lexiconHash sql.NullString
-	err := r.db.QueryRow(ctx, sqlStr, []database.Value{database.Text(uri)},
+	err = tx.QueryRowContext(ctx, sqlStr, r.db.ConvertParams([]database.Value{database.Text(uri)})...).Scan(
 		&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey,
 		&validationStatus, &validationError, &validatedAtStr, &lexiconHash)
+	deleted := true
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
+		deleted = false
+	} else if err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	if !deleted {
+		return nil, nil
 	}
 
 	rec.IndexedAt = atproto.ParseTimestamp(indexedAtStr)
@@ -2642,18 +2657,49 @@ func (r *RecordsRepository) DeleteReturning(ctx context.Context, uri string) (*R
 	return &rec, nil
 }
 
-// Delete removes a record by URI.
+// Delete removes a record by URI, together with its version history.
 func (r *RecordsRepository) Delete(ctx context.Context, uri string) error {
-	sqlStr := fmt.Sprintf("DELETE FROM record WHERE uri = %s", r.db.Placeholder(1))
-	_, err := r.db.Exec(ctx, sqlStr, []database.Value{database.Text(uri)})
-	return err
+	return r.deleteWithHistory(ctx, "uri", uri)
 }
 
-// DeleteByDID removes all records for a specific DID.
+// DeleteByDID removes all records for a specific DID, together with their
+// version history.
 func (r *RecordsRepository) DeleteByDID(ctx context.Context, did string) error {
-	sqlStr := fmt.Sprintf("DELETE FROM record WHERE did = %s", r.db.Placeholder(1))
-	_, err := r.db.Exec(ctx, sqlStr, []database.Value{database.Text(did)})
-	return err
+	return r.deleteWithHistory(ctx, "did", did)
+}
+
+// deleteWithHistory deletes records matching column = value and their
+// record_version history in one transaction, so a deleted record never
+// leaves past versions queryable.
+func (r *RecordsRepository) deleteWithHistory(ctx context.Context, column, value string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Rollback is a no-op after successful commit.
+
+	if err := r.deleteVersionHistoryTx(ctx, tx, column, value); err != nil {
+		return err
+	}
+	sqlStr := fmt.Sprintf("DELETE FROM record WHERE %s = %s", column, r.db.Placeholder(1))
+	if _, err := tx.ExecContext(ctx, sqlStr, value); err != nil {
+		return fmt.Errorf("failed to delete records by %s: %w", column, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
+// deleteVersionHistoryTx removes record_version rows matching column = value
+// ("uri" or "did"). Deleting a record, or purging its account, removes its
+// history too.
+func (r *RecordsRepository) deleteVersionHistoryTx(ctx context.Context, tx *sql.Tx, column, value string) error {
+	sqlStr := fmt.Sprintf("DELETE FROM record_version WHERE %s = %s", column, r.db.Placeholder(1))
+	if _, err := tx.ExecContext(ctx, sqlStr, value); err != nil {
+		return fmt.Errorf("failed to delete record versions by %s: %w", column, err)
+	}
+	return nil
 }
 
 // PurgeActorData atomically removes all records and the actor row for a DID.
@@ -2671,9 +2717,8 @@ func (r *RecordsRepository) PurgeActorData(ctx context.Context, did string) erro
 
 	// Record version history belongs to the account too: a deleted,
 	// deactivated or taken-down account leaves no queryable past versions.
-	deleteVersionsSQL := fmt.Sprintf("DELETE FROM record_version WHERE did = %s", r.db.Placeholder(1))
-	if _, err := tx.ExecContext(ctx, deleteVersionsSQL, did); err != nil {
-		return fmt.Errorf("failed to delete record versions by did: %w", err)
+	if err := r.deleteVersionHistoryTx(ctx, tx, "did", did); err != nil {
+		return err
 	}
 
 	deleteActorSQL := fmt.Sprintf("DELETE FROM actor WHERE did = %s", r.db.Placeholder(1))

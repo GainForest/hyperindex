@@ -80,11 +80,13 @@ func TestRecordVersions_AppendDedupesAndListsOldestFirst(t *testing.T) {
 			if versions[1].JSON == nil || versions[1].CID != "cid2" {
 				t.Errorf("update version = %+v", versions[1])
 			}
-			if err := repo.DeleteByURI(ctx, uri); err != nil {
-				t.Fatalf("DeleteByURI: %v", err)
+			// Deleting the record (even one missing from the record table)
+			// removes its history.
+			if err := db.Records.Delete(ctx, uri); err != nil {
+				t.Fatalf("Records.Delete: %v", err)
 			}
 			if remaining, err := repo.ListByURI(ctx, uri, 0, 500); err != nil || len(remaining) != 0 {
-				t.Fatalf("history after DeleteByURI = %d versions (err %v), want none", len(remaining), err)
+				t.Fatalf("history after Records.Delete = %d versions (err %v), want none", len(remaining), err)
 			}
 			if versions[0].Live == nil || !*versions[0].Live {
 				t.Errorf("live flag not kept: %+v", versions[0].Live)

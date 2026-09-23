@@ -25,10 +25,9 @@ type IndexHandler struct {
 	historyCollections repositories.CollectionMatcher
 }
 
-// WithRecordHistory gives the handler the version store. New versions are
-// recorded for the collections the matcher selects (an empty matcher records
-// none); deletes always purge a record's stored history, even for
-// collections no longer tracked.
+// WithRecordHistory records every distinct version of records in the
+// collections the matcher selects. Deleting a record removes its history in
+// the records repository, whether or not history is enabled.
 func (h *IndexHandler) WithRecordHistory(versions *repositories.RecordVersionsRepository, collections repositories.CollectionMatcher) *IndexHandler {
 	h.versions = versions
 	h.historyCollections = collections
@@ -141,13 +140,6 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 		deleted, err := h.records.DeleteReturning(ctx, uri)
 		if err != nil {
 			return fmt.Errorf("failed to delete record: %w", err)
-		}
-		// A deleted record takes its history with it. Runs on every delivery,
-		// so a failed purge is retried when Tap redelivers the event.
-		if h.versions != nil {
-			if err := h.versions.DeleteByURI(ctx, uri); err != nil {
-				return fmt.Errorf("failed to delete record version history: %w", err)
-			}
 		}
 		if h.pubsub != nil {
 			previousCID := ""

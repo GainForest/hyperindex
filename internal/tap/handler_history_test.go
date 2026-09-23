@@ -82,8 +82,7 @@ func TestIndexHandler_DeletePurgesHistoryAfterTrackingStops(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	// ...and tracking has since been switched off (empty matcher).
-	handler.WithRecordHistory(db.RecordVersions, repositories.CollectionMatcher{})
+	// ...and tracking has since been switched off (no WithRecordHistory).
 	if err := handler.HandleRecord(ctx, occurrenceEvent(tap.ActionCreate, "cid2", `{"scientificName":"Quercus petraea"}`, true)); err != nil {
 		t.Fatalf("create: %v", err)
 	}

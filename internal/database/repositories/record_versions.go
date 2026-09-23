@@ -25,7 +25,7 @@ const (
 )
 
 // RecordVersion is one observed version of a record. Deleting a record (or
-// its account) removes its history, so there are no delete entries.
+// purging its account) removes its history, see RecordsRepository.Delete.
 type RecordVersion struct {
 	ID         int64
 	URI        string
@@ -178,16 +178,6 @@ func (r *RecordVersionsRepository) Append(ctx context.Context, v RecordVersionWr
 	})
 	if err != nil {
 		return fmt.Errorf("append record version for %s: %w", v.URI, err)
-	}
-	return nil
-}
-
-// DeleteByURI removes a record's history. Deleting a record in its repo
-// deletes its past versions from the index as well.
-func (r *RecordVersionsRepository) DeleteByURI(ctx context.Context, uri string) error {
-	sqlStr := fmt.Sprintf("DELETE FROM record_version WHERE uri = %s", r.db.Placeholder(1))
-	if _, err := r.db.Exec(ctx, sqlStr, []database.Value{database.Text(uri)}); err != nil {
-		return fmt.Errorf("delete record versions for %s: %w", uri, err)
 	}
 	return nil
 }

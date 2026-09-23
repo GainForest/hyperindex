@@ -954,9 +954,6 @@ func startTap(
 
 	// Create handler that stores records and publishes to subscriptions.
 	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub, svc.validator)
-	// Deletes purge stored history even when no collection is tracked, so the
-	// version store is always wired; the matcher decides what gets recorded.
-	handler.WithRecordHistory(svc.recordVersions, repositories.CollectionMatcher{})
 	if historyCollections := repositories.NewCollectionMatcher(cfg.RecordHistoryCollections); !historyCollections.Empty() {
 		// Seed the current version of every opted-in record before live events
 		// start, so each history begins with what was indexed at switch-on.
