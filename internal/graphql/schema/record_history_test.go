@@ -58,4 +58,30 @@ func TestRecordHistoryGraphQL(t *testing.T) {
 	if missing := data["missing"].([]interface{}); len(missing) != 0 {
 		t.Fatalf("unknown uri returned %v", missing)
 	}
+
+	// Paging: the second page starts after the first version's id.
+	firstID := first["id"].(string)
+	paged := graphql.Do(graphql.Params{
+		Schema:        *schema,
+		RequestString: `{ recordHistory(uri: "` + uri + `", first: 1, after: "` + firstID + `") { cid } }`,
+		Context:       ctx,
+	})
+	if len(paged.Errors) > 0 {
+		t.Fatalf("paged GraphQL errors: %v", paged.Errors)
+	}
+	page := paged.Data.(map[string]interface{})["recordHistory"].([]interface{})
+	if len(page) != 1 || page[0].(map[string]interface{})["cid"] != "cid2" {
+		t.Fatalf("second page = %v, want cid2", page)
+	}
+
+	for _, bad := range []string{`first: 0`, `first: 501`, `after: "nope"`} {
+		res := graphql.Do(graphql.Params{
+			Schema:        *schema,
+			RequestString: `{ recordHistory(uri: "` + uri + `", ` + bad + `) { id } }`,
+			Context:       ctx,
+		})
+		if len(res.Errors) == 0 {
+			t.Errorf("recordHistory(%s) should fail", bad)
+		}
+	}
 }

@@ -259,7 +259,7 @@ Use typed collection queries when the caller needs collection-specific filters, 
 
 ## Record version history
 
-For collections the deployment tracks, `recordHistory(uri: "at://…")` returns every observed version of one record, oldest first, with the full record body in `value`. Use it to show how a record changed, for example who renamed an observation:
+For collections the deployment tracks, `recordHistory(uri: "at://…")` returns the observed versions of one record, oldest first, 100 per page by default (`first` up to 500; pass the last `id` as `after` for more). `value` holds the record body, or null for a delete. Use it to show how a record changed, for example who renamed an observation:
 
 ```graphql
 {
@@ -271,7 +271,7 @@ For collections the deployment tracks, `recordHistory(uri: "at://…")` returns 
 }
 ```
 
-The first entry may be a `baseline`: the version indexed when history was switched on. Untracked collections return an empty list.
+The first entry may be a `baseline`: the version indexed when history was switched on. Records that were never tracked return an empty list.
 
 ## External labeler filtering
 

@@ -1,5 +1,5 @@
 kind: added
-body: Add opt-in record version history. Collections listed in RECORD_HISTORY_COLLECTIONS (exact NSIDs or prefix.* patterns, Tap mode) keep every observed version and delete in a new record_version table, seeded on startup with a baseline row per existing record, and the new root recordHistory(uri, first) GraphQL query returns them oldest first. History is off by default; migration 015 adds the table.
+body: Add opt-in record version history. Collections listed in RECORD_HISTORY_COLLECTIONS (exact NSIDs or prefix.* patterns, Tap mode) keep every observed version and delete in a new record_version table, seeded on startup with a baseline row per existing record, and the new root recordHistory(uri, first, after) GraphQL query pages through them oldest first. History is off by default; migration 015 adds the table.
 time: 2026-09-23T03:10:00.000000+02:00
 custom:
   Affects: operator

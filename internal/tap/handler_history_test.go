@@ -35,7 +35,7 @@ func TestIndexHandler_RecordHistory(t *testing.T) {
 		}
 	}
 
-	versions, err := db.RecordVersions.ListByURI(ctx, "at://did:plc:alice/app.gainforest.dwc.occurrence/occ1", 0)
+	versions, err := db.RecordVersions.ListByURI(ctx, "at://did:plc:alice/app.gainforest.dwc.occurrence/occ1", 0, 500)
 	if err != nil {
 		t.Fatalf("ListByURI: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestIndexHandler_RecordHistory(t *testing.T) {
 		}
 	}
 
-	posts, err := db.RecordVersions.ListByURI(ctx, "at://did:plc:alice/app.bsky.feed.post/p1", 0)
+	posts, err := db.RecordVersions.ListByURI(ctx, "at://did:plc:alice/app.bsky.feed.post/p1", 0, 500)
 	if err != nil || len(posts) != 0 {
 		t.Fatalf("untracked collection versions = %v (err %v), want none", posts, err)
 	}
@@ -68,7 +68,7 @@ func TestIndexHandler_NoHistoryByDefault(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("HandleRecord: %v", err)
 	}
-	versions, err := db.RecordVersions.ListByURI(ctx, "at://did:plc:alice/app.gainforest.dwc.occurrence/occ2", 0)
+	versions, err := db.RecordVersions.ListByURI(ctx, "at://did:plc:alice/app.gainforest.dwc.occurrence/occ2", 0, 500)
 	if err != nil || len(versions) != 0 {
 		t.Fatalf("versions without WithRecordHistory = %v (err %v), want none", versions, err)
 	}

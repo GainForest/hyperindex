@@ -955,15 +955,17 @@ func startTap(
 	// Create handler that stores records and publishes to subscriptions.
 	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub, svc.validator)
 	if historyCollections := repositories.NewCollectionMatcher(cfg.RecordHistoryCollections); !historyCollections.Empty() {
-		handler.WithRecordHistory(svc.recordVersions, historyCollections)
 		// Seed the current version of every opted-in record before live events
 		// start, so each history begins with what was indexed at switch-on.
+		// History is only switched on once seeding succeeds: recording events
+		// for records without a baseline would make the seed skip them later.
 		seedCtx, cancelSeed := context.WithTimeout(context.Background(), 10*time.Minute)
 		seeded, err := svc.recordVersions.SeedBaseline(seedCtx, historyCollections)
 		cancelSeed()
 		if err != nil {
-			slog.Error("Failed to seed record version baseline; history starts with the next change", "error", err)
+			slog.Error("Record version history stays off until the next start: baseline seeding failed", "collections", cfg.RecordHistoryCollections, "error", err)
 		} else {
+			handler.WithRecordHistory(svc.recordVersions, historyCollections)
 			slog.Info("Record version history enabled", "collections", cfg.RecordHistoryCollections, "baseline_seeded", seeded)
 		}
 	}

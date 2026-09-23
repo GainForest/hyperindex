@@ -2,6 +2,8 @@ package tap
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -136,24 +138,34 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 		}
 
 	case ActionDelete:
+		// Tombstone the version being deleted before removing it. If either
+		// write fails the event is retried: the tombstone insert is idempotent
+		// (keyed by the deleted CID) and the record is still there to delete.
+		if h.keepsHistory(event.Collection) {
+			current, err := h.records.GetByURI(ctx, uri)
+			switch {
+			case err == nil:
+				live := event.Live
+				if err := h.versions.Append(ctx, repositories.RecordVersionWrite{
+					URI:        uri,
+					CID:        current.CID,
+					DID:        event.DID,
+					Collection: event.Collection,
+					Action:     repositories.RecordVersionDelete,
+					Live:       &live,
+				}); err != nil {
+					return fmt.Errorf("failed to record delete in version history: %w", err)
+				}
+			case errors.Is(err, sql.ErrNoRows):
+				// Nothing indexed to delete (or already deleted and tombstoned).
+			default:
+				return fmt.Errorf("failed to read record before delete: %w", err)
+			}
+		}
+
 		deleted, err := h.records.DeleteReturning(ctx, uri)
 		if err != nil {
 			return fmt.Errorf("failed to delete record: %w", err)
-		}
-		// Tombstone only a delete that removed something, so redelivered
-		// deletes do not repeat it.
-		if deleted != nil && h.keepsHistory(event.Collection) {
-			live := event.Live
-			if err := h.versions.Append(ctx, repositories.RecordVersionWrite{
-				URI:        uri,
-				CID:        deleted.CID,
-				DID:        event.DID,
-				Collection: event.Collection,
-				Action:     repositories.RecordVersionDelete,
-				Live:       &live,
-			}); err != nil {
-				slog.Warn("Failed to record delete in version history", "uri", uri, "error", err)
-			}
 		}
 		if h.pubsub != nil {
 			previousCID := ""

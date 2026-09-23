@@ -2,7 +2,9 @@ package repositories
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -125,8 +127,26 @@ func NewRecordVersionsRepository(db database.Executor) *RecordVersionsRepository
 	return &RecordVersionsRepository{db: db}
 }
 
-// Append records one version. A version (URI + CID) already stored is left
-// untouched, so redelivered and resynced events are no-ops.
+// versionKey is the dedupe identity of a version: its CID; for Tap events
+// without a CID, a hash of the body; for tombstones, the deleted CID.
+func versionKey(v RecordVersionWrite) string {
+	if v.Action == RecordVersionDelete {
+		return "delete:" + v.CID
+	}
+	if v.CID != "" {
+		return v.CID
+	}
+	body := ""
+	if v.JSON != nil {
+		body = *v.JSON
+	}
+	sum := sha256.Sum256([]byte(body))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// Append records one version. A version already stored for the URI (same
+// version key) is left untouched, so redelivered and resynced events,
+// including repeated deletes, are no-ops.
 func (r *RecordVersionsRepository) Append(ctx context.Context, v RecordVersionWrite) error {
 	if v.URI == "" || v.DID == "" || v.Collection == "" {
 		return fmt.Errorf("record version requires uri, did and collection")
@@ -136,15 +156,15 @@ func (r *RecordVersionsRepository) Append(ctx context.Context, v RecordVersionWr
 	default:
 		return fmt.Errorf("unsupported record version action %q", v.Action)
 	}
-	jsonPlaceholder := r.db.Placeholder(6)
+	jsonPlaceholder := r.db.Placeholder(7)
 	if r.db.Dialect() == database.PostgreSQL {
 		jsonPlaceholder += "::jsonb"
 	}
-	sqlStr := fmt.Sprintf(`INSERT INTO record_version (uri, cid, did, collection, action, json, live)
-		VALUES (%s, %s, %s, %s, %s, %s, %s)
+	sqlStr := fmt.Sprintf(`INSERT INTO record_version (uri, cid, version_key, did, collection, action, json, live)
+		VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
 		ON CONFLICT DO NOTHING`,
 		r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3), r.db.Placeholder(4), r.db.Placeholder(5),
-		jsonPlaceholder, r.db.Placeholder(7))
+		r.db.Placeholder(6), jsonPlaceholder, r.db.Placeholder(8))
 	live := database.Value(database.Null())
 	if v.Live != nil {
 		live = database.Bool(*v.Live)
@@ -152,6 +172,7 @@ func (r *RecordVersionsRepository) Append(ctx context.Context, v RecordVersionWr
 	_, err := r.db.Exec(ctx, sqlStr, []database.Value{
 		database.Text(v.URI),
 		database.Text(v.CID),
+		database.Text(versionKey(v)),
 		database.Text(v.DID),
 		database.Text(v.Collection),
 		database.Text(v.Action),
@@ -177,8 +198,8 @@ func (r *RecordVersionsRepository) SeedBaseline(ctx context.Context, matcher Col
 	if r.db.Dialect() == database.SQLite {
 		observedAt = "strftime('%Y-%m-%dT%H:%M:%SZ', rec.indexed_at)"
 	}
-	sqlStr := fmt.Sprintf(`INSERT INTO record_version (uri, cid, did, collection, action, json, live, observed_at)
-		SELECT rec.uri, rec.cid, rec.did, rec.collection, '%s', rec.json, NULL, %s
+	sqlStr := fmt.Sprintf(`INSERT INTO record_version (uri, cid, version_key, did, collection, action, json, live, observed_at)
+		SELECT rec.uri, rec.cid, CASE WHEN rec.cid = '' THEN 'baseline' ELSE rec.cid END, rec.did, rec.collection, '%s', rec.json, NULL, %s
 		FROM record rec
 		WHERE %s
 		  AND NOT EXISTS (SELECT 1 FROM record_version v WHERE v.uri = rec.uri)
@@ -194,10 +215,12 @@ func (r *RecordVersionsRepository) SeedBaseline(ctx context.Context, matcher Col
 	return inserted, nil
 }
 
-// ListByURI returns a record's versions oldest first.
-func (r *RecordVersionsRepository) ListByURI(ctx context.Context, uri string, limit int) ([]RecordVersion, error) {
+// ListByURI returns up to `limit` of a record's versions oldest first,
+// starting after version id `afterID` (0 for the first page). Callers page by
+// passing the last returned id.
+func (r *RecordVersionsRepository) ListByURI(ctx context.Context, uri string, afterID int64, limit int) ([]RecordVersion, error) {
 	if limit <= 0 || limit > MaxRecordHistoryPageSize {
-		limit = MaxRecordHistoryPageSize
+		return nil, fmt.Errorf("record history page size must be between 1 and %d", MaxRecordHistoryPageSize)
 	}
 	jsonExpr, liveExpr, observedExpr := "json", "live", "observed_at"
 	if r.db.Dialect() == database.PostgreSQL {
@@ -205,10 +228,10 @@ func (r *RecordVersionsRepository) ListByURI(ctx context.Context, uri string, li
 	}
 	sqlStr := fmt.Sprintf(`SELECT id, uri, cid, did, collection, action, %s, %s, %s
 		FROM record_version
-		WHERE uri = %s
+		WHERE uri = %s AND id > %s
 		ORDER BY id ASC
-		LIMIT %d`, jsonExpr, liveExpr, observedExpr, r.db.Placeholder(1), limit)
-	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams([]database.Value{database.Text(uri)})...)
+		LIMIT %d`, jsonExpr, liveExpr, observedExpr, r.db.Placeholder(1), r.db.Placeholder(2), limit)
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams([]database.Value{database.Text(uri), database.Int(afterID)})...)
 	if err != nil {
 		return nil, fmt.Errorf("list record versions for %s: %w", uri, err)
 	}

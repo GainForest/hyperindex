@@ -506,11 +506,11 @@ func TestMigrations_RecordVersionUpAndDown(t *testing.T) {
 	if err := migrations.Run(ctx, exec); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if !sqliteIndexExists(t, exec, "idx_record_version_uri_cid") || !migrationVersionExists(t, exec, "015") {
+	if !sqliteIndexExists(t, exec, "idx_record_version_uri_key") || !migrationVersionExists(t, exec, "015") {
 		t.Fatal("migration 015 did not create record_version")
 	}
 	rollbackRecordVersionMigration(ctx, t, exec)
-	if sqliteIndexExists(t, exec, "idx_record_version_uri_cid") || migrationVersionExists(t, exec, "015") {
+	if sqliteIndexExists(t, exec, "idx_record_version_uri_key") || migrationVersionExists(t, exec, "015") {
 		t.Fatal("migration 015 schema/version remained after rollback")
 	}
 	if err := migrations.Run(ctx, exec); err != nil {

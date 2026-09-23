@@ -61,8 +61,9 @@ func TestRecordVersions_AppendDedupesAndListsOldestFirst(t *testing.T) {
 			write(repositories.RecordVersionCreate, "cid1", strPtr(`{"scientificName":"Hirundo rustica","identifiedBy":"ai:gemini-3.8-flash"}`)) // redelivery
 			write(repositories.RecordVersionUpdate, "cid2", strPtr(`{"scientificName":"Hirundo tahitica","identifiedBy":"Maria"}`))
 			write(repositories.RecordVersionDelete, "cid2", nil)
+			write(repositories.RecordVersionDelete, "cid2", nil) // redelivered delete
 
-			versions, err := repo.ListByURI(ctx, uri, 0)
+			versions, err := repo.ListByURI(ctx, uri, 0, 500)
 			if err != nil {
 				t.Fatalf("ListByURI: %v", err)
 			}
@@ -126,7 +127,7 @@ func TestRecordVersions_SeedBaselineIsIdempotentAndScoped(t *testing.T) {
 
 			assertVersions := func(uri string, wantActions ...string) {
 				t.Helper()
-				versions, err := db.RecordVersions.ListByURI(ctx, uri, 0)
+				versions, err := db.RecordVersions.ListByURI(ctx, uri, 0, 500)
 				if err != nil {
 					t.Fatalf("ListByURI(%s): %v", uri, err)
 				}
@@ -143,9 +144,48 @@ func TestRecordVersions_SeedBaselineIsIdempotentAndScoped(t *testing.T) {
 			assertVersions(untracked)
 			assertVersions(withHistory, "create")
 
-			versions, _ := db.RecordVersions.ListByURI(ctx, tracked, 0)
+			versions, _ := db.RecordVersions.ListByURI(ctx, tracked, 0, 500)
 			if versions[0].CID != "c-tracked" || versions[0].JSON == nil || versions[0].Live != nil {
 				t.Errorf("baseline = %+v", versions[0])
+			}
+		})
+	}
+}
+
+func TestRecordVersions_CIDLessVersionsStayDistinctAndPages(t *testing.T) {
+	for name, db := range recordVersionTestDBs(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			repo := db.RecordVersions
+			uri := "at://did:plc:carol/app.gainforest.dwc.occurrence/" + strconv.FormatInt(time.Now().UnixNano(), 36)
+			for _, body := range []string{`{"scientificName":"A a"}`, `{"scientificName":"B b"}`, `{"scientificName":"A a"}`, `{"scientificName":"C c"}`} {
+				body := body
+				if err := repo.Append(ctx, repositories.RecordVersionWrite{
+					URI: uri, DID: "did:plc:carol", Collection: "app.gainforest.dwc.occurrence",
+					Action: repositories.RecordVersionUpdate, JSON: &body,
+				}); err != nil {
+					t.Fatalf("Append: %v", err)
+				}
+			}
+			all, err := repo.ListByURI(ctx, uri, 0, 500)
+			if err != nil {
+				t.Fatalf("ListByURI: %v", err)
+			}
+			// Without a CID, versions are told apart by content: A, B, C (the
+			// repeated A body is the same version).
+			if len(all) != 3 {
+				t.Fatalf("got %d CID-less versions, want 3", len(all))
+			}
+			page1, err := repo.ListByURI(ctx, uri, 0, 2)
+			if err != nil || len(page1) != 2 {
+				t.Fatalf("page 1 = %d versions (err %v), want 2", len(page1), err)
+			}
+			page2, err := repo.ListByURI(ctx, uri, page1[1].ID, 2)
+			if err != nil || len(page2) != 1 || page2[0].ID != all[2].ID {
+				t.Fatalf("page 2 = %+v (err %v), want the third version", page2, err)
+			}
+			if _, err := repo.ListByURI(ctx, uri, 0, 0); err == nil {
+				t.Fatal("ListByURI should reject a zero page size")
 			}
 		})
 	}

@@ -50,7 +50,7 @@ Last updated on 2026-07-30 for pending record validation gate and record author 
 | `orgHypercertsWorkscopeTag` | after: `String`, before: `String`, first: `Int`, last: `Int`, sortBy: `OrgHypercertsWorkscopeTagSortField`, sortDirection: `SortDirection`, where: `OrgHypercertsWorkscopeTagWhereInput` | Query org.hypercerts.workscope.tag records |
 | `orgHypercertsWorkscopeTagByUri` | uri: `String!` | Get a single org.hypercerts.workscope.tag by AT-URI |
 | `records` | after: `String`, before: `String`, collection: `String!`, first: `Int`, last: `Int` | Query raw records from any collection, including records hidden from typed GraphQL by validation metadata. |
-| `recordHistory` | first: `Int`, uri: `String!` | Every version the indexer has observed for one record, oldest first. Empty unless the record's collection is configured for history. |
+| `recordHistory` | after: `String`, first: `Int`, uri: `String!` | Versions the indexer has observed for one record, oldest first, one page at a time. |
 | `recordTimeline` | after: `String`, first: `Int`, where: `RecordTimelineWhereInput!` | Query a newest-first page of current records across selected collections, optionally filtered by author DIDs. |
 | `externalLabels` | activeOnly: `Boolean`, sources: `[String!]`, subjects: `[String!]!`, values: `[String!]` | Query locally ingested external ATProto labels by DID or AT-URI subject. |
 | `search` | after: `String`, collection: `String`, first: `Int`, query: `String!` | Search records by text content |
@@ -349,7 +349,7 @@ External label predicates bound by the containing filter field.
 
 ## Record version history
 
-`recordHistory(uri: String!, first: Int = 100)` returns `[RecordVersion!]!`, oldest first, for collections the deployment tracks (`RECORD_HISTORY_COLLECTIONS`; production tracks `app.gainforest.dwc.occurrence`). Other collections return an empty list. A `baseline` version is what was indexed when history was switched on; earlier edits are not available.
+`recordHistory(uri: String!, first: Int = 100, after: String)` returns `[RecordVersion!]!`, oldest first. `first` must be 1 to 500; for the next page pass the last version's `id` as `after`. Versions are recorded for collections the deployment tracks (`RECORD_HISTORY_COLLECTIONS`; production tracks `app.gainforest.dwc.occurrence`); records that were never tracked return an empty list, and history recorded before a collection was removed stays queryable. A `baseline` version is what was indexed when history was switched on; earlier edits are not available.
 
 ### `RecordVersion`
 

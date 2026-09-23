@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -738,7 +739,7 @@ func (b *Builder) buildQueryType() *graphql.Object {
 	// Add version history lookup for records in history-enabled collections.
 	fields["recordHistory"] = &graphql.Field{
 		Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(recordhistory.Type))),
-		Description: "Every version the indexer has observed for one record, oldest first. Empty unless the record's collection is configured for history (RECORD_HISTORY_COLLECTIONS).",
+		Description: "Versions the indexer has observed for one record, oldest first, one page at a time. Recorded only while the record's collection is configured for history (RECORD_HISTORY_COLLECTIONS); history recorded earlier stays queryable after a collection is removed.",
 		Args: graphql.FieldConfigArgument{
 			"uri": &graphql.ArgumentConfig{
 				Type:        graphql.NewNonNull(graphql.String),
@@ -747,7 +748,11 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			"first": &graphql.ArgumentConfig{
 				Type:         graphql.Int,
 				DefaultValue: recordhistory.DefaultPageSize,
-				Description:  "Maximum versions to return (default 100, max 500).",
+				Description:  "Maximum versions to return, 1 to 500 (default 100).",
+			},
+			"after": &graphql.ArgumentConfig{
+				Type:        graphql.String,
+				Description: "Return versions after this version id (the `id` of the last version on the previous page).",
 			},
 		},
 		Resolve: b.createRecordHistoryResolver(),
@@ -1786,7 +1791,18 @@ func (b *Builder) createRecordHistoryResolver() graphql.FieldResolveFn {
 			return []map[string]interface{}{}, nil
 		}
 		first, _ := p.Args["first"].(int)
-		versions, err := repos.RecordVersions.ListByURI(p.Context, uri, first)
+		if first < 1 || first > repositories.MaxRecordHistoryPageSize {
+			return nil, fmt.Errorf("first must be between 1 and %d", repositories.MaxRecordHistoryPageSize)
+		}
+		var afterID int64
+		if after, ok := p.Args["after"].(string); ok && strings.TrimSpace(after) != "" {
+			parsed, err := strconv.ParseInt(strings.TrimSpace(after), 10, 64)
+			if err != nil || parsed < 0 {
+				return nil, fmt.Errorf("after must be a version id from a previous recordHistory page")
+			}
+			afterID = parsed
+		}
+		versions, err := repos.RecordVersions.ListByURI(p.Context, uri, afterID, first)
 		if err != nil {
 			return nil, fmt.Errorf("failed to query record history: %w", err)
 		}
