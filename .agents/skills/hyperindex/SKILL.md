@@ -259,7 +259,7 @@ Use typed collection queries when the caller needs collection-specific filters, 
 
 ## Record version history
 
-For collections the deployment tracks, `recordHistory(uri: "at://…")` returns the observed versions of one record, oldest first, 100 per page by default (`first` up to 500; pass the last `id` as `after` for more). `value` holds the record body, or null for a delete. Use it to show how a record changed, for example who renamed an observation:
+For collections the deployment tracks, `recordHistory(uri: "at://…")` returns the observed versions of one record, oldest first, 100 per page by default (`first` up to 500; pass the last `id` as `after` for more). `value` holds the record body. Deleted records (and records of deleted accounts) have no history. Use it to show how a record changed, for example who renamed an observation:
 
 ```graphql
 {

@@ -91,7 +91,7 @@ Run verification based on what changed.
 - `SECRET_KEY_BASE` must be at least 64 characters.
 - `TAP_ENABLED=true` switches record ingestion to Tap mode. After Tap becomes healthy, Hyperindex runs one bounded background pass that fills missing `actor.handle` values from Tap's local `/info/:did` metadata without delaying API startup.
 - `LABELER_SUBSCRIBE_ENABLED=true` with `LABELER_SUBSCRIBE_URLS` starts optional external `com.atproto.label.subscribeLabels` ingestion.
-- `RECORD_HISTORY_COLLECTIONS` (Tap mode) keeps every version of matching records in `record_version`, exposed by the root `recordHistory(uri)` query. Startup seeds a `baseline` row for existing records that have no history yet; the version is written before the current-state upsert so Tap redelivery keeps both consistent.
+- `RECORD_HISTORY_COLLECTIONS` (Tap mode) keeps every version of matching records in `record_version`, exposed by the root `recordHistory(uri)` query. Startup seeds a `baseline` row for existing records that have no history yet; the version is written before the current-state upsert so Tap redelivery keeps both consistent. Record deletes and account purges delete history too (always, even for collections no longer tracked).
 - Migrations run automatically on startup.
 - Backend container images bundle published helper Lexicons from `lexicons/`, pinned by `lexicons.json`, and set `LEXICON_DIR=/app/lexicons`. Database Lexicons override bundled documents with the same NSID.
 - Be careful with `ALLOWED_ORIGINS`: current code allows all origins when unset, even if older prose suggests stricter defaults.

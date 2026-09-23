@@ -349,21 +349,21 @@ External label predicates bound by the containing filter field.
 
 ## Record version history
 
-`recordHistory(uri: String!, first: Int = 100, after: String)` returns `[RecordVersion!]!`, oldest first. `first` must be 1 to 500; for the next page pass the last version's `id` as `after`. Versions are recorded for collections the deployment tracks (`RECORD_HISTORY_COLLECTIONS`; production tracks `app.gainforest.dwc.occurrence`); records that were never tracked return an empty list, and history recorded before a collection was removed stays queryable. A `baseline` version is what was indexed when history was switched on; earlier edits are not available.
+`recordHistory(uri: String!, first: Int = 100, after: String)` returns `[RecordVersion!]!`, oldest first. `first` must be 1 to 500; for the next page pass the last version's `id` as `after`. Versions are recorded for collections the deployment tracks (`RECORD_HISTORY_COLLECTIONS`; production tracks `app.gainforest.dwc.occurrence`); records that were never tracked return an empty list, and history recorded before a collection was removed stays queryable. A `baseline` version is what was indexed when history was switched on; earlier edits are not available. Deleting a record, or deleting, deactivating or taking down its account, removes its history.
 
 ### `RecordVersion`
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `action` | `String!` | `baseline`, `create`, `update`, or `delete`. |
-| `cid` | `String!` | CID of this version (for deletes, the version that was deleted). |
+| `action` | `String!` | `baseline`, `create`, or `update`. |
+| `cid` | `String!` | CID of this version. |
 | `collection` | `String!` | Collection NSID. |
 | `did` | `String!` | Repository DID. |
 | `id` | `String!` | Monotonic version id; later versions have larger ids. |
 | `live` | `Boolean` | True when seen on the live stream, false for a resync delivery, null for baseline rows. |
 | `observedAt` | `String!` | When the indexer observed this version (RFC 3339). |
 | `uri` | `String!` | Record AT-URI. |
-| `value` | `JSON` | The record body at this version; null for deletes. |
+| `value` | `JSON` | The record body at this version. |
 
 ## External label support
 
