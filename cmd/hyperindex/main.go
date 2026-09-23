@@ -68,6 +68,7 @@ type services struct {
 	labelDefinitions *repositories.LabelDefinitionsRepository
 	labelPreferences *repositories.LabelPreferencesRepository
 	reports          *repositories.ReportsRepository
+	recordVersions   *repositories.RecordVersionsRepository
 }
 
 // backgroundServices tracks cancellable background goroutines for clean shutdown.
@@ -200,6 +201,7 @@ func initServices(cfg *config.Config) (*services, error) {
 		labelDefinitions: repositories.NewLabelDefinitionsRepository(db),
 		labelPreferences: repositories.NewLabelPreferencesRepository(db),
 		reports:          repositories.NewReportsRepository(db),
+		recordVersions:   repositories.NewRecordVersionsRepository(db),
 	}
 
 	if cfg.PLCDirectoryURL != "" {
@@ -802,6 +804,7 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 		Actors:         svc.actors,
 		Lexicons:       svc.lexicons,
 		ExternalLabels: svc.externalLabels,
+		RecordVersions: svc.recordVersions,
 	}
 
 	graphqlHandler, err := hgraphql.NewHandler(registry, repos)
@@ -998,6 +1001,21 @@ func startTap(
 
 	// Create handler that stores records and publishes to subscriptions.
 	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub)
+	if historyCollections := repositories.NewCollectionMatcher(cfg.RecordHistoryCollections); !historyCollections.Empty() {
+		// Seed the current version of every opted-in record before live events
+		// start, so each history begins with what was indexed at switch-on.
+		// History is only switched on once seeding succeeds: recording events
+		// for records without a baseline would make the seed skip them later.
+		seedCtx, cancelSeed := context.WithTimeout(context.Background(), 10*time.Minute)
+		seeded, err := svc.recordVersions.SeedBaseline(seedCtx, historyCollections)
+		cancelSeed()
+		if err != nil {
+			slog.Error("Record version history stays off until the next start: baseline seeding failed", "collections", cfg.RecordHistoryCollections, "error", err)
+		} else {
+			handler.WithRecordHistory(svc.recordVersions, historyCollections)
+			slog.Info("Record version history enabled", "collections", cfg.RecordHistoryCollections, "baseline_seeded", seeded)
+		}
+	}
 
 	// Create consumer.
 	consumer := tap.NewConsumer(tap.ConsumerConfig{
