@@ -2,8 +2,6 @@ package tap
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -25,8 +23,9 @@ type IndexHandler struct {
 	historyCollections repositories.CollectionMatcher
 }
 
-// WithRecordHistory enables append-only version history for the collections
-// the matcher selects. Every distinct version and delete is recorded.
+// WithRecordHistory records every distinct version of records in the
+// collections the matcher selects. Deleting a record removes its history in
+// the records repository, whether or not history is enabled.
 func (h *IndexHandler) WithRecordHistory(versions *repositories.RecordVersionsRepository, collections repositories.CollectionMatcher) *IndexHandler {
 	h.versions = versions
 	h.historyCollections = collections
@@ -132,32 +131,6 @@ func (h *IndexHandler) HandleRecord(ctx context.Context, event *RecordEvent) err
 		}
 
 	case ActionDelete:
-		// Tombstone the version being deleted before removing it. If either
-		// write fails the event is retried: the tombstone insert is idempotent
-		// (keyed by the deleted CID) and the record is still there to delete.
-		if h.keepsHistory(event.Collection) {
-			setEventPhase(ctx, "record_versions.tombstone")
-			current, err := h.records.GetByURI(ctx, uri)
-			switch {
-			case err == nil:
-				live := event.Live
-				if err := h.versions.Append(ctx, repositories.RecordVersionWrite{
-					URI:        uri,
-					CID:        current.CID,
-					DID:        event.DID,
-					Collection: event.Collection,
-					Action:     repositories.RecordVersionDelete,
-					Live:       &live,
-				}); err != nil {
-					return fmt.Errorf("failed to record delete in version history: %w", err)
-				}
-			case errors.Is(err, sql.ErrNoRows):
-				// Nothing indexed to delete (or already deleted and tombstoned).
-			default:
-				return fmt.Errorf("failed to read record before delete: %w", err)
-			}
-		}
-
 		setEventPhase(ctx, "records.delete")
 		if err := h.records.Delete(ctx, uri); err != nil {
 			return fmt.Errorf("failed to delete record: %w", err)

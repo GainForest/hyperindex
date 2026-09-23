@@ -219,8 +219,8 @@ func TestMigrations_RunAndRollbackPostgres(t *testing.T) {
 	assertPostgresSequenceExists(ctx, t, exec, schemaName, "indexing_activity_id_seq")
 	assertPostgresIndexNotExists(ctx, t, exec, schemaName, "idx_record_json_gin")
 
-	// 015 (record_version) is the newest migration; roll it back, then 011.
-	for _, version := range []string{"015", "011"} {
+	// 016 and 015 (record_version) are the newest migrations; roll them back, then 011.
+	for _, version := range []string{"016", "015", "011"} {
 		if err := migrations.Rollback(ctx, exec); err != nil {
 			t.Fatalf("Rollback(%s) returned error: %v", version, err)
 		}
@@ -520,8 +520,10 @@ func TestMigrations_RecordVersionUpAndDown(t *testing.T) {
 	if indexCount() != 1 {
 		t.Fatal("migration 015 did not create record_version")
 	}
-	if err := migrations.Rollback(ctx, exec); err != nil {
-		t.Fatalf("Rollback(015) error = %v", err)
+	for _, version := range []string{"016", "015"} {
+		if err := migrations.Rollback(ctx, exec); err != nil {
+			t.Fatalf("Rollback(%s) error = %v", version, err)
+		}
 	}
 	if indexCount() != 0 {
 		t.Fatal("migration 015 schema remained after rollback")
@@ -531,5 +533,69 @@ func TestMigrations_RecordVersionUpAndDown(t *testing.T) {
 	}
 	if indexCount() != 1 {
 		t.Fatal("migration 015 was not re-applied")
+	}
+}
+
+func TestMigrations_016RemovesHistoryOfDeletedRecords(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := migrations.Rollback(ctx, exec); err != nil {
+		t.Fatalf("Rollback(016) error = %v", err)
+	}
+
+	// State left by the 015-era handler: a live record with history, a
+	// deleted record with a tombstone, a recreated record whose earlier life
+	// ended in a tombstone, and history of a purged account.
+	db := exec.DB()
+	mustExec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, query, args...); err != nil {
+			t.Fatalf("exec %q: %v", query, err)
+		}
+	}
+	mustExec(`INSERT INTO record (uri, cid, did, collection, json) VALUES
+		('at://did:plc:a/c/live', 'l2', 'did:plc:a', 'c', '{}'),
+		('at://did:plc:a/c/recreated', 'r3', 'did:plc:a', 'c', '{}')`)
+	insertVersion := func(uri, cid, action string) {
+		t.Helper()
+		mustExec(`INSERT INTO record_version (uri, cid, version_key, did, collection, action, json) VALUES (?, ?, ?, 'did:plc:a', 'c', ?, '{}')`,
+			uri, cid, action+":"+cid, action)
+	}
+	insertVersion("at://did:plc:a/c/live", "l1", "create")
+	insertVersion("at://did:plc:a/c/live", "l2", "update")
+	insertVersion("at://did:plc:a/c/deleted", "d1", "create")
+	insertVersion("at://did:plc:a/c/deleted", "d1", "delete")
+	insertVersion("at://did:plc:a/c/recreated", "r1", "create")
+	insertVersion("at://did:plc:a/c/recreated", "r1", "delete")
+	insertVersion("at://did:plc:a/c/recreated", "r3", "create")
+	insertVersion("at://did:plc:purged/c/x", "p1", "create")
+
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() applying 016 error = %v", err)
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT uri || ' ' || cid || ' ' || action FROM record_version ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query record_version: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []string
+	for rows.Next() {
+		var row string
+		if err := rows.Scan(&row); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, row)
+	}
+	want := []string{
+		"at://did:plc:a/c/live l1 create",
+		"at://did:plc:a/c/live l2 update",
+		"at://did:plc:a/c/recreated r3 create",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("record_version after 016 =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
