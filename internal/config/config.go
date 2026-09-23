@@ -63,6 +63,11 @@ type Config struct {
 	TapDisableAcks   bool   // Fire-and-forget mode (default: false)
 	TapEnabled       bool   // Use Tap instead of Jetstream+Backfill (default: false)
 
+	// Record version history (Tap mode): comma-separated collection NSIDs or
+	// `prefix.*` patterns whose every version is kept in record_version.
+	// Empty (the default) keeps no history.
+	RecordHistoryCollections string
+
 	// Labeler subscriptions
 	LabelerSubscribeEnabled      bool
 	LabelerSubscribeURLs         string // Comma-separated com.atproto.label.subscribeLabels websocket URLs
@@ -126,6 +131,9 @@ func Load() (*Config, error) {
 		TapAdminPassword: getEnv("TAP_ADMIN_PASSWORD", ""),
 		TapDisableAcks:   getEnvBool("TAP_DISABLE_ACKS", false),
 		TapEnabled:       getEnvBool("TAP_ENABLED", false),
+
+		// Record version history
+		RecordHistoryCollections: getEnv("RECORD_HISTORY_COLLECTIONS", ""),
 
 		// Labeler subscriptions
 		LabelerSubscribeEnabled:      getEnvBool("LABELER_SUBSCRIBE_ENABLED", false),

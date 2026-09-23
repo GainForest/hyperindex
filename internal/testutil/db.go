@@ -27,6 +27,7 @@ type TestDB struct {
 	LabelDefinitions *repositories.LabelDefinitionsRepository
 	LabelPreferences *repositories.LabelPreferencesRepository
 	Reports          *repositories.ReportsRepository
+	RecordVersions   *repositories.RecordVersionsRepository
 }
 
 // SetupTestDB creates an in-memory SQLite database with all migrations applied.
@@ -73,6 +74,7 @@ func SetupTestDBWithURL(t *testing.T, databaseURL string) *TestDB {
 		LabelDefinitions: repositories.NewLabelDefinitionsRepository(exec),
 		LabelPreferences: repositories.NewLabelPreferencesRepository(exec),
 		Reports:          repositories.NewReportsRepository(exec),
+		RecordVersions:   repositories.NewRecordVersionsRepository(exec),
 	}
 
 	t.Cleanup(func() {
