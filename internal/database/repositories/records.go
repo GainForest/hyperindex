@@ -2669,6 +2669,13 @@ func (r *RecordsRepository) PurgeActorData(ctx context.Context, did string) erro
 		return fmt.Errorf("failed to delete records by did: %w", err)
 	}
 
+	// Record version history belongs to the account too: a deleted,
+	// deactivated or taken-down account leaves no queryable past versions.
+	deleteVersionsSQL := fmt.Sprintf("DELETE FROM record_version WHERE did = %s", r.db.Placeholder(1))
+	if _, err := tx.ExecContext(ctx, deleteVersionsSQL, did); err != nil {
+		return fmt.Errorf("failed to delete record versions by did: %w", err)
+	}
+
 	deleteActorSQL := fmt.Sprintf("DELETE FROM actor WHERE did = %s", r.db.Placeholder(1))
 	if _, err := tx.ExecContext(ctx, deleteActorSQL, did); err != nil {
 		return fmt.Errorf("failed to delete actor by did: %w", err)

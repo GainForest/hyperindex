@@ -19,13 +19,13 @@ const (
 	RecordVersionBaseline = "baseline"
 	RecordVersionCreate   = "create"
 	RecordVersionUpdate   = "update"
-	RecordVersionDelete   = "delete"
 
 	// MaxRecordHistoryPageSize bounds one recordHistory response.
 	MaxRecordHistoryPageSize = 500
 )
 
-// RecordVersion is one observed version of a record, or a delete tombstone.
+// RecordVersion is one observed version of a record. Deleting a record (or
+// its account) removes its history, so there are no delete entries.
 type RecordVersion struct {
 	ID         int64
 	URI        string
@@ -33,7 +33,7 @@ type RecordVersion struct {
 	DID        string
 	Collection string
 	Action     string
-	// JSON is the record body; nil for delete tombstones.
+	// JSON is the record body.
 	JSON *string
 	// Live reports whether Tap delivered the event from the live stream
 	// (false for resync/backfill deliveries); nil for baseline rows.
@@ -127,12 +127,9 @@ func NewRecordVersionsRepository(db database.Executor) *RecordVersionsRepository
 	return &RecordVersionsRepository{db: db}
 }
 
-// versionKey is the dedupe identity of a version: its CID; for Tap events
-// without a CID, a hash of the body; for tombstones, the deleted CID.
+// versionKey is the dedupe identity of a version: its CID, or for Tap events
+// without a CID, a hash of the body.
 func versionKey(v RecordVersionWrite) string {
-	if v.Action == RecordVersionDelete {
-		return "delete:" + v.CID
-	}
 	if v.CID != "" {
 		return v.CID
 	}
@@ -145,14 +142,14 @@ func versionKey(v RecordVersionWrite) string {
 }
 
 // Append records one version. A version already stored for the URI (same
-// version key) is left untouched, so redelivered and resynced events,
-// including repeated deletes, are no-ops.
+// version key) is left untouched, so redelivered and resynced events are
+// no-ops.
 func (r *RecordVersionsRepository) Append(ctx context.Context, v RecordVersionWrite) error {
 	if v.URI == "" || v.DID == "" || v.Collection == "" {
 		return fmt.Errorf("record version requires uri, did and collection")
 	}
 	switch v.Action {
-	case RecordVersionCreate, RecordVersionUpdate, RecordVersionDelete:
+	case RecordVersionCreate, RecordVersionUpdate:
 	default:
 		return fmt.Errorf("unsupported record version action %q", v.Action)
 	}
@@ -181,6 +178,16 @@ func (r *RecordVersionsRepository) Append(ctx context.Context, v RecordVersionWr
 	})
 	if err != nil {
 		return fmt.Errorf("append record version for %s: %w", v.URI, err)
+	}
+	return nil
+}
+
+// DeleteByURI removes a record's history. Deleting a record in its repo
+// deletes its past versions from the index as well.
+func (r *RecordVersionsRepository) DeleteByURI(ctx context.Context, uri string) error {
+	sqlStr := fmt.Sprintf("DELETE FROM record_version WHERE uri = %s", r.db.Placeholder(1))
+	if _, err := r.db.Exec(ctx, sqlStr, []database.Value{database.Text(uri)}); err != nil {
+		return fmt.Errorf("delete record versions for %s: %w", uri, err)
 	}
 	return nil
 }

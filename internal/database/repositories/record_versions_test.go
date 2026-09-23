@@ -60,17 +60,15 @@ func TestRecordVersions_AppendDedupesAndListsOldestFirst(t *testing.T) {
 			write(repositories.RecordVersionCreate, "cid1", strPtr(`{"scientificName":"Hirundo rustica","identifiedBy":"ai:gemini-3.8-flash"}`))
 			write(repositories.RecordVersionCreate, "cid1", strPtr(`{"scientificName":"Hirundo rustica","identifiedBy":"ai:gemini-3.8-flash"}`)) // redelivery
 			write(repositories.RecordVersionUpdate, "cid2", strPtr(`{"scientificName":"Hirundo tahitica","identifiedBy":"Maria"}`))
-			write(repositories.RecordVersionDelete, "cid2", nil)
-			write(repositories.RecordVersionDelete, "cid2", nil) // redelivered delete
 
 			versions, err := repo.ListByURI(ctx, uri, 0, 500)
 			if err != nil {
 				t.Fatalf("ListByURI: %v", err)
 			}
-			if len(versions) != 3 {
-				t.Fatalf("got %d versions, want 3 (redelivery deduped): %+v", len(versions), versions)
+			if len(versions) != 2 {
+				t.Fatalf("got %d versions, want 2 (redelivery deduped): %+v", len(versions), versions)
 			}
-			wantActions := []string{"create", "update", "delete"}
+			wantActions := []string{"create", "update"}
 			for i, v := range versions {
 				if v.Action != wantActions[i] {
 					t.Errorf("version %d action = %q, want %q", i, v.Action, wantActions[i])
@@ -82,8 +80,11 @@ func TestRecordVersions_AppendDedupesAndListsOldestFirst(t *testing.T) {
 			if versions[1].JSON == nil || versions[1].CID != "cid2" {
 				t.Errorf("update version = %+v", versions[1])
 			}
-			if versions[2].JSON != nil {
-				t.Errorf("delete tombstone should have no body, got %q", *versions[2].JSON)
+			if err := repo.DeleteByURI(ctx, uri); err != nil {
+				t.Fatalf("DeleteByURI: %v", err)
+			}
+			if remaining, err := repo.ListByURI(ctx, uri, 0, 500); err != nil || len(remaining) != 0 {
+				t.Fatalf("history after DeleteByURI = %d versions (err %v), want none", len(remaining), err)
 			}
 			if versions[0].Live == nil || !*versions[0].Live {
 				t.Errorf("live flag not kept: %+v", versions[0].Live)
@@ -186,6 +187,34 @@ func TestRecordVersions_CIDLessVersionsStayDistinctAndPages(t *testing.T) {
 			}
 			if _, err := repo.ListByURI(ctx, uri, 0, 0); err == nil {
 				t.Fatal("ListByURI should reject a zero page size")
+			}
+		})
+	}
+}
+
+func TestRecordVersions_AccountPurgeRemovesHistory(t *testing.T) {
+	for name, db := range recordVersionTestDBs(t) {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+			gone, kept := "did:plc:gone"+suffix, "did:plc:kept"+suffix
+			for _, did := range []string{gone, kept} {
+				body := `{"scientificName":"Quercus robur"}`
+				if err := db.RecordVersions.Append(ctx, repositories.RecordVersionWrite{
+					URI: "at://" + did + "/app.gainforest.dwc.occurrence/1", CID: "c1", DID: did,
+					Collection: "app.gainforest.dwc.occurrence", Action: repositories.RecordVersionCreate, JSON: &body,
+				}); err != nil {
+					t.Fatalf("Append: %v", err)
+				}
+			}
+			if err := db.Records.PurgeActorData(ctx, gone); err != nil {
+				t.Fatalf("PurgeActorData: %v", err)
+			}
+			if v, _ := db.RecordVersions.ListByURI(ctx, "at://"+gone+"/app.gainforest.dwc.occurrence/1", 0, 500); len(v) != 0 {
+				t.Fatalf("purged account still has %d versions", len(v))
+			}
+			if v, _ := db.RecordVersions.ListByURI(ctx, "at://"+kept+"/app.gainforest.dwc.occurrence/1", 0, 500); len(v) != 1 {
+				t.Fatalf("other account lost its history: %d versions", len(v))
 			}
 		})
 	}

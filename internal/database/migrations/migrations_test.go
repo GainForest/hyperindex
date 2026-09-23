@@ -298,7 +298,7 @@ func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
 	}
 	assertPostgresIndexNotExists(ctx, t, exec, schemaName, "idx_record_json_gin")
 
-	for _, version := range []string{"015", "014", "013", "012", "011"} {
+	for _, version := range []string{"016", "015", "014", "013", "012", "011"} {
 		if err := migrations.Rollback(ctx, exec); err != nil {
 			t.Fatalf("Rollback(%s) returned error: %v", version, err)
 		}
@@ -491,12 +491,14 @@ func TestMigrations_Rollback(t *testing.T) {
 	}
 }
 
-// rollbackRecordVersionMigration undoes 015 so tests written against 014 as the
-// newest migration keep exercising 014 and 013.
+// rollbackRecordVersionMigration undoes 016 and 015 so tests written against
+// 014 as the newest migration keep exercising 014 and 013.
 func rollbackRecordVersionMigration(ctx context.Context, t *testing.T, exec *sqlite.Executor) {
 	t.Helper()
-	if err := migrations.Rollback(ctx, exec); err != nil {
-		t.Fatalf("Rollback(015) error = %v", err)
+	for _, version := range []string{"016", "015"} {
+		if err := migrations.Rollback(ctx, exec); err != nil {
+			t.Fatalf("Rollback(%s) error = %v", version, err)
+		}
 	}
 }
 
@@ -508,6 +510,9 @@ func TestMigrations_RecordVersionUpAndDown(t *testing.T) {
 	}
 	if !sqliteIndexExists(t, exec, "idx_record_version_uri_key") || !migrationVersionExists(t, exec, "015") {
 		t.Fatal("migration 015 did not create record_version")
+	}
+	if !sqliteIndexExists(t, exec, "idx_record_version_did") || !migrationVersionExists(t, exec, "016") {
+		t.Fatal("migration 016 did not create the record_version did index")
 	}
 	rollbackRecordVersionMigration(ctx, t, exec)
 	if sqliteIndexExists(t, exec, "idx_record_version_uri_key") || migrationVersionExists(t, exec, "015") {

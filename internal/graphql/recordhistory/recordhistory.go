@@ -17,26 +17,26 @@ import (
 // DefaultPageSize is the number of versions returned when `first` is omitted.
 const DefaultPageSize = 100
 
-// Type is one observed version of a record, or a delete tombstone.
+// Type is one observed version of a record.
 var Type = graphql.NewObject(graphql.ObjectConfig{
 	Name:        "RecordVersion",
-	Description: "One observed version of a record (oldest first), or a delete tombstone. Only kept for collections the indexer is configured to track.",
+	Description: "One observed version of a record (oldest first). Only kept for collections the indexer is configured to track; deleting the record or its account removes its history.",
 	Fields: graphql.Fields{
 		"id": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "Monotonic version id; later versions have larger ids.",
 		},
 		"uri":        &graphql.Field{Type: graphql.NewNonNull(graphql.String), Description: "Record AT-URI."},
-		"cid":        &graphql.Field{Type: graphql.NewNonNull(graphql.String), Description: "CID of this version (for deletes, the version that was deleted)."},
+		"cid":        &graphql.Field{Type: graphql.NewNonNull(graphql.String), Description: "CID of this version."},
 		"did":        &graphql.Field{Type: graphql.NewNonNull(graphql.String), Description: "Repository DID."},
 		"collection": &graphql.Field{Type: graphql.NewNonNull(graphql.String), Description: "Collection NSID."},
 		"action": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
-			Description: "baseline (current when history was switched on), create, update, or delete.",
+			Description: "baseline (current when history was switched on), create, or update.",
 		},
 		"value": &graphql.Field{
 			Type:        types.JSONScalar,
-			Description: "The record body at this version; null for deletes.",
+			Description: "The record body at this version.",
 		},
 		"live": &graphql.Field{
 			Type:        graphql.Boolean,
