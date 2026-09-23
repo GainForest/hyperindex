@@ -257,6 +257,22 @@ Variables:
 
 Use typed collection queries when the caller needs collection-specific filters, sorting, exact totals, or typed fields. Use `recordTimeline` when the primary requirement is one stable newest-first page across selected collections.
 
+## Record version history
+
+For collections the deployment tracks, `recordHistory(uri: "at://…")` returns every observed version of one record, oldest first, with the full record body in `value`. Use it to show how a record changed, for example who renamed an observation:
+
+```graphql
+{
+  recordHistory(uri: "at://did:plc:example/app.gainforest.dwc.occurrence/3kabc") {
+    action
+    observedAt
+    value
+  }
+}
+```
+
+The first entry may be a `baseline`: the version indexed when history was switched on. Untracked collections return an empty list.
+
 ## External labeler filtering
 
 Use external label filtering only after confirming that the target endpoint exposes external label support.

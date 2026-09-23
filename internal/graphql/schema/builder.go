@@ -21,6 +21,7 @@ import (
 	"github.com/GainForest/hyperindex/internal/graphql/certifiedprofiles"
 	"github.com/GainForest/hyperindex/internal/graphql/externallabels"
 	"github.com/GainForest/hyperindex/internal/graphql/query"
+	"github.com/GainForest/hyperindex/internal/graphql/recordhistory"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/graphql/types"
@@ -732,6 +733,24 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			},
 		},
 		Resolve: b.createRecordTimelineResolver(),
+	}
+
+	// Add version history lookup for records in history-enabled collections.
+	fields["recordHistory"] = &graphql.Field{
+		Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(recordhistory.Type))),
+		Description: "Every version the indexer has observed for one record, oldest first. Empty unless the record's collection is configured for history (RECORD_HISTORY_COLLECTIONS).",
+		Args: graphql.FieldConfigArgument{
+			"uri": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(graphql.String),
+				Description: "Record AT-URI.",
+			},
+			"first": &graphql.ArgumentConfig{
+				Type:         graphql.Int,
+				DefaultValue: recordhistory.DefaultPageSize,
+				Description:  "Maximum versions to return (default 100, max 500).",
+			},
+		},
+		Resolve: b.createRecordHistoryResolver(),
 	}
 
 	// Add external label lookup by subject DID or AT-URI.
@@ -1756,6 +1775,25 @@ func (b *Builder) resolveRecordConnection(
 }
 
 // createExternalLabelsResolver creates a resolver for generic external label subject lookups.
+func (b *Builder) createRecordHistoryResolver() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		repos := resolver.GetRepositories(p.Context)
+		if repos == nil || repos.RecordVersions == nil {
+			return []map[string]interface{}{}, nil
+		}
+		uri, _ := p.Args["uri"].(string)
+		if strings.TrimSpace(uri) == "" {
+			return []map[string]interface{}{}, nil
+		}
+		first, _ := p.Args["first"].(int)
+		versions, err := repos.RecordVersions.ListByURI(p.Context, uri, first)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query record history: %w", err)
+		}
+		return recordhistory.ToGraphQL(versions), nil
+	}
+}
+
 func (b *Builder) createExternalLabelsResolver() graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
 		repos := resolver.GetRepositories(p.Context)

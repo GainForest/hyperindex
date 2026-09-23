@@ -120,6 +120,9 @@ TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.ym
 | `TAP_DISABLE_ACKS` | Disable ack-based delivery (useful for debugging) | `false` |
 | `TAP_SIGNAL_COLLECTION` | Collection NSID for auto-discovery of repos | *(empty)* |
 | `TAP_COLLECTION_FILTERS` | Comma-separated collection NSIDs for Tap sidecar record filtering; set independently from legacy `JETSTREAM_COLLECTIONS` | *(empty)* |
+| `RECORD_HISTORY_COLLECTIONS` | Comma-separated collection NSIDs or `prefix.*` patterns whose every version is kept in `record_version` and served by the `recordHistory` GraphQL query (Tap mode only) | *(empty: no history)* |
+
+**Record version history.** Records in collections listed in `RECORD_HISTORY_COLLECTIONS` keep an append-only history: one row per distinct version (CID) the indexer observes, plus delete tombstones. On startup, every existing record in a newly listed collection gets a `baseline` row holding its current version, so history starts from what was indexed when it was switched on. Earlier versions are not recoverable because repositories only keep the latest one. Query it with `recordHistory(uri: "at://…")`.
 
 Tap Docker deployments also require `ADMIN_API_KEY` in `.env` because Hyperindex requires admin authentication at startup. `TAP_COLLECTION_FILTERS` is read by the Tap sidecar only; legacy `JETSTREAM_COLLECTIONS` remains part of Jetstream mode and is not used as a Tap filtering fallback.
 

@@ -298,7 +298,7 @@ func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
 	}
 	assertPostgresIndexNotExists(ctx, t, exec, schemaName, "idx_record_json_gin")
 
-	for _, version := range []string{"014", "013", "012", "011"} {
+	for _, version := range []string{"015", "014", "013", "012", "011"} {
 		if err := migrations.Rollback(ctx, exec); err != nil {
 			t.Fatalf("Rollback(%s) returned error: %v", version, err)
 		}
@@ -491,12 +491,43 @@ func TestMigrations_Rollback(t *testing.T) {
 	}
 }
 
+// rollbackRecordVersionMigration undoes 015 so tests written against 014 as the
+// newest migration keep exercising 014 and 013.
+func rollbackRecordVersionMigration(ctx context.Context, t *testing.T, exec *sqlite.Executor) {
+	t.Helper()
+	if err := migrations.Rollback(ctx, exec); err != nil {
+		t.Fatalf("Rollback(015) error = %v", err)
+	}
+}
+
+func TestMigrations_RecordVersionUpAndDown(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !sqliteIndexExists(t, exec, "idx_record_version_uri_cid") || !migrationVersionExists(t, exec, "015") {
+		t.Fatal("migration 015 did not create record_version")
+	}
+	rollbackRecordVersionMigration(ctx, t, exec)
+	if sqliteIndexExists(t, exec, "idx_record_version_uri_cid") || migrationVersionExists(t, exec, "015") {
+		t.Fatal("migration 015 schema/version remained after rollback")
+	}
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("re-Run() error = %v", err)
+	}
+	if !migrationVersionExists(t, exec, "015") {
+		t.Fatal("migration 015 was not re-applied")
+	}
+}
+
 func TestMigrations_Rollback014Then013PreservesLexiconData(t *testing.T) {
 	exec := newTestExecutor(t)
 	ctx := context.Background()
 	if err := migrations.Run(ctx, exec); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
+	rollbackRecordVersionMigration(ctx, t, exec)
 	const raw = `{"lexicon":1,"id":"com.example.saved","defs":{}}`
 	if _, err := exec.DB().ExecContext(ctx, `INSERT INTO lexicon (id, json, raw_json) VALUES (?, ?, ?)`, "com.example.saved", raw, raw); err != nil {
 		t.Fatalf("insert Lexicon before downgrade: %v", err)
@@ -529,6 +560,7 @@ func TestMigrations_ApplyAndVersionRecordRollbackTogether(t *testing.T) {
 	if err := migrations.Run(ctx, exec); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
+	rollbackRecordVersionMigration(ctx, t, exec)
 	if err := migrations.Rollback(ctx, exec); err != nil {
 		t.Fatalf("Rollback(014) error = %v", err)
 	}
@@ -559,6 +591,7 @@ func TestMigrations_DownAndVersionDeleteRollbackTogether(t *testing.T) {
 	if err := migrations.Run(ctx, exec); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
+	rollbackRecordVersionMigration(ctx, t, exec)
 	if err := migrations.Rollback(ctx, exec); err != nil {
 		t.Fatalf("Rollback(014) error = %v", err)
 	}

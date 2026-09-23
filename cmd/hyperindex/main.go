@@ -71,6 +71,7 @@ type services struct {
 	labelDefinitions  *repositories.LabelDefinitionsRepository
 	labelPreferences  *repositories.LabelPreferencesRepository
 	reports           *repositories.ReportsRepository
+	recordVersions    *repositories.RecordVersionsRepository
 	validator         *validation.Validator
 	validationRefresh *validationrefresh.Scheduler
 }
@@ -211,6 +212,7 @@ func initServices(cfg *config.Config) (*services, error) {
 		labelDefinitions: repositories.NewLabelDefinitionsRepository(db),
 		labelPreferences: repositories.NewLabelPreferencesRepository(db),
 		reports:          repositories.NewReportsRepository(db),
+		recordVersions:   repositories.NewRecordVersionsRepository(db),
 	}
 
 	if cfg.PLCDirectoryURL != "" {
@@ -792,6 +794,7 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 		Actors:         svc.actors,
 		Lexicons:       svc.lexicons,
 		ExternalLabels: svc.externalLabels,
+		RecordVersions: svc.recordVersions,
 	}
 
 	graphqlHandler, err := hgraphql.NewHandler(registry, repos)
@@ -951,6 +954,19 @@ func startTap(
 
 	// Create handler that stores records and publishes to subscriptions.
 	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub, svc.validator)
+	if historyCollections := repositories.NewCollectionMatcher(cfg.RecordHistoryCollections); !historyCollections.Empty() {
+		handler.WithRecordHistory(svc.recordVersions, historyCollections)
+		// Seed the current version of every opted-in record before live events
+		// start, so each history begins with what was indexed at switch-on.
+		seedCtx, cancelSeed := context.WithTimeout(context.Background(), 10*time.Minute)
+		seeded, err := svc.recordVersions.SeedBaseline(seedCtx, historyCollections)
+		cancelSeed()
+		if err != nil {
+			slog.Error("Failed to seed record version baseline; history starts with the next change", "error", err)
+		} else {
+			slog.Info("Record version history enabled", "collections", cfg.RecordHistoryCollections, "baseline_seeded", seeded)
+		}
+	}
 
 	// Create consumer.
 	consumer := tap.NewConsumer(tap.ConsumerConfig{
