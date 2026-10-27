@@ -394,3 +394,30 @@ func TestValidatorLexiconHashIncludesReferencedLexicons(t *testing.T) {
 		t.Fatal("LexiconHash() did not change when a referenced Lexicon changed")
 	}
 }
+
+func TestValidatorSkipsNonRecordLexicons(t *testing.T) {
+	post := []byte(`{"lexicon":1,"id":"app.example.post","defs":{"main":{"type":"record","key":"tid","record":{"type":"object","properties":{}}}}}`)
+	saved := map[string][]byte{"app.example.post": post}
+	for _, typ := range []string{"query", "procedure", "subscription", "permission-set"} {
+		id := "app.example." + strings.ReplaceAll(typ, "-", "")
+		saved[id] = []byte(`{"lexicon":1,"id":"` + id + `","defs":{"main":{"type":"` + typ + `"}}}`)
+	}
+
+	validator, err := NewValidatorFromLexiconBytes(saved)
+	if err != nil {
+		t.Fatalf("NewValidatorFromLexiconBytes() error = %v, want non-record lexicons skipped", err)
+	}
+	if got := validator.GraphQLRegistry().Count(); got != 1 {
+		t.Fatalf("registry Count() = %d, want only the record lexicon", got)
+	}
+	if got := validator.ValidateRecord("app.example.post", "3jui7kd54zh2y", []byte(`{"$type":"app.example.post"}`)); got.Status != StatusValid {
+		t.Fatalf("record Status = %q, want %q (error %q)", got.Status, StatusValid, got.Error)
+	}
+}
+
+func TestValidatorRejectsUnknownMainType(t *testing.T) {
+	raw := []byte(`{"lexicon":1,"id":"app.example.weird","defs":{"main":{"type":"bogus"}}}`)
+	if _, err := NewValidatorFromLexiconBytes(map[string][]byte{"app.example.weird": raw}); err == nil || !strings.Contains(err.Error(), "unsupported main definition type: bogus") {
+		t.Fatalf("error = %v, want unsupported main type error", err)
+	}
+}
