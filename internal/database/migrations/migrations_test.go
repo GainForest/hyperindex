@@ -81,6 +81,7 @@ func TestMigrations_Run(t *testing.T) {
 		"idx_record_collection_validation",
 		"idx_record_collection_lexicon_hash",
 		"idx_record_collection_uri",
+		"idx_record_timeline_valid",
 	}
 
 	for _, index := range expectedIndexes {
@@ -298,9 +299,17 @@ func TestMigrations_RunPostgresRenamesIndexingActivity(t *testing.T) {
 	}
 	assertPostgresIndexNotExists(ctx, t, exec, schemaName, "idx_record_json_gin")
 
-	for _, version := range []string{"016", "015", "014", "013", "012", "011"} {
+	// Roll back 011 and every migration after it, however many are added later.
+	for {
+		var remaining int
+		if err := exec.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version >= '011'`, nil, &remaining); err != nil {
+			t.Fatalf("count migrations from 011: %v", err)
+		}
+		if remaining == 0 {
+			break
+		}
 		if err := migrations.Rollback(ctx, exec); err != nil {
-			t.Fatalf("Rollback(%s) returned error: %v", version, err)
+			t.Fatalf("Rollback() to 010 returned error: %v", err)
 		}
 	}
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_json_gin")
@@ -406,6 +415,7 @@ func TestMigrations_BackfillsRecordCreatedAtPostgres(t *testing.T) {
 	}
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_timeline_author_collection_created")
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_timeline_collection_created")
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_timeline_valid")
 }
 
 func postgresRecordCreatedAt(t *testing.T, exec *postgres.Executor, uri string) string {
@@ -491,13 +501,14 @@ func TestMigrations_Rollback(t *testing.T) {
 	}
 }
 
-// rollbackRecordVersionMigration undoes 016 and 015 so tests written against
-// 014 as the newest migration keep exercising 014 and 013.
+// rollbackRecordVersionMigration undoes 015 and every migration after it so
+// tests written against 014 as the newest migration keep exercising 014 and
+// 013, however many migrations are added later.
 func rollbackRecordVersionMigration(ctx context.Context, t *testing.T, exec *sqlite.Executor) {
 	t.Helper()
-	for _, version := range []string{"016", "015"} {
+	for migrationVersionExists(t, exec, "015") {
 		if err := migrations.Rollback(ctx, exec); err != nil {
-			t.Fatalf("Rollback(%s) error = %v", version, err)
+			t.Fatalf("Rollback() to 014 error = %v", err)
 		}
 	}
 }
@@ -910,8 +921,12 @@ func TestMigrations_016RemovesHistoryOfDeletedRecords(t *testing.T) {
 	if err := migrations.Run(ctx, exec); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if err := migrations.Rollback(ctx, exec); err != nil {
-		t.Fatalf("Rollback(016) error = %v", err)
+	// Roll back every migration after 015, so this keeps testing 016 when
+	// later migrations are added.
+	for migrationVersionExists(t, exec, "016") {
+		if err := migrations.Rollback(ctx, exec); err != nil {
+			t.Fatalf("Rollback() to 015 error = %v", err)
+		}
 	}
 
 	// State left by the 015-era handler: a live record with history, a
@@ -965,5 +980,43 @@ func TestMigrations_016RemovesHistoryOfDeletedRecords(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("record_version after 016 =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A timeline read that only wants valid records must be able to use the
+// partial index, so it never visits invalid rows (see migration 017).
+func TestMigrations_ValidTimelineReadUsesValidIndex(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	rows, err := exec.DB().QueryContext(ctx, `EXPLAIN QUERY PLAN
+		SELECT uri FROM record
+		WHERE collection = 'app.gainforest.ac.audio'
+		  AND record_created_at IS NOT NULL
+		  AND validation_status = 'valid'
+		  AND (record_created_at, uri) < ('2026-10-09T00:00:00Z', 'at://z')
+		ORDER BY record_created_at DESC, uri DESC
+		LIMIT 500`)
+	if err != nil {
+		t.Fatalf("explain valid timeline read: %v", err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read query plan: %v", err)
+	}
+	if !strings.Contains(strings.Join(plan, "\n"), "idx_record_timeline_valid") {
+		t.Fatalf("valid timeline read does not use idx_record_timeline_valid; plan:\n%s", strings.Join(plan, "\n"))
 	}
 }
