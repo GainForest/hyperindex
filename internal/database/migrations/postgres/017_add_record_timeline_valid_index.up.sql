@@ -1,4 +1,4 @@
--- Timeline reads that only want valid records (the GainForest feed service
+-- Collection-wide timeline reads that only want valid records (the GainForest feed service
 -- filters validation_status = 'valid') otherwise walk
 -- idx_record_timeline_collection_created and fetch every invalid row from the
 -- heap just to discard it. A collection with many invalid records then costs
@@ -11,6 +11,14 @@
 --   CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_record_timeline_valid
 --   ON record (collection, record_created_at DESC, uri DESC)
 --   WHERE record_created_at IS NOT NULL AND validation_status = 'valid';
+-- Deploy only after that build has returned and indisvalid is true:
+--   SELECT indisvalid FROM pg_index
+--   WHERE indexrelid = to_regclass('idx_record_timeline_valid');
+--
+-- CREATE INDEX takes a SHARE lock on record before it checks the name. While
+-- an out-of-band concurrent build is still running, that lock waits for the
+-- build and queues every write behind it, so fail fast instead.
+SET LOCAL lock_timeout = '5s';
 --
 -- A failed or cancelled concurrent build leaves an invalid index behind under
 -- the same name. IF NOT EXISTS would accept it and mark 017 applied with no
