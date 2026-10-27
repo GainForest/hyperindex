@@ -464,9 +464,9 @@ func TestMigrations_017RejectsInvalidPrebuiltIndexPostgres(t *testing.T) {
 	// Two rows in one collection make a unique concurrent build fail, which
 	// leaves an invalid index behind exactly as an interrupted build would.
 	if _, err := exec.DB().ExecContext(ctx, `
-		INSERT INTO record (uri, cid, did, collection, json, rkey) VALUES
-			('at://did:plc:test/com.example.post/a', 'cid1', 'did:plc:test', 'com.example.post', '{}'::jsonb, 'a'),
-			('at://did:plc:test/com.example.post/b', 'cid2', 'did:plc:test', 'com.example.post', '{}'::jsonb, 'b')`); err != nil {
+		INSERT INTO record (uri, cid, did, collection, json) VALUES
+			('at://did:plc:test/com.example.post/a', 'cid1', 'did:plc:test', 'com.example.post', '{}'::jsonb),
+			('at://did:plc:test/com.example.post/b', 'cid2', 'did:plc:test', 'com.example.post', '{}'::jsonb)`); err != nil {
 		t.Fatalf("insert records: %v", err)
 	}
 	if _, err := exec.DB().ExecContext(ctx, `CREATE UNIQUE INDEX CONCURRENTLY idx_record_timeline_valid ON record (collection)`); err == nil {
