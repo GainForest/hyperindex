@@ -421,3 +421,10 @@ func TestValidatorRejectsUnknownMainType(t *testing.T) {
 		t.Fatalf("error = %v, want unsupported main type error", err)
 	}
 }
+
+func TestValidatorRejectsNonRecordLexiconIDMismatch(t *testing.T) {
+	raw := []byte(`{"lexicon":1,"id":"app.example.actual","defs":{"main":{"type":"query"}}}`)
+	if err := CheckLexiconSet(map[string][]byte{"app.example.expected": raw}); err == nil || !strings.Contains(err.Error(), "lexicon ID mismatch") {
+		t.Fatalf("error = %v, want ID mismatch", err)
+	}
+}

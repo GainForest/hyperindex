@@ -42,7 +42,10 @@ var nonRecordMainTypes = map[string]bool{
 // Lexicons whose main definition is a non-record type (query, procedure,
 // subscription, permission-set) are skipped with a warning.
 func NewValidatorFromLexiconBytes(saved map[string][]byte) (*Validator, error) {
-	saved = withoutNonRecordLexicons(saved)
+	saved, err := withoutNonRecordLexicons(saved)
+	if err != nil {
+		return nil, err
+	}
 	registry := lexicon.NewRegistry()
 	catalog := indigolexicon.NewBaseCatalog()
 	hashes := make(map[string]string, len(saved))
@@ -82,12 +85,14 @@ func NewValidatorFromLexiconBytes(saved map[string][]byte) (*Validator, error) {
 }
 
 // withoutNonRecordLexicons returns saved minus documents whose main definition
-// is a known non-record type. Documents that cannot be decoded are kept so the
-// normal parse path reports a precise error.
-func withoutNonRecordLexicons(saved map[string][]byte) map[string][]byte {
+// is a known non-record type. Skipped documents must still carry the ID they
+// were saved under. Documents that cannot be decoded are kept so the normal
+// parse path reports a precise error.
+func withoutNonRecordLexicons(saved map[string][]byte) (map[string][]byte, error) {
 	filtered := make(map[string][]byte, len(saved))
 	for id, raw := range saved {
 		var doc struct {
+			ID   string `json:"id"`
 			Defs struct {
 				Main struct {
 					Type string `json:"type"`
@@ -95,13 +100,16 @@ func withoutNonRecordLexicons(saved map[string][]byte) map[string][]byte {
 			} `json:"defs"`
 		}
 		if err := json.Unmarshal(raw, &doc); err == nil && nonRecordMainTypes[doc.Defs.Main.Type] {
+			if doc.ID != id {
+				return nil, fmt.Errorf("lexicon ID mismatch: expected %s, document contains %s", id, doc.ID)
+			}
 			slog.Warn("Skipping non-record lexicon; it is not used for indexing or record validation",
 				"lexicon", id, "main_type", doc.Defs.Main.Type)
 			continue
 		}
 		filtered[id] = raw
 	}
-	return filtered
+	return filtered, nil
 }
 
 // CheckLexiconSet verifies a complete prospective startup Lexicon set,
