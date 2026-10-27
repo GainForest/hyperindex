@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -25,9 +26,26 @@ type Validator struct {
 	referenceGraph map[string][]string
 }
 
+// nonRecordMainTypes are ATProto main definition types that describe XRPC
+// endpoints or permissions rather than stored records. Hyperindex never indexes
+// or validates records against them, so they are skipped instead of failing
+// startup. Unknown types still fail closed.
+var nonRecordMainTypes = map[string]bool{
+	"query":          true,
+	"procedure":      true,
+	"subscription":   true,
+	"permission-set": true,
+}
+
 // NewValidatorFromLexiconBytes builds a validator from the exact saved Lexicon
 // JSON selected at startup. The map key must match each document's Lexicon NSID.
+// Lexicons whose main definition is a non-record type (query, procedure,
+// subscription, permission-set) are skipped with a warning.
 func NewValidatorFromLexiconBytes(saved map[string][]byte) (*Validator, error) {
+	saved, err := withoutNonRecordLexicons(saved)
+	if err != nil {
+		return nil, err
+	}
 	registry := lexicon.NewRegistry()
 	catalog := indigolexicon.NewBaseCatalog()
 	hashes := make(map[string]string, len(saved))
@@ -64,6 +82,34 @@ func NewValidatorFromLexiconBytes(saved map[string][]byte) (*Validator, error) {
 		hashes:         hashes,
 		referenceGraph: referenceGraph,
 	}, nil
+}
+
+// withoutNonRecordLexicons returns saved minus documents whose main definition
+// is a known non-record type. Skipped documents must still carry the ID they
+// were saved under. Documents that cannot be decoded are kept so the normal
+// parse path reports a precise error.
+func withoutNonRecordLexicons(saved map[string][]byte) (map[string][]byte, error) {
+	filtered := make(map[string][]byte, len(saved))
+	for id, raw := range saved {
+		var doc struct {
+			ID   string `json:"id"`
+			Defs struct {
+				Main struct {
+					Type string `json:"type"`
+				} `json:"main"`
+			} `json:"defs"`
+		}
+		if err := json.Unmarshal(raw, &doc); err == nil && nonRecordMainTypes[doc.Defs.Main.Type] {
+			if doc.ID != id {
+				return nil, fmt.Errorf("lexicon ID mismatch: expected %s, document contains %s", id, doc.ID)
+			}
+			slog.Warn("Skipping non-record lexicon; it is not used for indexing or record validation",
+				"lexicon", id, "main_type", doc.Defs.Main.Type)
+			continue
+		}
+		filtered[id] = raw
+	}
+	return filtered, nil
 }
 
 // CheckLexiconSet verifies a complete prospective startup Lexicon set,
