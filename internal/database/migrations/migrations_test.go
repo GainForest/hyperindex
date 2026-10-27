@@ -1103,3 +1103,88 @@ func TestMigrations_ValidTimelineReadUsesValidIndex(t *testing.T) {
 		t.Fatalf("valid timeline read does not use idx_record_timeline_valid; plan:\n%s", strings.Join(plan, "\n"))
 	}
 }
+
+// The SQLite index must be valid-only, not a copy of
+// idx_record_timeline_collection_created under a new name.
+func TestMigrations_017ValidTimelineIndexIsValidOnlySQLite(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	var definition string
+	if err := exec.DB().QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_record_timeline_valid'`,
+	).Scan(&definition); err != nil {
+		t.Fatalf("read idx_record_timeline_valid definition: %v", err)
+	}
+	if !strings.Contains(definition, "validation_status = 'valid'") {
+		t.Fatalf("idx_record_timeline_valid is not limited to valid records:\n%s", definition)
+	}
+}
+
+// Migration 017 builds a valid-only index on PostgreSQL, and keeps one an
+// operator built out of band (the documented rollout) instead of rebuilding it.
+func TestMigrations_017ValidTimelineIndexPostgres(t *testing.T) {
+	databaseURL, ok := safePostgresTestDatabaseURL(t)
+	if !ok {
+		t.Skip("PostgreSQL valid timeline index test requires DATABASE_URL pointing at a postgres database named test or ending with _test/-test")
+	}
+	ctx := context.Background()
+	adminExec, err := postgres.NewExecutor(databaseURL)
+	if err != nil {
+		t.Fatalf("failed to create postgres admin executor: %v", err)
+	}
+	t.Cleanup(func() { _ = adminExec.Close() })
+	schemaName := fmt.Sprintf("hyperindex_valid_index_test_%d", time.Now().UnixNano())
+	quotedSchemaName := quotePostgresIdentifier(schemaName)
+	if _, err := adminExec.DB().ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", quotedSchemaName)); err != nil {
+		t.Fatalf("failed to create postgres test schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = adminExec.DB().ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", quotedSchemaName))
+	})
+	schemaURL, err := postgresURLWithSearchPath(databaseURL, schemaName)
+	if err != nil {
+		t.Fatalf("failed to build postgres schema URL: %v", err)
+	}
+	exec, err := postgres.NewExecutor(schemaURL)
+	if err != nil {
+		t.Fatalf("failed to create postgres schema executor: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Close() })
+
+	index := func() (oid uint32, definition string) {
+		t.Helper()
+		if err := exec.DB().QueryRowContext(ctx,
+			`SELECT indexrelid::oid, pg_get_indexdef(indexrelid) FROM pg_index WHERE indexrelid = to_regclass('idx_record_timeline_valid')`,
+		).Scan(&oid, &definition); err != nil {
+			t.Fatalf("read idx_record_timeline_valid: %v", err)
+		}
+		return oid, definition
+	}
+
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	assertPostgresIndexValid(ctx, t, exec, "idx_record_timeline_valid")
+	if _, definition := index(); !strings.Contains(definition, "validation_status = 'valid'") || !strings.Contains(definition, "record_created_at IS NOT NULL") {
+		t.Fatalf("idx_record_timeline_valid is not limited to valid records:\n%s", definition)
+	}
+
+	if err := migrations.Rollback(ctx, exec); err != nil {
+		t.Fatalf("Rollback(017) error = %v", err)
+	}
+	if _, err := exec.DB().ExecContext(ctx, `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_record_timeline_valid
+		ON record (collection, record_created_at DESC, uri DESC)
+		WHERE record_created_at IS NOT NULL AND validation_status = 'valid'`); err != nil {
+		t.Fatalf("out-of-band CREATE INDEX CONCURRENTLY: %v", err)
+	}
+	prebuilt, _ := index()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() over a prebuilt index error = %v", err)
+	}
+	if kept, _ := index(); kept != prebuilt {
+		t.Fatalf("migration 017 replaced the prebuilt index (oid %d -> %d)", prebuilt, kept)
+	}
+}
