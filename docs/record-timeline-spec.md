@@ -325,6 +325,14 @@ ON record (collection, record_created_at DESC, uri DESC)
 WHERE record_created_at IS NOT NULL;
 ```
 
+Add a valid-only variant for readers that select only `validation_status = 'valid'` rows, such as the GainForest feed service (migration 017). Without it, those reads walk `idx_record_timeline_collection_created` and fetch every invalid row from the table just to discard it, which on a cold PostgreSQL cache costs one random read per skipped row:
+
+```sql
+CREATE INDEX idx_record_timeline_valid
+ON record (collection, record_created_at DESC, uri DESC)
+WHERE record_created_at IS NOT NULL AND validation_status = 'valid';
+```
+
 PostgreSQL-specific covering-index additions such as `INCLUDE (cid, rkey, indexed_at)` may be considered after benchmarking, but the base behavior and test expectations must remain dialect-independent.
 
 ## Repository query plan

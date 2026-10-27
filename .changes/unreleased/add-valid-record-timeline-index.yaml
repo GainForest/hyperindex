@@ -1,0 +1,4 @@
+kind: added
+body: Add a partial index over valid records ordered by collection and creation time (`idx_record_timeline_valid`), so timeline reads that only want valid records, such as the GainForest feed service, no longer fetch and discard every invalid row. On PostgreSQL, a collection with many invalid records previously cost one random read per skipped row on a cold cache, enough to hit statement timeouts. PostgreSQL operators with large record tables should create the index out of band before rollout with `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_record_timeline_valid ON record (collection, record_created_at DESC, uri DESC) WHERE record_created_at IS NOT NULL AND validation_status = 'valid';` so the migration skips the write-blocking build.
+custom:
+  Affects: operator
