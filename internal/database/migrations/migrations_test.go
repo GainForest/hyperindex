@@ -416,6 +416,89 @@ func TestMigrations_BackfillsRecordCreatedAtPostgres(t *testing.T) {
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_timeline_author_collection_created")
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_timeline_collection_created")
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_timeline_valid")
+	assertPostgresIndexValid(ctx, t, exec, "idx_record_timeline_valid")
+}
+
+// A failed CREATE INDEX CONCURRENTLY leaves an invalid index under the target
+// name. Migration 017 must refuse it rather than let IF NOT EXISTS mark the
+// migration applied with no usable index.
+func TestMigrations_017RejectsInvalidPrebuiltIndexPostgres(t *testing.T) {
+	databaseURL, ok := safePostgresTestDatabaseURL(t)
+	if !ok {
+		t.Skip("PostgreSQL invalid index test requires DATABASE_URL pointing at a postgres database named test or ending with _test/-test")
+	}
+
+	ctx := context.Background()
+	adminExec, err := postgres.NewExecutor(databaseURL)
+	if err != nil {
+		t.Fatalf("failed to create postgres admin executor: %v", err)
+	}
+	t.Cleanup(func() { _ = adminExec.Close() })
+
+	schemaName := fmt.Sprintf("hyperindex_invalid_index_test_%d", time.Now().UnixNano())
+	quotedSchemaName := quotePostgresIdentifier(schemaName)
+	if _, err := adminExec.DB().ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA %s", quotedSchemaName)); err != nil {
+		t.Fatalf("failed to create postgres test schema: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = adminExec.DB().ExecContext(context.Background(), fmt.Sprintf("DROP SCHEMA IF EXISTS %s CASCADE", quotedSchemaName))
+	})
+
+	schemaURL, err := postgresURLWithSearchPath(databaseURL, schemaName)
+	if err != nil {
+		t.Fatalf("failed to build postgres schema URL: %v", err)
+	}
+	exec, err := postgres.NewExecutor(schemaURL)
+	if err != nil {
+		t.Fatalf("failed to create postgres schema executor: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Close() })
+
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if err := migrations.Rollback(ctx, exec); err != nil {
+		t.Fatalf("Rollback(017) error = %v", err)
+	}
+
+	// Two rows in one collection make a unique concurrent build fail, which
+	// leaves an invalid index behind exactly as an interrupted build would.
+	if _, err := exec.DB().ExecContext(ctx, `
+		INSERT INTO record (uri, cid, did, collection, json, rkey) VALUES
+			('at://did:plc:test/com.example.post/a', 'cid1', 'did:plc:test', 'com.example.post', '{}'::jsonb, 'a'),
+			('at://did:plc:test/com.example.post/b', 'cid2', 'did:plc:test', 'com.example.post', '{}'::jsonb, 'b')`); err != nil {
+		t.Fatalf("insert records: %v", err)
+	}
+	if _, err := exec.DB().ExecContext(ctx, `CREATE UNIQUE INDEX CONCURRENTLY idx_record_timeline_valid ON record (collection)`); err == nil {
+		t.Fatal("unique concurrent build unexpectedly succeeded; cannot create an invalid index")
+	}
+
+	err = migrations.Run(ctx, exec)
+	if err == nil || !strings.Contains(err.Error(), "idx_record_timeline_valid exists but is invalid") {
+		t.Fatalf("Run() error = %v, want invalid index error", err)
+	}
+	var applied int
+	if err := exec.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = '017'`).Scan(&applied); err != nil {
+		t.Fatalf("check migration 017: %v", err)
+	}
+	if applied != 0 {
+		t.Fatal("migration 017 recorded as applied despite an invalid index")
+	}
+}
+
+func assertPostgresIndexValid(ctx context.Context, t *testing.T, exec *postgres.Executor, indexName string) {
+	t.Helper()
+
+	var valid bool
+	if err := exec.DB().QueryRowContext(ctx,
+		`SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass($1)`,
+		indexName,
+	).Scan(&valid); err != nil {
+		t.Fatalf("failed to read postgres index %q validity: %v", indexName, err)
+	}
+	if !valid {
+		t.Errorf("postgres index %q is invalid", indexName)
+	}
 }
 
 func postgresRecordCreatedAt(t *testing.T, exec *postgres.Executor, uri string) string {
