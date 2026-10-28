@@ -15,6 +15,10 @@ const (
 	StatusUnknownSchema Status = "unknown_schema"
 	// StatusValidationError means validation could not complete because of an internal parsing or validation error.
 	StatusValidationError Status = "validation_error"
+	// StatusUnvalidated means the record was stored while RECORD_VALIDATION_ENABLED
+	// was false. Its lexicon_hash is NULL, so the startup refresh reclassifies it
+	// once validation is re-enabled.
+	StatusUnvalidated Status = "unvalidated"
 )
 
 // Result is the persisted outcome of validating one raw record against the
@@ -43,4 +47,18 @@ func ClassifyRecord(validator RecordValidator, collection, rkey string, rawJSON 
 		}
 	}
 	return validator.ValidateRecord(collection, rkey, rawJSON)
+}
+
+// Disabled is a RecordValidator used when RECORD_VALIDATION_ENABLED=false. It
+// performs no Lexicon validation and marks every record unvalidated.
+type Disabled struct{}
+
+// ValidateRecord returns an unvalidated result without inspecting the record.
+func (Disabled) ValidateRecord(string, string, []byte) Result {
+	return Result{Status: StatusUnvalidated, Error: "record validation is disabled (RECORD_VALIDATION_ENABLED=false)"}
+}
+
+// LexiconHash reports no fingerprint so stored rows keep a NULL lexicon_hash.
+func (Disabled) LexiconHash(string) (string, bool) {
+	return "", false
 }

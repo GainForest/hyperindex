@@ -4386,6 +4386,95 @@ func TestTypedSubscriptionValidationGate(t *testing.T) {
 	}
 }
 
+func TestTypedGraphQLWithValidationFilterDisabled(t *testing.T) {
+	const collection = "com.example.unfiltered.record"
+	registry := lexicon.NewRegistry()
+	registry.Register(&lexicon.Lexicon{ID: collection, Defs: lexicon.Defs{Main: &lexicon.RecordDef{Type: "record", Key: "tid", Properties: []lexicon.PropertyEntry{{Name: "text", Property: lexicon.Property{Type: lexicon.TypeString}}}}}})
+	schema, err := NewBuilder(registry, WithTypedRecordsRequireValid(false)).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	db := testutil.SetupTestDB(t)
+	ctx := context.Background()
+	validURI := "at://did:plc:test/" + collection + "/valid"
+	invalidURI := "at://did:plc:test/" + collection + "/invalid"
+	unvalidatedURI := "at://did:plc:test/" + collection + "/unvalidated"
+	if err := db.Records.BatchInsert(ctx, []*repositories.Record{
+		{URI: validURI, CID: "cid-valid", DID: "did:plc:test", Collection: collection, JSON: `{"text":"valid"}`, RKey: "valid"},
+		{URI: invalidURI, CID: "cid-invalid", DID: "did:plc:test", Collection: collection, JSON: `{"text":"invalid"}`, RKey: "invalid"},
+		{URI: unvalidatedURI, CID: "cid-unvalidated", DID: "did:plc:test", Collection: collection, JSON: `{"text":"unvalidated"}`, RKey: "unvalidated"},
+	}); err != nil {
+		t.Fatalf("BatchInsert() error = %v", err)
+	}
+	for uri, status := range map[string]validation.Status{validURI: validation.StatusValid, invalidURI: validation.StatusInvalid, unvalidatedURI: validation.StatusUnvalidated} {
+		errText := ""
+		if status != validation.StatusValid {
+			errText = "reason for " + string(status)
+		}
+		if err := db.Records.UpdateValidationStatus(ctx, uri, status, errText, "hash-current"); err != nil {
+			t.Fatalf("mark %s %s: %v", uri, status, err)
+		}
+	}
+	ctx = resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels})
+
+	query := `{
+		comExampleUnfilteredRecord(first: 10) { totalCount edges { node { uri text validationStatus validationError } } }
+		invalid: comExampleUnfilteredRecordByUri(uri: "` + invalidURI + `") { uri validationStatus validationError }
+	}`
+	result := graphql.Do(graphql.Params{Schema: *schema, RequestString: query, Context: ctx})
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL returned errors: %v", result.Errors)
+	}
+	data := result.Data.(map[string]interface{})
+	typed := data["comExampleUnfilteredRecord"].(map[string]interface{})
+	if got := typed["totalCount"]; got != 3 {
+		t.Fatalf("typed totalCount = %v, want 3", got)
+	}
+	statuses := map[string]interface{}{}
+	errorsByURI := map[string]interface{}{}
+	for _, edge := range typed["edges"].([]interface{}) {
+		node := edge.(map[string]interface{})["node"].(map[string]interface{})
+		statuses[node["uri"].(string)] = node["validationStatus"]
+		errorsByURI[node["uri"].(string)] = node["validationError"]
+	}
+	wantStatuses := map[string]interface{}{validURI: "valid", invalidURI: "invalid", unvalidatedURI: "unvalidated"}
+	if !reflect.DeepEqual(statuses, wantStatuses) {
+		t.Fatalf("typed statuses = %#v, want %#v", statuses, wantStatuses)
+	}
+	if errorsByURI[validURI] != nil || errorsByURI[invalidURI] != "reason for invalid" {
+		t.Fatalf("typed validationError = %#v", errorsByURI)
+	}
+	byURI, ok := data["invalid"].(map[string]interface{})
+	if !ok || byURI["uri"] != invalidURI || byURI["validationStatus"] != "invalid" {
+		t.Fatalf("invalid typed byUri = %#v, want invalid record", data["invalid"])
+	}
+
+	subQuery := `subscription { comExampleUnfilteredRecordEvents { uri validationStatus } }`
+	event := &subscription.RecordEvent{
+		Type: subscription.EventCreate, URI: invalidURI, CID: "cid-invalid", DID: "did:plc:test", Collection: collection,
+		TypedRecord: map[string]interface{}{"uri": invalidURI, "cid": "cid-invalid", "text": "invalid"}, TypedVisible: false,
+	}
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: subQuery, Context: ctx, RootObject: map[string]interface{}{"__recordEvent": event}})
+	if len(result.Errors) > 0 {
+		t.Fatalf("typed subscription errors: %v", result.Errors)
+	}
+	payload, ok := result.Data.(map[string]interface{})["comExampleUnfilteredRecordEvents"].(map[string]interface{})
+	if !ok || payload["validationStatus"] != "invalid" {
+		t.Fatalf("typed subscription payload = %#v, want invalid record", result.Data)
+	}
+
+	deleteEvent := &subscription.RecordEvent{
+		Type: subscription.EventDelete, URI: invalidURI, CID: "cid-invalid", DID: "did:plc:test", Collection: collection,
+		TypedRecord: map[string]interface{}{"uri": invalidURI, "cid": "cid-invalid", "text": "invalid"}, WasValid: false,
+	}
+	result = graphql.Do(graphql.Params{Schema: *schema, RequestString: subQuery, Context: ctx, RootObject: map[string]interface{}{"__recordEvent": deleteEvent}})
+	payload, ok = result.Data.(map[string]interface{})["comExampleUnfilteredRecordEvents"].(map[string]interface{})
+	if len(result.Errors) > 0 || !ok || payload["validationStatus"] != nil {
+		t.Fatalf("typed delete subscription = data:%#v errors:%v, want payload with null validationStatus", result.Data, result.Errors)
+	}
+}
+
 func TestRecordValidationGateGraphQLVisibility(t *testing.T) {
 	registry := lexicon.NewRegistry()
 	registry.Register(&lexicon.Lexicon{ID: "com.example.validation.record", Defs: lexicon.Defs{Main: &lexicon.RecordDef{Type: "record", Key: "tid", Properties: []lexicon.PropertyEntry{{Name: "text", Property: lexicon.Property{Type: lexicon.TypeString}}}}}})
@@ -4413,7 +4502,7 @@ func TestRecordValidationGateGraphQLVisibility(t *testing.T) {
 	ctx = resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records, ExternalLabels: db.ExternalLabels})
 
 	query := `{
-		comExampleValidationRecord(first: 10) { totalCount edges { node { uri text } } }
+		comExampleValidationRecord(first: 10) { totalCount edges { node { uri text validationStatus } } }
 		invalid: comExampleValidationRecordByUri(uri: "` + invalidURI + `") { uri }
 		raw: records(collection: "com.example.validation.record", first: 10) {
 			totalCount
@@ -4436,8 +4525,9 @@ func TestRecordValidationGateGraphQLVisibility(t *testing.T) {
 	if len(typedEdges) != 1 {
 		t.Fatalf("typed edges = %d, want 1", len(typedEdges))
 	}
-	if got := typedEdges[0].(map[string]interface{})["node"].(map[string]interface{})["uri"]; got != validURI {
-		t.Fatalf("typed URI = %v, want %s", got, validURI)
+	typedNode := typedEdges[0].(map[string]interface{})["node"].(map[string]interface{})
+	if typedNode["uri"] != validURI || typedNode["validationStatus"] != string(validation.StatusValid) {
+		t.Fatalf("typed node = %#v, want %s with validationStatus valid", typedNode, validURI)
 	}
 	if data["invalid"] != nil {
 		t.Fatalf("invalid typed byUri = %#v, want nil", data["invalid"])

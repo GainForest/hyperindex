@@ -85,10 +85,21 @@ Use the generic `records(collection: ...)` query or `search(...)` when you need 
 
 | Field | Meaning |
 | --- | --- |
-| `validationStatus` | `valid`, `invalid`, `unknown_schema`, or `validation_error` |
+| `validationStatus` | `valid`, `invalid`, `unknown_schema`, `validation_error`, or `unvalidated` |
 | `validationError` | Explanation of why the record is hidden from typed GraphQL, when available |
 | `validatedAt` | Timestamp of the most recent local validation classification |
 | `lexiconHash` | SHA-256 validation fingerprint for the saved collection Lexicon and any transitive referenced Lexicons used for classification |
+
+Generated typed record objects also expose `validationStatus` and `validationError`. With the default configuration they are always `valid` and `null`; they matter when the operator toggles below relax the gate.
+
+Two environment variables control the gate:
+
+| Variable | Default | Effect when `false` |
+| --- | --- | --- |
+| `RECORD_VALIDATION_ENABLED` | `true` | Skips Indigo validation during ingestion and startup. New records are stored as `unvalidated` with no `lexiconHash`; existing statuses are left untouched. After validation is re-enabled, the next startup refresh reclassifies them before serving, which can take a while on large tables. |
+| `TYPED_GRAPHQL_VALID_ONLY` | `true` | Typed list queries, `ByUri` queries, counts, certified-profile hydration, typed subscriptions, and `endorsementClosure` return records of every status. Records that do not match the generated types may produce GraphQL errors for non-null fields, so treat this as a debugging or migration mode. |
+
+`RECORD_VALIDATION_ENABLED=false` requires `TYPED_GRAPHQL_VALID_ONLY=false`; otherwise startup fails, because typed GraphQL would gradually return nothing. Values other than `true`/`false`, `1`/`0`, or `yes`/`no` also fail startup.
 
 Validation is local-only. During normal ingestion Hyperindex uses Indigo to validate against the Lexicons loaded at startup and does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or other remote schema sources.
 

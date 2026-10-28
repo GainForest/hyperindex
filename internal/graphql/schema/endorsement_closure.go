@@ -136,13 +136,18 @@ type endorsementClosureWhere struct {
 
 type endorsementAdjacencySource interface {
 	EndorsementAdjacencyForLimit(ctx context.Context, issuers []string, limit int) (map[string][]string, bool, error)
+	EndorsementAdjacencyAnyStatusForLimit(ctx context.Context, issuers []string, limit int) (map[string][]string, bool, error)
 }
 
 type endorsementClosureAdjacency struct {
-	source endorsementAdjacencySource
+	source       endorsementAdjacencySource
+	requireValid bool
 }
 
 func (a endorsementClosureAdjacency) AdjacentForLimit(ctx context.Context, sources []string, limit int) (map[string][]string, bool, error) {
+	if !a.requireValid {
+		return a.source.EndorsementAdjacencyAnyStatusForLimit(ctx, sources, limit)
+	}
 	return a.source.EndorsementAdjacencyForLimit(ctx, sources, limit)
 }
 
@@ -158,7 +163,7 @@ func (b *Builder) createEndorsementClosureResolver() graphql.FieldResolveFn {
 			return nil, fmt.Errorf("endorsement closure cannot run because record repositories are unavailable; retry after the request context is initialised")
 		}
 
-		adjacency := endorsementClosureAdjacency{source: repos.Records}
+		adjacency := endorsementClosureAdjacency{source: repos.Records, requireValid: b.typedRecordsRequireValid}
 		result, err := graphclosure.Compute(p.Context, adjacency, where.RootDID, where.MaxDegree, graphclosure.DefaultClosureCap)
 		if err != nil {
 			return nil, fmt.Errorf("compute endorsement closure: %w", err)

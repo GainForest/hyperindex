@@ -40,6 +40,19 @@ type Config struct {
 	// Lexicons
 	LexiconDir string // Directory to load lexicon JSON files from
 
+	// Record validation. Both fields are negated so the zero value keeps the
+	// validation gate fully on.
+	//
+	// RecordValidationDisabled (RECORD_VALIDATION_ENABLED=false) skips
+	// write-time Lexicon validation: records are stored as unvalidated and the
+	// startup validation refresh does not run.
+	RecordValidationDisabled bool
+	// TypedGraphQLIncludeNonValid (TYPED_GRAPHQL_VALID_ONLY=false) exposes
+	// records of every validation status through typed GraphQL queries,
+	// subscriptions, and endorsement closure. Generic record queries are never
+	// filtered.
+	TypedGraphQLIncludeNonValid bool
+
 	// Jetstream
 	JetstreamURL           string // Jetstream WebSocket URL
 	JetstreamCollections   string // Comma-separated collections to subscribe to
@@ -145,6 +158,17 @@ func Load() (*Config, error) {
 		PLCDirectoryURL: getEnv("PLC_DIRECTORY_URL", ""),
 	}
 
+	validationEnabled, err := getEnvStrictBool("RECORD_VALIDATION_ENABLED", true)
+	if err != nil {
+		return nil, err
+	}
+	cfg.RecordValidationDisabled = !validationEnabled
+	typedValidOnly, err := getEnvStrictBool("TYPED_GRAPHQL_VALID_ONLY", true)
+	if err != nil {
+		return nil, err
+	}
+	cfg.TypedGraphQLIncludeNonValid = !typedValidOnly
+
 	// Generate SecretKeyBase if not provided
 	if cfg.SecretKeyBase == "" {
 		slog.Warn("SECRET_KEY_BASE not set, generating random key",
@@ -198,6 +222,10 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("PORT must be between 1 and 65535")
 	}
 
+	if c.RecordValidationDisabled && !c.TypedGraphQLIncludeNonValid {
+		return fmt.Errorf("TYPED_GRAPHQL_VALID_ONLY=true requires RECORD_VALIDATION_ENABLED=true: with validation off no record becomes valid, so typed GraphQL would return nothing; set TYPED_GRAPHQL_VALID_ONLY=false or re-enable validation")
+	}
+
 	if c.LabelerSubscribeEnabled && len(c.LabelerSubscribeURLList()) == 0 {
 		return fmt.Errorf("LABELER_SUBSCRIBE_URLS must contain at least one URL when LABELER_SUBSCRIBE_ENABLED is true")
 	}
@@ -229,6 +257,8 @@ func (c *Config) LogConfig() {
 		"admin_dids_set", c.AdminDIDs != "",
 		"admin_api_key_set", c.AdminAPIKey != "",
 		"lexicon_dir", c.LexiconDir,
+		"record_validation_enabled", !c.RecordValidationDisabled,
+		"typed_graphql_valid_only", !c.TypedGraphQLIncludeNonValid,
 		"jetstream_url", c.JetstreamURL,
 		"jetstream_collections", c.JetstreamCollections,
 		"jetstream_disable_cursor", c.JetstreamDisableCursor,
@@ -298,6 +328,24 @@ func getEnvBool(key string, defaultValue bool) bool {
 		return lower == "true" || lower == "1" || lower == "yes"
 	}
 	return defaultValue
+}
+
+// getEnvStrictBool parses a boolean env var and rejects unrecognised values.
+// Use it for safety-relevant toggles where a typo must not silently flip the
+// setting.
+func getEnvStrictBool(key string, defaultValue bool) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue, nil
+	}
+	switch strings.ToLower(value) {
+	case "true", "1", "yes":
+		return true, nil
+	case "false", "0", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid %s %q: expected true/false, 1/0, or yes/no", key, value)
+	}
 }
 
 func getEnvDuration(key string, defaultValue time.Duration) time.Duration {

@@ -727,7 +727,7 @@ func validateRecordWrite(rec RecordWrite) error {
 		return fmt.Errorf("validation-aware record write requires uri, did, collection, and json; got uri=%q did=%q collection=%q", rec.URI, rec.DID, rec.Collection)
 	}
 	switch rec.ValidationStatus {
-	case validation.StatusValid, validation.StatusInvalid, validation.StatusUnknownSchema, validation.StatusValidationError:
+	case validation.StatusValid, validation.StatusInvalid, validation.StatusUnknownSchema, validation.StatusValidationError, validation.StatusUnvalidated:
 		return nil
 	default:
 		return fmt.Errorf("validation-aware record write for %s has unsupported validation status %q", rec.URI, rec.ValidationStatus)

@@ -79,6 +79,17 @@ func runEndorsementAdjacencyValidationGate(t *testing.T, repo *repositories.Reco
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("EndorsementAdjacencyFor() = %#v, want %#v", got, want)
 	}
+
+	// With the gate off, non-valid awards and definitions create edges and a
+	// non-valid rejecting response removes alice's edge.
+	gotAny, truncated, err := repo.EndorsementAdjacencyAnyStatusForLimit(ctx, []string{"did:plc:issuer"}, 10)
+	if err != nil {
+		t.Fatalf("EndorsementAdjacencyAnyStatusForLimit() error = %v", err)
+	}
+	wantAny := map[string][]string{"did:plc:issuer": {"did:plc:bob", "did:plc:carol"}}
+	if truncated || !reflect.DeepEqual(gotAny, wantAny) {
+		t.Fatalf("EndorsementAdjacencyAnyStatusForLimit() = %#v, truncated=%v; want %#v, false", gotAny, truncated, wantAny)
+	}
 }
 
 func TestEndorsementAdjacencyForRequiresDIDSubjectSQLite(t *testing.T) {

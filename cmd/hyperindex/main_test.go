@@ -347,6 +347,52 @@ func TestSetupGraphQLHashesSavedLexiconsAndClassifiesBeforeServing(t *testing.T)
 	}
 }
 
+// Records written while validation is disabled must be reclassified by the
+// startup refresh once validation is re-enabled, or they stay hidden forever.
+func TestSetupGraphQLValidationDisabledThenReenabled(t *testing.T) {
+	ctx := context.Background()
+	db := testutil.SetupTestDB(t)
+	lexiconDir := t.TempDir()
+	writeTestLexiconFile(t, lexiconDir, "com.example.record.json", setupGraphQLTestLexicon)
+
+	disabledSvc := labelerTestServices(db)
+	if _, err := setupGraphQL(chi.NewRouter(), &config.Config{
+		ExternalBaseURL:             "https://example.com",
+		LexiconDir:                  lexiconDir,
+		RecordValidationDisabled:    true,
+		TypedGraphQLIncludeNonValid: true,
+	}, disabledSvc, nil, nil); err != nil {
+		t.Fatalf("setupGraphQL(disabled) error = %v", err)
+	}
+
+	uri := "at://did:plc:test/com.example.record/3jui7kd54zh2y"
+	rawJSON := `{"$type":"com.example.record","name":"ok"}`
+	result := validation.ClassifyRecord(disabledSvc.recordValidator, "com.example.record", "3jui7kd54zh2y", []byte(rawJSON))
+	if result.Status != validation.StatusUnvalidated {
+		t.Fatalf("disabled classification = %q, want %q", result.Status, validation.StatusUnvalidated)
+	}
+	if _, err := db.Records.UpsertWithValidation(ctx, repositories.RecordWrite{
+		URI: uri, CID: "cid", DID: "did:plc:test", Collection: "com.example.record", RKey: "3jui7kd54zh2y", JSON: rawJSON,
+		ValidationStatus: result.Status, ValidationError: result.Error, LexiconHash: result.LexiconHash,
+	}); err != nil {
+		t.Fatalf("UpsertWithValidation(unvalidated) error = %v", err)
+	}
+
+	if _, err := setupGraphQL(chi.NewRouter(), &config.Config{
+		ExternalBaseURL: "https://example.com",
+		LexiconDir:      lexiconDir,
+	}, labelerTestServices(db), nil, nil); err != nil {
+		t.Fatalf("setupGraphQL(re-enabled) error = %v", err)
+	}
+	rec, err := db.Records.GetByURI(ctx, uri)
+	if err != nil {
+		t.Fatalf("GetByURI() error = %v", err)
+	}
+	if rec.ValidationStatus != validation.StatusValid {
+		t.Fatalf("ValidationStatus after re-enable = %q, want %q (error %q)", rec.ValidationStatus, validation.StatusValid, rec.ValidationError)
+	}
+}
+
 func TestSetupGraphQLSupportsRecordKeyLexicon(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	lexiconDir := t.TempDir()
