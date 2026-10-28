@@ -395,3 +395,35 @@ func TestParseObjectMainWithOthers(t *testing.T) {
 		}
 	}
 }
+
+func TestParseNonStringConstValues(t *testing.T) {
+	// app.bsky.embed.record declares boolean consts (viewBlocked.blocked,
+	// viewNotFound.notFound); startup must not reject such lexicons.
+	lex, err := Parse(`{
+		"lexicon": 1,
+		"id": "com.example.consts",
+		"defs": {
+			"main": {
+				"type": "object",
+				"properties": {
+					"blocked": {"type": "boolean", "const": true},
+					"version": {"type": "integer", "const": 2},
+					"kind": {"type": "string", "const": "x"}
+				}
+			}
+		}
+	}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	want := map[string]any{"blocked": true, "version": float64(2), "kind": "x"}
+	for _, entry := range lex.Defs.Main.Properties {
+		if got := entry.Property.Const; got != want[entry.Name] {
+			t.Errorf("%s const = %#v, want %#v", entry.Name, got, want[entry.Name])
+		}
+		delete(want, entry.Name)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing properties: %v", want)
+	}
+}
