@@ -83,6 +83,59 @@ func TestSortedRecordsQueryCreatedAtColumnAvoidsSortPostgres(t *testing.T) {
 	}
 }
 
+func TestSortedRecordsQueryGenericPlanUsesValidIndexPostgres(t *testing.T) {
+	exec := newCreatedAtPlanPostgresExecutor(t)
+	repo := NewRecordsRepository(exec)
+	ctx := context.Background()
+
+	if _, err := exec.DB().ExecContext(ctx, `
+		INSERT INTO record (uri, cid, did, collection, json, record_created_at, validation_status)
+		SELECT 'at://did:plc:plan/com.example.plan/' || g, 'cid', 'did:plc:plan', 'com.example.plan',
+			'{}'::jsonb, timestamptz '2024-01-01' + g * interval '1 minute',
+			CASE WHEN g % 2 = 0 THEN 'valid' ELSE 'invalid' END
+		FROM generate_series(1, 20000) AS g`); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+	if _, err := exec.DB().ExecContext(ctx, "ANALYZE record"); err != nil {
+		t.Fatalf("ANALYZE: %v", err)
+	}
+
+	// pgx caches prepared statements, and PostgreSQL may switch a cached
+	// statement to a generic plan that ignores bind values. Force that plan so
+	// the test catches a validation_status bind parameter, which would hide the
+	// valid-only partial index from the planner.
+	conn, err := exec.DB().Conn(ctx)
+	if err != nil {
+		t.Fatalf("Conn: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, "SET plan_cache_mode = force_generic_plan"); err != nil {
+		t.Fatalf("SET plan_cache_mode: %v", err)
+	}
+
+	sort := &SortOption{Field: SortFieldRecordCreatedAt, Direction: "DESC"}
+	sqlStr, args, err := repo.sortedRecordsQuery("com.example.plan", nil, DIDFilter{}, ExternalLabelFilterSet{}, sort, 2, nil, true)
+	if err != nil {
+		t.Fatalf("sortedRecordsQuery() error = %v", err)
+	}
+	// EXPLAIN over the driver's extended protocol plans with the bound values,
+	// so use a server-side PREPARE to get the plan a cached statement would use.
+	if _, err := conn.ExecContext(ctx, "PREPARE sorted_plan AS "+sqlStr); err != nil {
+		t.Fatalf("PREPARE error = %v\nSQL: %s", err, sqlStr)
+	}
+	literals := make([]string, 0, len(args))
+	for _, arg := range args {
+		literals = append(literals, "'"+strings.ReplaceAll(fmt.Sprint(arg), "'", "''")+"'")
+	}
+	var planJSON string
+	if err := conn.QueryRowContext(ctx, "EXPLAIN (FORMAT JSON) EXECUTE sorted_plan("+strings.Join(literals, ", ")+")").Scan(&planJSON); err != nil {
+		t.Fatalf("EXPLAIN EXECUTE error = %v\nSQL: %s", err, sqlStr)
+	}
+	if !strings.Contains(planJSON, `"Index Name": "idx_record_timeline_valid"`) {
+		t.Fatalf("generic plan does not use idx_record_timeline_valid\nSQL: %s\nplan: %s", sqlStr, planJSON)
+	}
+}
+
 func planHasNodeType(t *testing.T, planJSON, nodeType string) bool {
 	t.Helper()
 	var plans []struct {

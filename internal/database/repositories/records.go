@@ -2402,9 +2402,7 @@ func (r *RecordsRepository) sortedRecordsQuery(
 
 	nextPlaceholder := 2
 	if validOnly {
-		whereParts = append(whereParts, fmt.Sprintf("validation_status = %s", r.db.Placeholder(nextPlaceholder)))
-		args = append(args, string(validation.StatusValid))
-		nextPlaceholder++
+		whereParts = append(whereParts, validStatusLiteralCondition)
 	}
 	if keysetSortFieldName(sort) == SortFieldRecordCreatedAt {
 		whereParts = append(whereParts, "record_created_at IS NOT NULL")
@@ -2590,9 +2588,7 @@ func (r *RecordsRepository) getByCollectionReversedWithKeysetCursorAndExternalLa
 
 	nextPlaceholder := 2
 	if validOnly {
-		whereParts = append(whereParts, fmt.Sprintf("validation_status = %s", r.db.Placeholder(nextPlaceholder)))
-		args = append(args, string(validation.StatusValid))
-		nextPlaceholder++
+		whereParts = append(whereParts, validStatusLiteralCondition)
 	}
 	if keysetSortFieldName(reversedSort) == SortFieldRecordCreatedAt {
 		whereParts = append(whereParts, "record_created_at IS NOT NULL")
@@ -3284,6 +3280,13 @@ func (r *RecordsRepository) fillMissingRecordCreatedAt(ctx context.Context, uri 
 		[]database.Value{value, database.Text(uri)})
 	return err
 }
+
+// validStatusLiteralCondition filters to valid rows with an inline literal
+// rather than a bind parameter. pgx caches prepared statements, and once
+// PostgreSQL switches one to a generic plan it cannot prove that a parameter
+// equals 'valid', so it would stop using partial indexes such as
+// idx_record_timeline_valid. The value is a compile-time constant, not input.
+var validStatusLiteralCondition = fmt.Sprintf("validation_status = '%s'", validation.StatusValid)
 
 // sortedRecordColumns returns recordColumns plus the normalized
 // record_created_at text when the query sorts by that column.
