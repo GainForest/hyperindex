@@ -642,7 +642,9 @@ Variables:
 
 Use `createdAt` for client-declared record creation time. Use `indexed_at` when the consumer wants indexer arrival order.
 
-When a collection's Lexicon makes `createdAt` a required datetime, `sortBy: createdAt` and full-datetime `where.createdAt` filters use an indexed column and stay fast on large collections. Pass full datetimes such as `2026-01-01T00:00:00Z`; date-only values like `2026-01-01` fall back to a slower string comparison. A record whose `createdAt` is edited keeps its original sort position.
+When a collection's Lexicon declares top-level `createdAt` as a datetime (required or optional), `sortBy: createdAt` orders by an indexed, normalized timestamp (UTC, millisecond precision), so a page costs about what it returns, whether or not the read is limited to valid records and however deep the `after`/`before` cursor is. A selective `where` filter on another field, such as a JSON field few records have, can still make the database walk much of the collection to find enough matches. Order is chronological, so mixed offsets and precisions sort correctly. Records whose `createdAt` is missing or not a valid datetime stay in the results and sort as the oldest: last with `sortDirection: DESC`, first with `ASC`, ordered by `uri` in the same direction among themselves. Paging with `after`/`before` works across that boundary.
+
+When `createdAt` is a required datetime and typed reads are limited to valid records (the default), full-datetime `where.createdAt` filters also use the indexed column. Pass full datetimes such as `2026-01-01T00:00:00Z`; date-only values like `2026-01-01` fall back to a slower string comparison. A record whose `createdAt` is edited keeps its original sort position.
 
 ### Get a certified profile for a DID
 

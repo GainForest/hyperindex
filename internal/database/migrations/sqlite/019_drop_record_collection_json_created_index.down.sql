@@ -1,0 +1,2 @@
+-- The dropped index was created by hand and its definition is unknown, so there
+-- is nothing to restore.

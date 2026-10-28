@@ -84,6 +84,7 @@ Run verification based on what changed.
 - These are embedded with `go:embed` and applied by the app at startup.
 - Do **not** assume `db/migrations/` or `db/migrations_postgres/` is the canonical runtime migration path.
 - If you change schema or migration behavior, verify both SQLite and PostgreSQL paths.
+- Each migration runs in one transaction together with its `schema_migrations` row. A migration that needs `CREATE/DROP INDEX CONCURRENTLY` (large PostgreSQL tables) must have `-- hyperindex:no-transaction` as its first non-blank line. The runner then executes the file one statement at a time outside a transaction and records the version afterwards, so every statement must be repeatable (`IF [NOT] EXISTS`) and a failure part-way keeps the earlier statements applied. Before running a marked `CREATE INDEX CONCURRENTLY`, the runner refuses an existing INVALID index of the same name (left by a failed or cancelled build) and prints the `DROP INDEX CONCURRENTLY` command to run. Both the up and down file may carry the marker. Tests can stage an older schema with `migrations.RunThrough` (`export_test.go`).
 
 ## Config and startup gotchas
 
