@@ -642,6 +642,8 @@ Variables:
 
 Use `createdAt` for client-declared record creation time. Use `indexed_at` when the consumer wants indexer arrival order.
 
+When a collection's Lexicon makes `createdAt` a required datetime, `sortBy: createdAt` and full-datetime `where.createdAt` filters use an indexed column and stay fast on large collections. Pass full datetimes such as `2026-01-01T00:00:00Z`; date-only values like `2026-01-01` fall back to a slower string comparison. A record whose `createdAt` is edited keeps its original sort position.
+
 ### Get a certified profile for a DID
 
 Use `appCertifiedActorProfile` with the DID filter.

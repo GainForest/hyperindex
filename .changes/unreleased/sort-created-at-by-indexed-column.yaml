@@ -1,0 +1,4 @@
+kind: fixed
+body: 'Speed up `sortBy: createdAt` and `where: { createdAt: ... }` on typed collection queries. For collections whose Lexicon makes top-level `createdAt` a required datetime, these reads now use the indexed `record_created_at` column instead of sorting every valid row by `json->>''createdAt''`, which took seconds on large collections such as `app.gainforest.ac.audio`. Ordering now follows the actual timestamp rather than the raw string, so mixed offsets and precisions sort correctly. A record whose `createdAt` is later edited keeps its first-seen position, matching `recordTimeline`. Filters with a full datetime compare at millisecond precision; date-only values such as `"2026-01-01"` and `contains`/`startsWith` keep the previous string comparison. Existing `createdAt` cursors keep working; a cursor whose value is not a valid datetime now returns an error asking the client to restart pagination.'
+custom:
+  Affects: user

@@ -86,10 +86,21 @@ func NormalizeRecordCreatedAt(recordJSON string) (string, bool) {
 	}
 
 	var value string
-	if err := json.Unmarshal(raw, &value); err != nil || value == "" {
+	if err := json.Unmarshal(raw, &value); err != nil {
 		return "", false
 	}
 
+	return NormalizeRecordDatetime(value)
+}
+
+// NormalizeRecordDatetime parses a strict AT Protocol datetime and returns the
+// millisecond-precision UTC form stored in record_created_at. Callers comparing
+// against record_created_at must normalize values this way so equality and
+// keyset comparisons match the stored column exactly.
+func NormalizeRecordDatetime(value string) (string, bool) {
+	if value == "" {
+		return "", false
+	}
 	createdAt, err := syntax.ParseDatetimeTime(value)
 	if err != nil {
 		return "", false
