@@ -73,7 +73,18 @@ type Record struct {
 	ValidationError  string
 	ValidatedAt      *time.Time
 	LexiconHash      string
+	// RecordCreatedAt is the normalized record_created_at value. It is only
+	// populated by queries sorted by SortFieldRecordCreatedAt, which need it to
+	// build keyset cursors that match the stored column.
+	RecordCreatedAt string
 }
+
+// SortFieldRecordCreatedAt sorts by the materialized record_created_at column
+// instead of json->>'createdAt', so validated reads can use
+// idx_record_timeline_valid. The column keeps the first-seen createdAt when a
+// record is edited (see docs/record-timeline-spec.md). Queries using it only
+// return rows with a non-NULL record_created_at.
+const SortFieldRecordCreatedAt = "record_created_at"
 
 // RecordWrite is a create/update ingestion write whose raw record and local
 // validation result must be persisted together. RKey is carried for diagnostics
@@ -1447,11 +1458,57 @@ func (r *RecordsRepository) buildFieldFilterCondition(f FieldFilter, placeholder
 		}
 	}
 
+	if f.Target == FieldFilterTargetColumn && f.Field == SortFieldRecordCreatedAt {
+		return r.buildRecordCreatedAtFilterCondition(f, placeholderIdx)
+	}
+
 	extract, err := r.filterFieldExpr(f)
 	if err != nil {
 		return "", nil, 0, err
 	}
 	return r.buildScalarFilterCondition(extract, f, placeholderIdx)
+}
+
+// recordCreatedAtFilterOperators lists the operators supported on the
+// record_created_at column. Values must already be normalized with
+// atproto.NormalizeRecordDatetime.
+var recordCreatedAtFilterOperators = map[string]string{
+	"eq": "=", "neq": "!=", "gt": ">", "lt": "<", "gte": ">=", "lte": "<=",
+}
+
+func (r *RecordsRepository) buildRecordCreatedAtFilterCondition(f FieldFilter, placeholderIdx int) (string, []database.Value, int, error) {
+	if sqlOp, ok := recordCreatedAtFilterOperators[f.Operator]; ok {
+		val, ok := f.Value.(string)
+		if !ok {
+			return "", nil, 0, fmt.Errorf("record_created_at %s filter must be a normalized datetime string, got %T", f.Operator, f.Value)
+		}
+		return fmt.Sprintf("record_created_at %s %s", sqlOp, r.recordCreatedAtCursorValueExpr(r.db.Placeholder(placeholderIdx))),
+			[]database.Value{database.Text(val)}, 1, nil
+	}
+	if f.Operator == "in" {
+		inVals, ok := f.Value.([]interface{})
+		if !ok {
+			return "", nil, 0, fmt.Errorf("record_created_at in filter must be a list, got %T", f.Value)
+		}
+		if len(inVals) == 0 {
+			return "1 = 0", nil, 0, nil
+		}
+		if len(inVals) > MaxINListSize {
+			return "", nil, 0, fmt.Errorf("IN filter on field %q exceeds maximum of %d values", f.Field, MaxINListSize)
+		}
+		placeholders := make([]string, 0, len(inVals))
+		params := make([]database.Value, 0, len(inVals))
+		for i, v := range inVals {
+			s, ok := v.(string)
+			if !ok {
+				return "", nil, 0, fmt.Errorf("record_created_at in filter values must be normalized datetime strings, got %T", v)
+			}
+			placeholders = append(placeholders, r.recordCreatedAtCursorValueExpr(r.db.Placeholder(placeholderIdx+i)))
+			params = append(params, database.Text(s))
+		}
+		return fmt.Sprintf("record_created_at IN (%s)", strings.Join(placeholders, ", ")), params, len(params), nil
+	}
+	return "", nil, 0, fmt.Errorf("unsupported record_created_at filter operator %q: only eq, neq, gt, lt, gte, lte and in are supported", f.Operator)
 }
 
 func (r *RecordsRepository) buildScalarFilterCondition(extract string, f FieldFilter, placeholderIdx int) (string, []database.Value, int, error) {
@@ -1746,7 +1803,8 @@ func contributorDIDFilterValues(f FieldFilter) ([]string, error) {
 // metadata filters may read directly. Keep this narrower than directSortColumns:
 // sort fields and where-filter fields have different collision rules.
 var metadataFilterColumns = map[string]bool{
-	"uri": true,
+	"uri":                    true,
+	SortFieldRecordCreatedAt: true,
 }
 
 // filterFieldExpr returns the SQL expression used for a filterable field. The
@@ -2135,6 +2193,8 @@ var directSortColumns = map[string]bool{
 	"collection": true,
 	"cid":        true,
 	"rkey":       true,
+
+	SortFieldRecordCreatedAt: true,
 }
 
 // keysetSortFieldName returns the effective sort field name used by keyset pagination.
@@ -2176,6 +2236,9 @@ func (r *RecordsRepository) keysetSortFieldExpr(sortField string) string {
 // keysetCursorValueExpr returns the SQL expression used on the cursor side for
 // keyset comparisons.
 func (r *RecordsRepository) keysetCursorValueExpr(sortField, placeholder string) string {
+	if sortField == SortFieldRecordCreatedAt {
+		return r.recordCreatedAtCursorValueExpr(placeholder)
+	}
 	if sortField != "indexed_at" {
 		return placeholder
 	}
@@ -2300,6 +2363,36 @@ func (r *RecordsRepository) getByCollectionSortedWithKeysetCursorAndExternalLabe
 	afterCursorValues []string,
 	validOnly bool,
 ) ([]*Record, error) {
+	sqlStr, args, err := r.sortedRecordsQuery(collection, filters, didFilter, externalLabelFilters, sort, limit, afterCursorValues, validOnly)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := r.validateSQLiteAggregateParameterCount(len(args)); err != nil {
+		return nil, err
+	}
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sorted records: %w", err)
+	}
+	defer rows.Close()
+
+	return scanSortedRecords(rows, sort)
+}
+
+// sortedRecordsQuery builds the forward keyset query used by
+// getByCollectionSortedWithKeysetCursorAndExternalLabelFilters.
+func (r *RecordsRepository) sortedRecordsQuery(
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	externalLabelFilters ExternalLabelFilterSet,
+	sort *SortOption,
+	limit int,
+	afterCursorValues []string,
+	validOnly bool,
+) (string, []any, error) {
 	var whereParts []string
 	var args []any
 
@@ -2309,9 +2402,10 @@ func (r *RecordsRepository) getByCollectionSortedWithKeysetCursorAndExternalLabe
 
 	nextPlaceholder := 2
 	if validOnly {
-		whereParts = append(whereParts, fmt.Sprintf("validation_status = %s", r.db.Placeholder(nextPlaceholder)))
-		args = append(args, string(validation.StatusValid))
-		nextPlaceholder++
+		whereParts = append(whereParts, validStatusLiteralCondition)
+	}
+	if keysetSortFieldName(sort) == SortFieldRecordCreatedAt {
+		whereParts = append(whereParts, "record_created_at IS NOT NULL")
 	}
 
 	// Keyset cursor condition
@@ -2351,7 +2445,7 @@ func (r *RecordsRepository) getByCollectionSortedWithKeysetCursorAndExternalLabe
 	// Field filters
 	filterClause, filterParams, err := r.buildFilterClause(filters, nextPlaceholder)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build filter clause: %w", err)
+		return "", nil, fmt.Errorf("failed to build filter clause: %w", err)
 	}
 	if filterClause != "" {
 		whereParts = append(whereParts, filterClause)
@@ -2363,7 +2457,7 @@ func (r *RecordsRepository) getByCollectionSortedWithKeysetCursorAndExternalLabe
 
 	// DID filter
 	if didClause, didParams, consumed, err := r.buildDIDFilterClause(didFilter, nextPlaceholder); err != nil {
-		return nil, fmt.Errorf("failed to build DID filter clause: %w", err)
+		return "", nil, fmt.Errorf("failed to build DID filter clause: %w", err)
 	} else if didClause != "" {
 		whereParts = append(whereParts, didClause)
 		args = r.appendConvertedParams(args, didParams)
@@ -2372,7 +2466,7 @@ func (r *RecordsRepository) getByCollectionSortedWithKeysetCursorAndExternalLabe
 
 	// External label filters
 	if labelClause, labelParams, err := r.buildExternalLabelFilterSetClause(externalLabelFilters, nextPlaceholder); err != nil {
-		return nil, fmt.Errorf("failed to build external label filter clause: %w", err)
+		return "", nil, fmt.Errorf("failed to build external label filter clause: %w", err)
 	} else if labelClause != "" {
 		whereParts = append(whereParts, labelClause)
 		args = r.appendConvertedParams(args, labelParams)
@@ -2381,19 +2475,9 @@ func (r *RecordsRepository) getByCollectionSortedWithKeysetCursorAndExternalLabe
 	whereClause := strings.Join(whereParts, " AND ")
 	orderBy := r.buildSortExpr(sort)
 	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s LIMIT %d",
-		r.recordColumns(), whereClause, orderBy, limit)
+		r.sortedRecordColumns(sort), whereClause, orderBy, limit)
 
-	if err := r.validateSQLiteAggregateParameterCount(len(args)); err != nil {
-		return nil, err
-	}
-
-	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query sorted records: %w", err)
-	}
-	defer rows.Close()
-
-	return scanRecords(rows)
+	return sqlStr, args, nil
 }
 
 // GetByCollectionReversedWithKeysetCursor retrieves records for backward pagination
@@ -2504,9 +2588,10 @@ func (r *RecordsRepository) getByCollectionReversedWithKeysetCursorAndExternalLa
 
 	nextPlaceholder := 2
 	if validOnly {
-		whereParts = append(whereParts, fmt.Sprintf("validation_status = %s", r.db.Placeholder(nextPlaceholder)))
-		args = append(args, string(validation.StatusValid))
-		nextPlaceholder++
+		whereParts = append(whereParts, validStatusLiteralCondition)
+	}
+	if keysetSortFieldName(reversedSort) == SortFieldRecordCreatedAt {
+		whereParts = append(whereParts, "record_created_at IS NOT NULL")
 	}
 
 	// Keyset cursor condition with reversed comparison operator.
@@ -2577,7 +2662,7 @@ func (r *RecordsRepository) getByCollectionReversedWithKeysetCursorAndExternalLa
 	whereClause := strings.Join(whereParts, " AND ")
 	orderBy := r.buildSortExpr(reversedSort)
 	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s LIMIT %d",
-		r.recordColumns(), whereClause, orderBy, limit)
+		r.sortedRecordColumns(reversedSort), whereClause, orderBy, limit)
 
 	if err := r.validateSQLiteAggregateParameterCount(len(args)); err != nil {
 		return nil, err
@@ -2589,7 +2674,7 @@ func (r *RecordsRepository) getByCollectionReversedWithKeysetCursorAndExternalLa
 	}
 	defer rows.Close()
 
-	records, err := scanRecords(rows)
+	records, err := scanSortedRecords(rows, reversedSort)
 	if err != nil {
 		return nil, err
 	}
@@ -3194,6 +3279,47 @@ func (r *RecordsRepository) fillMissingRecordCreatedAt(ctx context.Context, uri 
 		fmt.Sprintf("UPDATE record SET record_created_at = %s WHERE uri = %s AND record_created_at IS NULL", r.recordCreatedAtCursorValueExpr(r.db.Placeholder(1)), r.db.Placeholder(2)),
 		[]database.Value{value, database.Text(uri)})
 	return err
+}
+
+// validStatusLiteralCondition filters to valid rows with an inline literal
+// rather than a bind parameter. pgx caches prepared statements, and once
+// PostgreSQL switches one to a generic plan it cannot prove that a parameter
+// equals 'valid', so it would stop using partial indexes such as
+// idx_record_timeline_valid. The value is a compile-time constant, not input.
+var validStatusLiteralCondition = fmt.Sprintf("validation_status = '%s'", validation.StatusValid)
+
+// sortedRecordColumns returns recordColumns plus the normalized
+// record_created_at text when the query sorts by that column.
+func (r *RecordsRepository) sortedRecordColumns(sort *SortOption) string {
+	if keysetSortFieldName(sort) != SortFieldRecordCreatedAt {
+		return r.recordColumns()
+	}
+	createdAt := "record_created_at"
+	if r.db.Dialect() == database.PostgreSQL {
+		createdAt = `to_char(record_created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')`
+	}
+	return r.recordColumns() + ", " + createdAt
+}
+
+func scanSortedRecords(rows *sql.Rows, sort *SortOption) ([]*Record, error) {
+	if keysetSortFieldName(sort) != SortFieldRecordCreatedAt {
+		return scanRecords(rows)
+	}
+	var records []*Record
+	for rows.Next() {
+		var rec Record
+		var indexedAtStr, validationStatus string
+		var validationError, validatedAtStr, lexiconHash sql.NullString
+		if err := rows.Scan(&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey,
+			&validationStatus, &validationError, &validatedAtStr, &lexiconHash, &rec.RecordCreatedAt); err != nil {
+			return nil, err
+		}
+		rec.IndexedAt = atproto.ParseTimestamp(indexedAtStr)
+		rec.ValidationStatus = validation.Status(validationStatus)
+		applyRecordValidationNulls(&rec, validationError, validatedAtStr, lexiconHash)
+		records = append(records, &rec)
+	}
+	return records, rows.Err()
 }
 
 func scanRecords(rows *sql.Rows) ([]*Record, error) {

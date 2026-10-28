@@ -1493,6 +1493,9 @@ func sortFieldValueForRecord(rec *repositories.Record, value interface{}, sortOp
 	if sortOpt == nil {
 		return rec.IndexedAt.UTC().Format(time.RFC3339Nano)
 	}
+	if sortOpt.Field == repositories.SortFieldRecordCreatedAt {
+		return rec.RecordCreatedAt
+	}
 	if directSortCols[sortOpt.Field] {
 		switch sortOpt.Field {
 		case "indexed_at":
@@ -1567,6 +1570,9 @@ func (b *Builder) resolveRecordConnection(
 		}
 		sortOpt = &repositories.SortOption{Field: sortByArg, Direction: direction}
 	}
+	if usesRecordCreatedAtColumn(b.registry, collection, validOnly) {
+		mapCreatedAtToColumn(sortOpt, filters)
+	}
 
 	// Backward pagination path
 	if hasLast || before != "" {
@@ -1581,6 +1587,9 @@ func (b *Builder) resolveRecordConnection(
 			}
 			if len(parts) != 2 {
 				return nil, fmt.Errorf("invalid cursor: expected 2 components")
+			}
+			if err := normalizeCreatedAtCursor(sortOpt, parts); err != nil {
+				return nil, err
 			}
 			beforeCursorValues = parts
 		}
@@ -1688,6 +1697,9 @@ func (b *Builder) resolveRecordConnection(
 		// Ensure we have exactly 2 values for keyset pagination
 		if len(afterCursorValues) != 2 {
 			return nil, fmt.Errorf("invalid cursor: expected 2 components")
+		}
+		if err := normalizeCreatedAtCursor(sortOpt, afterCursorValues); err != nil {
+			return nil, err
 		}
 	}
 
