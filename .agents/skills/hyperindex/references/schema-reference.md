@@ -94,6 +94,9 @@ Hyperindex stores every observed AT Protocol record in the raw `record` table. V
 | `invalid` | Hidden | The startup snapshot contains the collection Lexicon, but the record does not conform to it. |
 | `unknown_schema` | Hidden | The startup snapshot contains no saved Lexicon for the collection. |
 | `validation_error` | Hidden | Hyperindex could not complete validation against the startup snapshot because of malformed data, an incomplete local Lexicon set, or an internal validation error. |
+| `unvalidated` | Hidden | The record was ingested while the server ran with `RECORD_VALIDATION_ENABLED=false`. |
+
+Operators can relax the gate. When a server runs with `TYPED_GRAPHQL_VALID_ONLY=false`, typed queries, typed subscriptions, and `endorsementClosure` include non-valid records. Generated typed record objects expose `validationStatus` (`String`) and `validationError` (`String`) so clients can tell rows apart in that mode; with the default configuration they are always `valid` and `null`. Typed subscription delete payloads report `validationStatus` as `null`. The public hosted endpoints run with the default gate unless stated otherwise.
 
 Validation uses saved Lexicons only. Normal ingestion does not resolve `_lexicon` DNS records, DID documents, PDS-hosted schema records, or any other remote schema source while classifying records.
 
@@ -101,7 +104,7 @@ The generic `records(collection: ...)` query returns all raw records for the col
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `validationStatus` | `String!` | One of `valid`, `invalid`, `unknown_schema`, or `validation_error`. |
+| `validationStatus` | `String!` | One of `valid`, `invalid`, `unknown_schema`, `validation_error`, or `unvalidated`. |
 | `validationError` | `String` | Explanation of the failed or hidden validation state, when available. |
 | `validatedAt` | `String` | Timestamp when Hyperindex last classified the record against its saved startup Lexicon snapshot. |
 | `lexiconHash` | `String` | SHA-256 validation fingerprint for the exact saved collection Lexicon bytes and transitive referenced Lexicons in that startup snapshot. |

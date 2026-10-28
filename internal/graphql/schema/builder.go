@@ -55,15 +55,32 @@ type Builder struct {
 	endorsementViaAccountType  *graphql.Object
 	endorsementClosureEdgeType *graphql.Object
 	endorsementClosureConnType *graphql.Object
+
+	// typedRecordsRequireValid hides records whose validation status is not
+	// valid from typed collection queries, single-record fields, typed
+	// subscriptions, certified profile hydration, and endorsement closure.
+	typedRecordsRequireValid bool
+}
+
+// BuilderOption configures a schema Builder.
+type BuilderOption func(*Builder)
+
+// WithTypedRecordsRequireValid sets whether typed GraphQL only exposes records
+// with validation status valid (the default). Passing false exposes every
+// stored record through typed fields; consumers can read validationStatus to
+// tell them apart.
+func WithTypedRecordsRequireValid(requireValid bool) BuilderOption {
+	return func(b *Builder) { b.typedRecordsRequireValid = requireValid }
 }
 
 // NewBuilder creates a new schema builder.
-func NewBuilder(registry *lexicon.Registry) *Builder {
+func NewBuilder(registry *lexicon.Registry, opts ...BuilderOption) *Builder {
 	mapper := types.NewMapper()
-	return &Builder{
-		registry:      registry,
-		mapper:        mapper,
-		objectBuilder: types.NewObjectBuilder(mapper, registry),
+	b := &Builder{
+		typedRecordsRequireValid: true,
+		registry:                 registry,
+		mapper:                   mapper,
+		objectBuilder:            types.NewObjectBuilder(mapper, registry),
 		loadAuthors: func(ctx context.Context, actors *repositories.ActorsRepository, dids []string) (map[string]*repositories.Actor, error) {
 			return actors.GetByDIDs(ctx, dids)
 		},
@@ -73,6 +90,10 @@ func NewBuilder(registry *lexicon.Registry) *Builder {
 		whereInputTypes:       make(map[string]*graphql.InputObject),
 		nestedWhereInputTypes: make(map[string]*graphql.InputObject),
 	}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
 }
 
 // Build builds the complete GraphQL schema.
@@ -464,24 +485,27 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 					return nil, nil
 				}
 
+				var current *repositories.Record
 				if event.Type == subscription.EventDelete {
-					if !event.WasValid || event.TypedRecord == nil {
+					if event.TypedRecord == nil || (b.typedRecordsRequireValid && !event.WasValid) {
 						return nil, nil
 					}
 				} else {
-					if !event.TypedVisible {
+					if event.TypedRecord == nil || (b.typedRecordsRequireValid && !event.TypedVisible) {
 						return nil, nil
 					}
 					repos := resolver.GetRepositories(p.Context)
 					if repos == nil || repos.Records == nil {
 						return nil, nil
 					}
-					if _, err := repos.Records.GetValidByURI(p.Context, event.URI, collection); err != nil {
+					rec, err := b.typedRecordByURI(p.Context, repos.Records, event.URI, collection)
+					if err != nil {
 						if errors.Is(err, sql.ErrNoRows) {
 							return nil, nil
 						}
 						return nil, fmt.Errorf("failed to validate subscription record visibility: %w", err)
 					}
+					current = rec
 				}
 				typedRecord := cloneSubscriptionRecord(event.TypedRecord)
 				if typedRecord != nil {
@@ -489,6 +513,12 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 					typedRecord["cid"] = event.CID
 					typedRecord["did"] = event.DID
 					typedRecord["rkey"] = subscriptionRecordKey(event.URI)
+					if current != nil && current.CID == event.CID {
+						// Status is only reported when the stored row still
+						// matches this event; deletes and superseded events
+						// leave it null.
+						attachValidationMetadata(typedRecord, current)
+					}
 					b.coerceRequiredFields(typedRecord, collection)
 				}
 				return typedRecord, nil
@@ -1422,7 +1452,13 @@ func (b *Builder) hydrateCertifiedProfilesForRecords(p graphql.ResolveParams, re
 		return &certifiedProfileHydration{byDID: map[string]map[string]interface{}{}}, nil
 	}
 
-	profileRecords, err := repos.Records.GetValidByURIs(p.Context, uris)
+	var profileRecords []*repositories.Record
+	var err error
+	if b.typedRecordsRequireValid {
+		profileRecords, err = repos.Records.GetValidByURIs(p.Context, uris)
+	} else {
+		profileRecords, err = repos.Records.GetByURIs(p.Context, uris)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch certified profiles: %w", err)
 	}
@@ -1445,10 +1481,14 @@ func (b *Builder) hydrateCertifiedProfilesForRecords(p graphql.ResolveParams, re
 			slog.Warn("Skipping certified profile with invalid JSON", "uri", profileRecord.URI, "error", err)
 			continue
 		}
+		if data == nil {
+			continue
+		}
 		data["uri"] = profileRecord.URI
 		data["cid"] = profileRecord.CID
 		data["did"] = profileRecord.DID
 		data["rkey"] = profileRecord.RKey
+		attachValidationMetadata(data, profileRecord)
 		b.coerceRequiredFields(data, certifiedprofiles.CollectionID)
 		attachExternalLabels(data, profileRecord, profileLabelHydration)
 		profilesByDID[profileRecord.DID] = data
@@ -1530,9 +1570,12 @@ func sortFieldValueForRecord(rec *repositories.Record, value interface{}, sortOp
 func (b *Builder) resolveRecordConnection(
 	p graphql.ResolveParams,
 	collection string,
-	validOnly bool,
+	typed bool,
 	buildNode nodeBuilder,
 ) (interface{}, error) {
+	// Typed connections decode objects only; whether they also hide non-valid
+	// rows depends on TYPED_GRAPHQL_VALID_ONLY. Generic connections never filter.
+	validOnly := typed && b.typedRecordsRequireValid
 	repos := resolver.GetRepositories(p.Context)
 	if repos == nil || repos.Records == nil {
 		return emptyConnection(), nil
@@ -1631,7 +1674,7 @@ func (b *Builder) resolveRecordConnection(
 		var startCursor, endCursor string
 
 		for _, rec := range records {
-			value, err := decodeConnectionRecordValue(rec, validOnly)
+			value, err := decodeConnectionRecordValue(rec, typed)
 			if err != nil {
 				slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
 				continue
@@ -1739,7 +1782,7 @@ func (b *Builder) resolveRecordConnection(
 	var startCursor, endCursor string
 
 	for _, rec := range records {
-		value, err := decodeConnectionRecordValue(rec, validOnly)
+		value, err := decodeConnectionRecordValue(rec, typed)
 		if err != nil {
 			slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
 			continue
@@ -2183,6 +2226,35 @@ func decodeConnectionRecordValue(rec *repositories.Record, objectOnly bool) (int
 	return raw, nil
 }
 
+// typedRecordByURI loads a record for a typed field. It returns sql.ErrNoRows
+// when the record is missing, belongs to another collection, or is hidden by
+// the typed validation filter.
+func (b *Builder) typedRecordByURI(ctx context.Context, records *repositories.RecordsRepository, uri, collection string) (*repositories.Record, error) {
+	if b.typedRecordsRequireValid {
+		return records.GetValidByURI(ctx, uri, collection)
+	}
+	rec, err := records.GetByURI(ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+	if rec.Collection != collection {
+		return nil, sql.ErrNoRows
+	}
+	return rec, nil
+}
+
+// attachValidationMetadata exposes the stored validation outcome on a typed
+// record so consumers can distinguish valid rows when the typed validation
+// filter is disabled.
+func attachValidationMetadata(data map[string]interface{}, rec *repositories.Record) {
+	data["validationStatus"] = string(rec.ValidationStatus)
+	if rec.ValidationError != "" {
+		data["validationError"] = rec.ValidationError
+	} else {
+		data["validationError"] = nil
+	}
+}
+
 // createSearchResolver creates a resolver for the search query.
 // It validates the query string (minimum 3 runes) and calls the Search repository method.
 func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
@@ -2348,6 +2420,7 @@ func (b *Builder) createCollectionResolver(lexiconID string) graphql.FieldResolv
 				data["cid"] = rec.CID
 				data["did"] = rec.DID
 				data["rkey"] = rec.RKey
+				attachValidationMetadata(data, rec)
 				b.coerceRequiredFields(data, lexiconID)
 				return data, true
 			})
@@ -2368,9 +2441,7 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 			return nil, nil
 		}
 
-		// Query database. Typed single-record fields only expose records that
-		// conform to the saved lexicon for this generated collection.
-		rec, err := repos.Records.GetValidByURI(p.Context, uri, lexiconID)
+		rec, err := b.typedRecordByURI(p.Context, repos.Records, uri, lexiconID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, nil // Not found
@@ -2383,12 +2454,18 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 		if err := json.Unmarshal([]byte(rec.JSON), &data); err != nil {
 			return nil, fmt.Errorf("failed to parse record JSON: %w", err)
 		}
+		if data == nil {
+			// Only reachable with TYPED_GRAPHQL_VALID_ONLY=false: a JSON null
+			// record cannot back a typed object.
+			return nil, nil
+		}
 
 		// Add standard record fields
 		data["uri"] = rec.URI
 		data["cid"] = rec.CID
 		data["did"] = rec.DID
 		data["rkey"] = rec.RKey
+		attachValidationMetadata(data, rec)
 		b.coerceRequiredFields(data, lexiconID)
 
 		labelsBySubject, err := b.hydrateExternalLabelsForSingleRecord(p, repos, rec)

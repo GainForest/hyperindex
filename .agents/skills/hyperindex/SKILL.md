@@ -176,7 +176,7 @@ If a workflow needs unsupported nested matching, use one of these patterns:
 
 ## Validation gate and generic records
 
-Hyperindex stores every observed AT Protocol record in its raw record table. Typed GraphQL collection fields only expose rows whose `validationStatus` is `valid`, meaning Indigo validated the record against the startup Lexicon set used to generate the running schema. Records whose status is `invalid`, `unknown_schema`, or `validation_error` are hidden from typed list queries, typed `ByUri` queries, typed counts, relationship hydration, and typed create/update subscriptions. Typed delete subscriptions emit only for rows that were valid before deletion.
+Hyperindex stores every observed AT Protocol record in its raw record table. Typed GraphQL collection fields only expose rows whose `validationStatus` is `valid`, meaning Indigo validated the record against the startup Lexicon set used to generate the running schema. Records whose status is `invalid`, `unknown_schema`, `validation_error`, or `unvalidated` are hidden from typed list queries, typed `ByUri` queries, typed counts, relationship hydration, and typed create/update subscriptions. Typed delete subscriptions emit only for rows that were valid before deletion. Typed record objects also expose `validationStatus` and `validationError`; a self-hosted server started with `TYPED_GRAPHQL_VALID_ONLY=false` returns non-valid rows through typed fields, and these fields tell them apart.
 
 Use generic `records(collection: ...)` or `search(...)` for operational visibility into raw rows, including records hidden from typed GraphQL. Generic record nodes expose validation metadata:
 

@@ -23,6 +23,8 @@ var ReservedRecordFields = map[string]bool{
 	"author":               true,
 	"authorLabels":         true,
 	"certifiedProfileData": true,
+	"validationStatus":     true,
+	"validationError":      true,
 }
 
 // ObjectBuilder builds GraphQL object types from lexicon definitions.
@@ -135,6 +137,14 @@ func (b *ObjectBuilder) buildRecordFields(lexiconID string, def *lexicon.RecordD
 			Description: "Record key (last segment of AT-URI)",
 		},
 		"externalLabels": externallabels.Field(),
+		"validationStatus": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Stored validation status: valid, invalid, unknown_schema, validation_error, or unvalidated. Non-valid records only appear here when the server runs with TYPED_GRAPHQL_VALID_ONLY=false. Null on subscription delete events.",
+		},
+		"validationError": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Why the record is not valid, when validationStatus is not valid.",
+		},
 	}
 	if profileType, ok := b.mapper.GetObjectType(certifiedprofiles.CollectionID); ok {
 		fields["certifiedProfileData"] = certifiedprofiles.Field(profileType)

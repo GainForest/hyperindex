@@ -324,6 +324,28 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "validation disabled with typed valid-only filter",
+			config: Config{
+				SecretKeyBase:            "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
+				Port:                     8080,
+				AdminAPIKey:              "admin-secret-123",
+				RecordValidationDisabled: true,
+			},
+			wantErr:         true,
+			wantErrContains: "TYPED_GRAPHQL_VALID_ONLY=true requires RECORD_VALIDATION_ENABLED=true",
+		},
+		{
+			name: "validation disabled with typed filter disabled",
+			config: Config{
+				SecretKeyBase:               "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
+				Port:                        8080,
+				AdminAPIKey:                 "admin-secret-123",
+				RecordValidationDisabled:    true,
+				TypedGraphQLIncludeNonValid: true,
+			},
+			wantErr: false,
+		},
+		{
 			name: "port too high",
 			config: Config{
 				SecretKeyBase: "this_is_a_very_long_secret_key_that_is_definitely_more_than_64_characters_long_for_testing",
@@ -362,6 +384,42 @@ func TestLoadAdminAPIKey(t *testing.T) {
 
 	if cfg.AdminAPIKey != "admin-secret" {
 		t.Fatalf("AdminAPIKey = %q, want %q", cfg.AdminAPIKey, "admin-secret")
+	}
+}
+
+func TestLoadRecordValidationToggles(t *testing.T) {
+	tests := []struct {
+		name                string
+		validationEnabled   string
+		typedValidOnly      string
+		wantDisabled        bool
+		wantIncludeNonValid bool
+		wantErrContains     string
+	}{
+		{name: "defaults keep the gate on"},
+		{name: "both off", validationEnabled: "false", typedValidOnly: "0", wantDisabled: true, wantIncludeNonValid: true},
+		{name: "filter off only", typedValidOnly: "no", wantIncludeNonValid: true},
+		{name: "typo is rejected", validationEnabled: "flase", wantErrContains: `invalid RECORD_VALIDATION_ENABLED "flase"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RECORD_VALIDATION_ENABLED", tt.validationEnabled)
+			t.Setenv("TYPED_GRAPHQL_VALID_ONLY", tt.typedValidOnly)
+			cfg, err := Load()
+			if tt.wantErrContains != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("Load() error = %v, want substring %q", err, tt.wantErrContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.RecordValidationDisabled != tt.wantDisabled || cfg.TypedGraphQLIncludeNonValid != tt.wantIncludeNonValid {
+				t.Fatalf("RecordValidationDisabled=%v TypedGraphQLIncludeNonValid=%v, want %v %v",
+					cfg.RecordValidationDisabled, cfg.TypedGraphQLIncludeNonValid, tt.wantDisabled, tt.wantIncludeNonValid)
+			}
+		})
 	}
 }
 

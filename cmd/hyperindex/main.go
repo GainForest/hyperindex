@@ -35,6 +35,7 @@ import (
 	hgraphql "github.com/GainForest/hyperindex/internal/graphql"
 	"github.com/GainForest/hyperindex/internal/graphql/admin"
 	"github.com/GainForest/hyperindex/internal/graphql/resolver"
+	"github.com/GainForest/hyperindex/internal/graphql/schema"
 	"github.com/GainForest/hyperindex/internal/graphql/subscription"
 	"github.com/GainForest/hyperindex/internal/jetstream"
 	"github.com/GainForest/hyperindex/internal/labeler"
@@ -74,6 +75,9 @@ type services struct {
 	recordVersions    *repositories.RecordVersionsRepository
 	validator         *validation.Validator
 	validationRefresh *validationrefresh.Scheduler
+	// recordValidator classifies ingested records. It is the startup Lexicon
+	// validator, or validation.Disabled when RECORD_VALIDATION_ENABLED=false.
+	recordValidator validation.RecordValidator
 }
 
 // backgroundServices tracks cancellable background goroutines for clean shutdown.
@@ -687,7 +691,7 @@ func configureBackfillCallbacks(adminHandler *admin.Handler, cfg *config.Config,
 
 	// Single actor backfill
 	adminHandler.Resolver().SetBackfillCallback(func(ctx context.Context, did string) error {
-		actorBackfiller := backfill.NewBackfiller(bfConfig, svc.records, svc.actors, svc.activity, svc.validator)
+		actorBackfiller := backfill.NewBackfiller(bfConfig, svc.records, svc.actors, svc.activity, svc.recordValidator)
 		defer actorBackfiller.Close()
 		_, err := actorBackfiller.BackfillActor(ctx, did)
 		return err
@@ -703,7 +707,7 @@ func configureBackfillCallbacks(adminHandler *admin.Handler, cfg *config.Config,
 
 		fullConfig := bfConfig
 		fullConfig.Collections = collections
-		bf := backfill.NewBackfiller(fullConfig, svc.records, svc.actors, svc.activity, svc.validator)
+		bf := backfill.NewBackfiller(fullConfig, svc.records, svc.actors, svc.activity, svc.recordValidator)
 		defer bf.Close()
 
 		slog.Info("[backfill] Starting full network backfill", "collections", collections)
@@ -783,9 +787,20 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 	sort.Strings(recordCollections)
 	slog.Info("Startup Lexicon set ready", "lexicons", registry.Count(), "record_collections", len(recordCollections))
 
-	svc.validationRefresh = validationrefresh.NewScheduler(svc.records, svc.validator)
-	if err := svc.validationRefresh.RefreshCollections(ctx, recordCollections, "startup"); err != nil {
-		return nil, fmt.Errorf("startup validation refresh failed: %w", err)
+	if !cfg.RecordValidationDisabled {
+		svc.recordValidator = svc.validator
+		svc.validationRefresh = validationrefresh.NewScheduler(svc.records, svc.validator)
+		if err := svc.validationRefresh.RefreshCollections(ctx, recordCollections, "startup"); err != nil {
+			return nil, fmt.Errorf("startup validation refresh failed: %w", err)
+		}
+	} else {
+		// Stored statuses are left untouched; new writes are marked unvalidated
+		// and get reclassified by the startup refresh once validation is back on.
+		svc.recordValidator = validation.Disabled{}
+		slog.Warn("Record validation disabled (RECORD_VALIDATION_ENABLED=false); new records are stored as unvalidated and the startup validation refresh is skipped")
+	}
+	if cfg.TypedGraphQLIncludeNonValid {
+		slog.Warn("Typed GraphQL validation filter disabled (TYPED_GRAPHQL_VALID_ONLY=false); typed queries and subscriptions return records regardless of validation status and may surface schema-nonconforming data")
 	}
 
 	// Create GraphQL handler
@@ -797,7 +812,7 @@ func setupGraphQL(r *chi.Mux, cfg *config.Config, svc *services, pubsub *subscri
 		RecordVersions: svc.recordVersions,
 	}
 
-	graphqlHandler, err := hgraphql.NewHandler(registry, repos)
+	graphqlHandler, err := hgraphql.NewHandler(registry, repos, schema.WithTypedRecordsRequireValid(!cfg.TypedGraphQLIncludeNonValid))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GraphQL handler: %w", err)
 	}
@@ -883,7 +898,7 @@ func startJetstream(
 			svc.config,
 			svc.activity,
 			pubsub,
-			svc.validator,
+			svc.recordValidator,
 		)
 
 		jsCtx, jsCancel := context.WithCancel(context.Background())
@@ -920,7 +935,7 @@ func startBackfill(cfg *config.Config, svc *services) {
 		return
 	}
 
-	backfiller := backfill.NewBackfiller(bfConfig, svc.records, svc.actors, svc.activity, svc.validator)
+	backfiller := backfill.NewBackfiller(bfConfig, svc.records, svc.actors, svc.activity, svc.recordValidator)
 
 	go func() {
 		slog.Info("Starting backfill operation",
@@ -953,7 +968,7 @@ func startTap(
 	tapURL := cfg.TapURL
 
 	// Create handler that stores records and publishes to subscriptions.
-	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub, svc.validator)
+	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub, svc.recordValidator)
 	if historyCollections := repositories.NewCollectionMatcher(cfg.RecordHistoryCollections); !historyCollections.Empty() {
 		// Seed the current version of every opted-in record before live events
 		// start, so each history begins with what was indexed at switch-on.

@@ -1,0 +1,4 @@
+kind: added
+body: Operators can now turn record validation and the typed GraphQL validity filter on and off with `RECORD_VALIDATION_ENABLED` and `TYPED_GRAPHQL_VALID_ONLY`. Both default to `true`, so nothing changes until you set them. Turning validation off stores new records as `unvalidated` and skips the startup refresh, and the next startup after re-enabling reclassifies those records. Turning the filter off makes typed queries, subscriptions, and endorsement closure return records of every validation status, and typed record objects now expose `validationStatus` and `validationError` so clients can tell them apart. Disabling validation requires disabling the filter.
+custom:
+  Affects: operator

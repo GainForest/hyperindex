@@ -38,8 +38,21 @@ func (r *RecordsRepository) EndorsementAdjacencyForLimit(ctx context.Context, is
 	return r.endorsementAdjacencyFor(ctx, issuers, endorsementAdjacencyQueryOptions{Limit: limit})
 }
 
+// EndorsementAdjacencyAnyStatusForLimit is EndorsementAdjacencyForLimit without
+// the validation gate: awards, definitions, and rejecting responses participate
+// regardless of validation status. It backs endorsement closure when
+// TYPED_GRAPHQL_VALID_ONLY=false.
+func (r *RecordsRepository) EndorsementAdjacencyAnyStatusForLimit(ctx context.Context, issuers []string, limit int) (map[string][]string, bool, error) {
+	if limit <= 0 {
+		return nil, false, fmt.Errorf("endorsement adjacency limit must be positive, got %d", limit)
+	}
+	return r.endorsementAdjacencyFor(ctx, issuers, endorsementAdjacencyQueryOptions{Limit: limit, AnyStatus: true})
+}
+
 type endorsementAdjacencyQueryOptions struct {
 	Limit int
+	// AnyStatus drops the validation_status = valid predicates.
+	AnyStatus bool
 }
 
 func (r *RecordsRepository) endorsementAdjacencyFor(ctx context.Context, issuers []string, options endorsementAdjacencyQueryOptions) (map[string][]string, bool, error) {
@@ -52,7 +65,10 @@ func (r *RecordsRepository) endorsementAdjacencyFor(ctx context.Context, issuers
 	if r.db.Dialect() == database.SQLite {
 		// Each batch also binds the valid status once for awards, definitions,
 		// and responses, plus an optional limit.
-		maxBatchSize := SQLParamBatchSize - 3
+		maxBatchSize := SQLParamBatchSize
+		if !options.AnyStatus {
+			maxBatchSize -= 3
+		}
 		if options.Limit > 0 {
 			maxBatchSize--
 		}
@@ -109,12 +125,26 @@ func (r *RecordsRepository) endorsementAdjacencyBatch(ctx context.Context, issue
 	responseStateExpr := r.jsonTextPathExpr("response.json", []string{"response"})
 	validSubjectDIDExpr := didSQLPredicate("endorsement_awards.subject_did")
 
-	awardStatusPlaceholder := r.db.Placeholder(len(issuers) + 1)
-	definitionStatusPlaceholder := r.db.Placeholder(len(issuers) + 2)
-	responseStatusPlaceholder := r.db.Placeholder(len(issuers) + 3)
+	args := make([]any, len(issuers), len(issuers)+4)
+	for i, issuer := range issuers {
+		args[i] = issuer
+	}
+	// statusPredicate binds the valid status for one joined record alias, or
+	// renders nothing when the validation gate is off.
+	statusPredicate := func(alias string) string {
+		if options.AnyStatus {
+			return ""
+		}
+		args = append(args, string(validation.StatusValid))
+		return fmt.Sprintf("AND %s.validation_status = %s", alias, r.db.Placeholder(len(args)))
+	}
+	awardStatusPredicate := statusPredicate("award")
+	definitionStatusPredicate := statusPredicate("definition")
+	responseStatusPredicate := statusPredicate("response")
 	limitClause := ""
 	if options.Limit > 0 {
-		limitClause = fmt.Sprintf("\n\tLIMIT %s", r.db.Placeholder(len(issuers)+4))
+		args = append(args, options.Limit+1)
+		limitClause = fmt.Sprintf("\n\tLIMIT %s", r.db.Placeholder(len(args)))
 	}
 
 	sqlStr := fmt.Sprintf(`WITH endorsement_awards AS (
@@ -126,14 +156,14 @@ func (r *RecordsRepository) endorsementAdjacencyBatch(ctx context.Context, issue
 		FROM record award
 		WHERE award.collection = '%s'
 			AND award.did IN (%s)
-			AND award.validation_status = %s
+			%s
 	)
 	SELECT DISTINCT endorsement_awards.issuer_did, endorsement_awards.subject_did
 	FROM endorsement_awards
 	JOIN record definition
 		ON definition.uri = endorsement_awards.badge_uri
 		AND definition.collection = '%s'
-		AND definition.validation_status = %s
+		%s
 		AND %s = '%s'
 	WHERE endorsement_awards.subject_did IS NOT NULL
 		AND endorsement_awards.subject_did <> ''
@@ -144,7 +174,7 @@ func (r *RecordsRepository) endorsementAdjacencyBatch(ctx context.Context, issue
 			SELECT 1
 			FROM record response
 			WHERE response.collection = '%s'
-				AND response.validation_status = %s
+				%s
 				AND response.did = endorsement_awards.subject_did
 				AND %s = endorsement_awards.award_uri
 				AND %s = 'rejected'
@@ -154,29 +184,19 @@ func (r *RecordsRepository) endorsementAdjacencyBatch(ctx context.Context, issue
 		badgeURIExpr,
 		certifiedBadgeAwardCollection,
 		placeholders,
-		awardStatusPlaceholder,
+		awardStatusPredicate,
 		certifiedBadgeDefinitionCollection,
-		definitionStatusPlaceholder,
+		definitionStatusPredicate,
 		definitionBadgeTypeExpr,
 		certifiedEndorsementBadgeType,
 		validSubjectDIDExpr,
 		definitionAllowsIssuerExpr,
 		certifiedBadgeResponseCollection,
-		responseStatusPlaceholder,
+		responseStatusPredicate,
 		responseAwardURIExpr,
 		responseStateExpr,
 		limitClause,
 	)
-
-	args := make([]any, len(issuers), len(issuers)+4)
-	for i, issuer := range issuers {
-		args[i] = issuer
-	}
-	validStatus := string(validation.StatusValid)
-	args = append(args, validStatus, validStatus, validStatus)
-	if options.Limit > 0 {
-		args = append(args, options.Limit+1)
-	}
 
 	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
 	if err != nil {

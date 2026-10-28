@@ -90,6 +90,7 @@ Run verification based on what changed.
 - `ADMIN_API_KEY` is required at startup.
 - `SECRET_KEY_BASE` must be at least 64 characters.
 - `TAP_ENABLED=true` switches record ingestion to Tap mode. After Tap becomes healthy, Hyperindex runs one bounded background pass that fills missing `actor.handle` values from Tap's local `/info/:did` metadata without delaying API startup.
+- `RECORD_VALIDATION_ENABLED` (default `true`) and `TYPED_GRAPHQL_VALID_ONLY` (default `true`) control the record validation gate. Disabling validation requires disabling the typed filter; both reject unrecognised boolean values at startup.
 - `LABELER_SUBSCRIBE_ENABLED=true` with `LABELER_SUBSCRIBE_URLS` starts optional external `com.atproto.label.subscribeLabels` ingestion.
 - `RECORD_HISTORY_COLLECTIONS` (Tap mode) keeps every version of matching records in `record_version`, exposed by the root `recordHistory(uri)` query. Startup seeds a `baseline` row for existing records that have no history yet; the version is written before the current-state upsert so Tap redelivery keeps both consistent. Record deletes and account purges delete history too (always, even for collections no longer tracked).
 - Migrations run automatically on startup.

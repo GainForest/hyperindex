@@ -19,8 +19,8 @@ type Handler struct {
 }
 
 // NewHandler creates a new GraphQL handler from a lexicon registry and repositories.
-func NewHandler(registry *lexicon.Registry, repos *resolver.Repositories) (*Handler, error) {
-	builder := schema.NewBuilder(registry)
+func NewHandler(registry *lexicon.Registry, repos *resolver.Repositories, opts ...schema.BuilderOption) (*Handler, error) {
+	builder := schema.NewBuilder(registry, opts...)
 	s, err := builder.Build()
 	if err != nil {
 		return nil, err
