@@ -57,7 +57,7 @@ type rawProperty struct {
 	MinLength   *int                       `json:"minLength,omitempty"`
 	MaxLength   *int                       `json:"maxLength,omitempty"`
 	Enum        []string                   `json:"enum,omitempty"`
-	Const       string                     `json:"const,omitempty"`
+	Const       any                        `json:"const,omitempty"`
 	KnownValues []string                   `json:"knownValues,omitempty"`
 }
 

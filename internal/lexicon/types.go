@@ -115,8 +115,9 @@ type Property struct {
 	// Enum lists allowed values
 	Enum []string `json:"enum,omitempty"`
 
-	// Const is a constant required value
-	Const string `json:"const,omitempty"`
+	// Const is a constant required value. Lexicon allows boolean, integer,
+	// and string constants, so the decoded JSON value is kept as-is.
+	Const any `json:"const,omitempty"`
 
 	// KnownValues lists known values (for open enums)
 	KnownValues []string `json:"knownValues,omitempty"`
