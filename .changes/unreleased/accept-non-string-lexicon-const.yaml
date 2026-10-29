@@ -1,4 +1,0 @@
-kind: fixed
-body: Startup no longer fails when a saved Lexicon declares a boolean or integer `const`, such as `app.bsky.embed.record`. Previously these documents could not be parsed and stopped the server while it built the startup Lexicon set.
-custom:
-  Affects: operator
