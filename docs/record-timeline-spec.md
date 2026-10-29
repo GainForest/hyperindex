@@ -317,21 +317,41 @@ ON record (did, collection, record_created_at DESC, uri DESC)
 WHERE record_created_at IS NOT NULL;
 ```
 
-Add a collection-first index for global selected-collection timelines when `where.did` is omitted:
+Typed collection connections sorted by `createdAt` keep rows whose `record_created_at` is NULL and order them as the oldest, so the partial indexes above and below cannot serve them. Migration 018 adds full indexes next to the partial ones; collection-wide timelines (`where.did` omitted) use the first as well:
+
+```sql
+-- PostgreSQL
+CREATE INDEX CONCURRENTLY idx_record_collection_created_at
+ON record (collection, record_created_at DESC NULLS LAST, uri DESC);
+
+CREATE INDEX CONCURRENTLY idx_record_collection_created_at_valid
+ON record (collection, record_created_at DESC NULLS LAST, uri DESC)
+WHERE validation_status = 'valid';
+
+-- Typed connections filtered by where.did
+CREATE INDEX CONCURRENTLY idx_record_author_collection_created_at
+ON record (did, collection, record_created_at DESC NULLS LAST, uri DESC);
+```
+
+SQLite creates the same indexes without `NULLS LAST`, because SQLite already sorts NULL as the smallest value.
+
+Add a collection-first partial index for timelines that read only dated rows (migration 010), and a valid-only variant of it for collection-wide readers that select only `validation_status = 'valid'` rows, such as the GainForest feed service (migration 017). Without the valid-only variant, those reads walk the collection index and fetch every invalid row from the table just to discard it, which on a cold PostgreSQL cache costs one random read per skipped row:
 
 ```sql
 CREATE INDEX idx_record_timeline_collection_created
 ON record (collection, record_created_at DESC, uri DESC)
 WHERE record_created_at IS NOT NULL;
-```
 
-Add a valid-only variant for collection-wide readers that select only `validation_status = 'valid'` rows, such as the GainForest feed service (migration 017). Per-account reads (`did = ...`) still use `idx_record_timeline_author_collection_created` and are not covered. Nothing in Hyperindex itself reads valid-only timelines; the SQLite index exists for dialect parity. Without it, those reads walk `idx_record_timeline_collection_created` and fetch every invalid row from the table just to discard it, which on a cold PostgreSQL cache costs one random read per skipped row:
-
-```sql
 CREATE INDEX idx_record_timeline_valid
 ON record (collection, record_created_at DESC, uri DESC)
 WHERE record_created_at IS NOT NULL AND validation_status = 'valid';
 ```
+
+These two partial indexes are retained because readers outside Hyperindex order `NULLS FIRST`, which the full indexes cannot serve. Drop them in a follow-up once those readers write `ORDER BY record_created_at DESC NULLS LAST, uri DESC`.
+
+A PostgreSQL query can only walk the full indexes in order when its `ORDER BY` uses the same NULL placement. `ORDER BY record_created_at DESC` defaults to `NULLS FIRST` and falls back to a sort; write `ORDER BY record_created_at DESC NULLS LAST, uri DESC`, even when the query also filters `record_created_at IS NOT NULL`. The `recordTimeline` collection-wide query does this. Author-filtered `recordTimeline` reads keep the default placement and the partial author index above.
+
+Keyset cursors must be index bounds. Write the cursor as a row-value comparison, `(record_created_at, uri) < ($c, $u)` for descending pages and `>` for ascending ones. The equivalent `record_created_at < $c OR (record_created_at = $c AND uri < $u)` is only a filter: PostgreSQL walks the index from its head and discards every row before the cursor, so each page costs more than the last. Typed connections add the NULL rows after the dated ones when descending (before them when ascending). A condition such as `dated range OR created IS NULL` cannot be an index bound either, so the page is read as separate statements, one per range: the first runs with `LIMIT n`, and the next runs only if the first returned fewer than n rows, with the shortfall as its limit. A page the dated rows fill therefore never touches the undated rows, which matters when a filter matches few of them. The statements are not one snapshot; a write between them that gives an undated record its first parseable `createdAt` can make that page repeat or miss that one record, the same effect a write between two pages has.
 
 PostgreSQL-specific covering-index additions such as `INCLUDE (cid, rkey, indexed_at)` may be considered after benchmarking, but the base behavior and test expectations must remain dialect-independent.
 
@@ -345,20 +365,18 @@ FROM record
 WHERE record_created_at IS NOT NULL
   AND did = ANY($1)
   AND collection = ANY($2)
-  AND (
-    $3::timestamptz IS NULL
-    OR record_created_at < $3
-    OR (record_created_at = $3 AND uri < $4)
-  )
-ORDER BY record_created_at DESC, uri DESC
+  AND (record_created_at, uri) < ($3::timestamptz, $4) -- only when `after` is present
+ORDER BY record.record_created_at DESC, uri DESC
 LIMIT $5;
 ```
 
 Use `first + 1` as `$5` to compute `hasNextPage` without `totalCount`.
 
+Qualify `record.record_created_at` in `ORDER BY`. The select list outputs `record_created_at::text` under the same name, and PostgreSQL resolves a bare `ORDER BY record_created_at` to that text output column, which no index can serve.
+
 ### PostgreSQL global selected-collection query
 
-When `where.did` is omitted, remove the `did = ANY($1)` predicate and use the collection-first index.
+When `where.did` is omitted, remove the `did = ANY($1)` predicate, order by `record.record_created_at DESC NULLS LAST, uri DESC`, and use `idx_record_collection_created_at`.
 
 ### SQLite query
 
@@ -370,11 +388,7 @@ FROM record
 WHERE record_created_at IS NOT NULL
   AND did IN (?, ?, ...)
   AND collection IN (?, ?, ...)
-  AND (
-    ? IS NULL
-    OR record_created_at < ?
-    OR (record_created_at = ? AND uri < ?)
-  )
+  AND (record_created_at, uri) < (?, ?) -- only when `after` is present
 ORDER BY record_created_at DESC, uri DESC
 LIMIT ?;
 ```

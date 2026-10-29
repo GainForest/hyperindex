@@ -78,10 +78,13 @@ func TestMigrations_Run(t *testing.T) {
 		"idx_external_label_active_lookup",
 		"idx_record_timeline_author_collection_created",
 		"idx_record_timeline_collection_created",
+		"idx_record_timeline_valid",
 		"idx_record_collection_validation",
 		"idx_record_collection_lexicon_hash",
 		"idx_record_collection_uri",
-		"idx_record_timeline_valid",
+		"idx_record_collection_created_at",
+		"idx_record_collection_created_at_valid",
+		"idx_record_author_collection_created_at",
 	}
 
 	for _, index := range expectedIndexes {
@@ -417,6 +420,11 @@ func TestMigrations_BackfillsRecordCreatedAtPostgres(t *testing.T) {
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_timeline_collection_created")
 	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_timeline_valid")
 	assertPostgresIndexValid(ctx, t, exec, "idx_record_timeline_valid")
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_collection_created_at")
+	assertPostgresIndexExists(ctx, t, exec, schemaName, "idx_record_collection_created_at_valid")
+	assertPostgresIndexValid(ctx, t, exec, "idx_record_collection_created_at")
+	assertPostgresIndexValid(ctx, t, exec, "idx_record_collection_created_at_valid")
+	assertPostgresIndexValid(ctx, t, exec, "idx_record_author_collection_created_at")
 }
 
 // A failed CREATE INDEX CONCURRENTLY leaves an invalid index under the target
@@ -454,8 +462,8 @@ func TestMigrations_017RejectsInvalidPrebuiltIndexPostgres(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = exec.Close() })
 
-	if err := migrations.Run(ctx, exec); err != nil {
-		t.Fatalf("Run() error = %v", err)
+	if err := migrations.RunThrough(ctx, exec, "017"); err != nil {
+		t.Fatalf("RunThrough(017) error = %v", err)
 	}
 	if err := migrations.Rollback(ctx, exec); err != nil {
 		t.Fatalf("Rollback(017) error = %v", err)
@@ -1066,8 +1074,8 @@ func TestMigrations_016RemovesHistoryOfDeletedRecords(t *testing.T) {
 	}
 }
 
-// A timeline read that only wants valid records must be able to use the
-// partial index, so it never visits invalid rows (see migration 017).
+// A timeline read that only wants valid records must be able to use a
+// valid-only index, so it never visits invalid rows (see migrations 017, 018).
 func TestMigrations_ValidTimelineReadUsesValidIndex(t *testing.T) {
 	exec := newTestExecutor(t)
 	ctx := context.Background()
@@ -1099,8 +1107,11 @@ func TestMigrations_ValidTimelineReadUsesValidIndex(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read query plan: %v", err)
 	}
-	if !strings.Contains(strings.Join(plan, "\n"), "idx_record_timeline_valid") {
-		t.Fatalf("valid timeline read does not use idx_record_timeline_valid; plan:\n%s", strings.Join(plan, "\n"))
+	// Either valid-only index keeps invalid rows out of the scan; since 018 the
+	// full valid index also fits this query, and SQLite may prefer it.
+	planText := strings.Join(plan, "\n")
+	if !strings.Contains(planText, "idx_record_timeline_valid") && !strings.Contains(planText, "idx_record_collection_created_at_valid") {
+		t.Fatalf("valid timeline read does not use a valid-only index; plan:\n%s", planText)
 	}
 }
 
@@ -1120,6 +1131,118 @@ func TestMigrations_017ValidTimelineIndexIsValidOnlySQLite(t *testing.T) {
 	}
 	if !strings.Contains(definition, "validation_status = 'valid'") {
 		t.Fatalf("idx_record_timeline_valid is not limited to valid records:\n%s", definition)
+	}
+}
+
+func sqliteQueryPlan(ctx context.Context, t *testing.T, exec *sqlite.Executor, query string) string {
+	t.Helper()
+	rows, err := exec.DB().QueryContext(ctx, "EXPLAIN QUERY PLAN "+query)
+	if err != nil {
+		t.Fatalf("explain %q: %v", query, err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan query plan: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read query plan: %v", err)
+	}
+	return strings.Join(plan, "\n")
+}
+
+// createdAt-ordered reads must walk an index in order. SQLite sorts NULL as the
+// smallest value, which is the placement the reads rely on, so no NULLS clause
+// is needed for these indexes to apply.
+func TestMigrations_CreatedAtReadsUseFullIndexesSQLite(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	tests := []struct {
+		name        string
+		query       string
+		wantIndexes []string // any one of these
+	}{
+		{
+			name: "valid typed connection keeps undated rows",
+			query: `SELECT uri FROM record
+				WHERE collection = 'app.gainforest.ac.audio' AND validation_status = 'valid'
+				ORDER BY record_created_at DESC, uri DESC LIMIT 25`,
+			wantIndexes: []string{"idx_record_collection_created_at_valid"},
+		},
+		{
+			name: "unvalidated typed connection ascending",
+			query: `SELECT uri FROM record
+				WHERE collection = 'app.gainforest.ac.audio'
+				ORDER BY record_created_at ASC, uri ASC LIMIT 25`,
+			wantIndexes: []string{"idx_record_collection_created_at"},
+		},
+		{
+			name: "did-filtered typed connection",
+			query: `SELECT uri FROM record
+				WHERE collection = 'app.gainforest.ac.audio' AND did = 'did:plc:a'
+				ORDER BY record_created_at DESC, uri DESC LIMIT 25`,
+			wantIndexes: []string{"idx_record_author_collection_created_at"},
+		},
+		{
+			name: "recordTimeline excludes undated rows",
+			query: `SELECT uri FROM record
+				WHERE record_created_at IS NOT NULL AND collection IN ('app.gainforest.ac.audio')
+				ORDER BY record_created_at DESC, uri DESC LIMIT 25`,
+			// The retained partial index also fits this query.
+			wantIndexes: []string{"idx_record_timeline_collection_created", "idx_record_collection_created_at"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := sqliteQueryPlan(ctx, t, exec, tt.query)
+			usesWanted := false
+			for _, index := range tt.wantIndexes {
+				usesWanted = usesWanted || strings.Contains(plan, index)
+			}
+			if !usesWanted {
+				t.Fatalf("plan does not use any of %v:\n%s", tt.wantIndexes, plan)
+			}
+			if strings.Contains(plan, "TEMP B-TREE") {
+				t.Fatalf("plan sorts instead of walking the index:\n%s", plan)
+			}
+		})
+	}
+}
+
+// The full indexes must not carry the partial NOT NULL predicate that hid
+// undated rows, and the valid variant must stay valid-only.
+func TestMigrations_018CreatedAtIndexesIncludeUndatedRowsSQLite(t *testing.T) {
+	exec := newTestExecutor(t)
+	ctx := context.Background()
+	if err := migrations.Run(ctx, exec); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	definition := func(name string) string {
+		t.Helper()
+		var sqlText string
+		if err := exec.DB().QueryRowContext(ctx,
+			`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`, name,
+		).Scan(&sqlText); err != nil {
+			t.Fatalf("read %s definition: %v", name, err)
+		}
+		return sqlText
+	}
+	all := definition("idx_record_collection_created_at")
+	if strings.Contains(all, "WHERE") {
+		t.Fatalf("idx_record_collection_created_at is partial, so it would hide undated rows:\n%s", all)
+	}
+	valid := definition("idx_record_collection_created_at_valid")
+	if !strings.Contains(valid, "validation_status = 'valid'") || strings.Contains(valid, "IS NOT NULL") {
+		t.Fatalf("idx_record_collection_created_at_valid must be valid-only and keep undated rows:\n%s", valid)
 	}
 }
 
@@ -1164,8 +1287,8 @@ func TestMigrations_017ValidTimelineIndexPostgres(t *testing.T) {
 		return oid, definition
 	}
 
-	if err := migrations.Run(ctx, exec); err != nil {
-		t.Fatalf("Run() error = %v", err)
+	if err := migrations.RunThrough(ctx, exec, "017"); err != nil {
+		t.Fatalf("RunThrough(017) error = %v", err)
 	}
 	assertPostgresIndexValid(ctx, t, exec, "idx_record_timeline_valid")
 	if _, definition := index(); !strings.Contains(definition, "validation_status = 'valid'") || !strings.Contains(definition, "record_created_at IS NOT NULL") {
@@ -1181,8 +1304,8 @@ func TestMigrations_017ValidTimelineIndexPostgres(t *testing.T) {
 		t.Fatalf("out-of-band CREATE INDEX CONCURRENTLY: %v", err)
 	}
 	prebuilt, _ := index()
-	if err := migrations.Run(ctx, exec); err != nil {
-		t.Fatalf("Run() over a prebuilt index error = %v", err)
+	if err := migrations.RunThrough(ctx, exec, "017"); err != nil {
+		t.Fatalf("RunThrough(017) over a prebuilt index error = %v", err)
 	}
 	if kept, _ := index(); kept != prebuilt {
 		t.Fatalf("migration 017 replaced the prebuilt index (oid %d -> %d)", prebuilt, kept)

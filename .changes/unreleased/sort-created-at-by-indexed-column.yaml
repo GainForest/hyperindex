@@ -1,4 +1,26 @@
 kind: fixed
-body: 'Speed up `sortBy: createdAt` and `where: { createdAt: ... }` on typed collection queries. For collections whose Lexicon makes top-level `createdAt` a required datetime, these reads now use the indexed `record_created_at` column instead of sorting every valid row by `json->>''createdAt''`, which took seconds on large collections such as `app.gainforest.ac.audio`. Ordering now follows the actual timestamp rather than the raw string, so mixed offsets and precisions sort correctly. A record whose `createdAt` is later edited keeps its first-seen position, matching `recordTimeline`. Filters with a full datetime compare at millisecond precision; date-only values such as `"2026-01-01"` and `contains`/`startsWith` keep the previous string comparison. Existing `createdAt` cursors keep working; a cursor whose value is not a valid datetime now returns an error asking the client to restart pagination.'
+body: |-
+  Speed up `sortBy: createdAt` on typed collection queries, including deep pages. For every collection whose Lexicon declares top-level `createdAt` as a datetime, required or optional, valid-only or unvalidated, the sort now uses an indexed column instead of sorting every row by `json->>'createdAt'`, which took seconds on large collections such as `app.gainforest.ac.audio`.
+
+    What changes for API consumers:
+    - `after` and `before` cursors are index bounds, so a page deep into a collection costs about what a first page does instead of rescanning everything before the cursor. `recordTimeline` pagination gets the same bound and now orders by the timestamp instead of its text form.
+    - Ordering follows the actual timestamp (normalized to UTC, millisecond precision) rather than the raw string, so mixed offsets and precisions sort correctly.
+    - Records whose `createdAt` is missing or not a valid datetime stay in the results and sort as the oldest: last with `sortDirection: DESC`, first with `ASC`, ordered by `uri` among themselves. Previously they came first on PostgreSQL for unvalidated `DESC` reads, and valid-only reads of a required datetime left them out.
+    - Paging works across that boundary, existing cursors keep working, and a cursor whose value is not a valid datetime returns an error asking the client to restart pagination.
+    - A record whose `createdAt` is later edited keeps its first-seen position, matching `recordTimeline`.
+    - When `createdAt` is a required datetime and typed reads are valid-only (the default), full-datetime `where: { createdAt: ... }` filters use the same column at millisecond precision. Date-only values such as `"2026-01-01"` and `contains`/`startsWith` keep the previous string comparison.
+    - A selective `where` filter on another field, such as a JSON field few records have, can still make the database walk much of the collection to find enough matches.
+
+    What operators need to know:
+    - Migration 018 adds `idx_record_collection_created_at` and `idx_record_collection_created_at_valid`, which also cover records without a `createdAt`, plus `idx_record_author_collection_created_at` for `where: { did: ... }` reads. Migration 019 drops the hand-made `idx_record_collection_json_created` if a deployment created it.
+    - On PostgreSQL both run outside a transaction with `CREATE/DROP INDEX CONCURRENTLY`, so writes to `record` continue during the builds, and a restart finishes an interrupted migration.
+    - Migrations run before the server starts listening. On a very large `record` table the three builds can outlast a deploy health check (240 seconds in `railway.toml`). A build killed that way leaves an INVALID index, and startup then stops until you run `DROP INDEX CONCURRENTLY <name>;` (the error names the index) and restart.
+    - For large tables, pre-build the indexes out of band before deploying. Use exactly these definitions, because `IF NOT EXISTS` keeps any existing index with the same name and a different definition would be kept silently, leaving queries to sort:
+      - `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_record_collection_created_at ON record (collection, record_created_at DESC NULLS LAST, uri DESC);`
+      - `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_record_collection_created_at_valid ON record (collection, record_created_at DESC NULLS LAST, uri DESC) WHERE validation_status = 'valid';`
+      - `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_record_author_collection_created_at ON record (did, collection, record_created_at DESC NULLS LAST, uri DESC);`
+    - Check `SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass('<name>')` returns true for each before deploying.
+    - Rolling back the application does not run down migrations, and the 019 down migration cannot restore the dropped stopgap index because its definition is unknown. The new indexes are harmless to the previous version. If you roll back and relied on the stopgap for the old JSON `createdAt` sort, recreate it yourself.
+    - The older partial indexes `idx_record_timeline_collection_created` and `idx_record_timeline_valid` are retained because PostgreSQL readers outside Hyperindex, such as the GainForest feed service, order `NULLS FIRST` and depend on them. Once those readers use `ORDER BY record_created_at DESC NULLS LAST, uri DESC`, which the new indexes serve and plain `DESC` does not, the old indexes can be dropped in a follow-up.
 custom:
   Affects: user

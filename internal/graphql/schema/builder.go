@@ -1534,6 +1534,8 @@ func sortFieldValueForRecord(rec *repositories.Record, value interface{}, sortOp
 		return rec.IndexedAt.UTC().Format(time.RFC3339Nano)
 	}
 	if sortOpt.Field == repositories.SortFieldRecordCreatedAt {
+		// Empty for a record without record_created_at, which marks the cursor
+		// as sitting on the NULL rows.
 		return rec.RecordCreatedAt
 	}
 	if directSortCols[sortOpt.Field] {
@@ -1613,8 +1615,11 @@ func (b *Builder) resolveRecordConnection(
 		}
 		sortOpt = &repositories.SortOption{Field: sortByArg, Direction: direction}
 	}
-	if usesRecordCreatedAtColumn(b.registry, collection, validOnly) {
-		mapCreatedAtToColumn(sortOpt, filters)
+	if sortsByRecordCreatedAtColumn(b.registry, collection) {
+		mapCreatedAtSortToColumn(sortOpt)
+	}
+	if filtersByRecordCreatedAtColumn(b.registry, collection, validOnly) {
+		mapCreatedAtFiltersToColumn(filters)
 	}
 
 	// Backward pagination path

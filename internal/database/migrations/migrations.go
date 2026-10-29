@@ -155,9 +155,21 @@ func getAppliedMigrations(ctx context.Context, exec database.Executor) (map[stri
 	return applied, rows.Err()
 }
 
-// Migration SQL and version bookkeeping are atomic. PostgreSQL migrations
-// therefore cannot use CREATE/DROP INDEX CONCURRENTLY, including on rollback.
+// Migration SQL and version bookkeeping are atomic, so transactional migrations
+// cannot use CREATE/DROP INDEX CONCURRENTLY, on apply or rollback. A file that
+// needs them starts with noTransactionMarker and runs outside a transaction.
 func applyMigration(ctx context.Context, exec database.Executor, migration Migration) error {
+	if runsOutsideTransaction(migration.UpSQL) {
+		if err := execStatementsOutsideTransaction(ctx, exec, migration.UpSQL); err != nil {
+			return err
+		}
+		query := fmt.Sprintf("INSERT INTO schema_migrations (version) VALUES (%s)", exec.Placeholder(1))
+		if _, err := exec.DB().ExecContext(ctx, query, exec.ConvertParams([]database.Value{database.Text(migration.Version)})...); err != nil {
+			return fmt.Errorf("record migration version: %w", err)
+		}
+		return nil
+	}
+
 	tx, err := exec.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin migration transaction: %w", err)
@@ -178,6 +190,17 @@ func applyMigration(ctx context.Context, exec database.Executor, migration Migra
 }
 
 func rollbackMigration(ctx context.Context, exec database.Executor, migration Migration) error {
+	if runsOutsideTransaction(migration.DownSQL) {
+		if err := execStatementsOutsideTransaction(ctx, exec, migration.DownSQL); err != nil {
+			return err
+		}
+		query := fmt.Sprintf("DELETE FROM schema_migrations WHERE version = %s", exec.Placeholder(1))
+		if _, err := exec.DB().ExecContext(ctx, query, exec.ConvertParams([]database.Value{database.Text(migration.Version)})...); err != nil {
+			return fmt.Errorf("remove migration version: %w", err)
+		}
+		return nil
+	}
+
 	tx, err := exec.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin rollback transaction: %w", err)
@@ -195,6 +218,52 @@ func rollbackMigration(ctx context.Context, exec database.Executor, migration Mi
 		return fmt.Errorf("commit rollback transaction: %w", err)
 	}
 	return nil
+}
+
+// execStatementsOutsideTransaction runs a noTransactionMarker migration one
+// statement at a time. Each statement must tolerate being run twice, because a
+// failure part-way through leaves earlier statements applied and the version
+// unrecorded, so the next startup runs the file again.
+//
+// A CREATE INDEX CONCURRENTLY that fails or is cancelled leaves an invalid
+// index behind under its name, and IF NOT EXISTS would then accept it and let
+// the migration finish with no usable index. Refuse it instead; the index may
+// also belong to a build that is still running.
+func execStatementsOutsideTransaction(ctx context.Context, exec database.Executor, migrationSQL string) error {
+	statements := splitStatements(migrationSQL)
+	if exec.Dialect() == database.PostgreSQL {
+		for _, name := range concurrentIndexNames(statements) {
+			if err := rejectInvalidIndex(ctx, exec, name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, statement := range statements {
+		if _, err := exec.DB().ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("execute migration statement %q: %w", firstLine(statement), err)
+		}
+	}
+	return nil
+}
+
+func rejectInvalidIndex(ctx context.Context, exec database.Executor, name string) error {
+	var invalid bool
+	err := exec.DB().QueryRowContext(ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_index WHERE indexrelid = to_regclass($1) AND NOT indisvalid)",
+		name).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf("check index %s validity: %w", name, err)
+	}
+	if invalid {
+		return fmt.Errorf("index %s exists but is invalid: a CREATE INDEX CONCURRENTLY build failed, was cancelled, or is still running. "+
+			"If no build is running, run DROP INDEX CONCURRENTLY %s; and restart so the migration rebuilds it", name, name)
+	}
+	return nil
+}
+
+func firstLine(statement string) string {
+	line, _, _ := strings.Cut(statement, "\n")
+	return strings.TrimSpace(line)
 }
 
 const recordCreatedAtBackfillBatchSize = 500

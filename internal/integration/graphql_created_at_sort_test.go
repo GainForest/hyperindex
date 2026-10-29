@@ -138,6 +138,160 @@ func TestCreatedAtColumn_WhereFilters(t *testing.T) {
 	assertStrings(t, "date-only range", got, []string{timelineURI2, timelineURI3})
 }
 
+// optionalCreatedAtLexiconJSON declares createdAt as an optional datetime, so
+// records can be valid without one.
+const optionalCreatedAtLexiconJSON = `{
+	"lexicon": 1,
+	"id": "test.sparse",
+	"defs": {
+		"main": {
+			"type": "record",
+			"key": "tid",
+			"record": {
+				"type": "object",
+				"properties": {
+					"title": {"type": "string"},
+					"createdAt": {"type": "string", "format": "datetime"}
+				}
+			}
+		}
+	}
+}`
+
+// sparseURIs maps record names to URIs. s3 has no createdAt and s4 has one that
+// is not a datetime, so neither gets a record_created_at.
+var sparseURIs = map[string]string{
+	"s1": "at://did:plc:t/test.sparse/s1",
+	"s2": "at://did:plc:t/test.sparse/s2",
+	"s3": "at://did:plc:t/test.sparse/s3",
+	"s4": "at://did:plc:t/test.sparse/s4",
+}
+
+func setupSparseCreatedAtEnv(t *testing.T, requireValid bool) *filterTestEnv {
+	t.Helper()
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	registry := lexicon.NewRegistry()
+	lex, err := lexicon.Parse(optionalCreatedAtLexiconJSON)
+	if err != nil {
+		t.Fatalf("parse lexicon: %v", err)
+	}
+	registry.Register(lex)
+
+	records := []*repositories.Record{
+		{URI: sparseURIs["s1"], CID: "c1", DID: "did:plc:t", Collection: "test.sparse", RKey: "s1", JSON: `{"title":"one","createdAt":"2026-03-01T00:00:00Z"}`},
+		{URI: sparseURIs["s2"], CID: "c2", DID: "did:plc:t", Collection: "test.sparse", RKey: "s2", JSON: `{"title":"two","createdAt":"2026-03-02T00:00:00Z"}`},
+		{URI: sparseURIs["s3"], CID: "c3", DID: "did:plc:t", Collection: "test.sparse", RKey: "s3", JSON: `{"title":"three"}`},
+		{URI: sparseURIs["s4"], CID: "c4", DID: "did:plc:t", Collection: "test.sparse", RKey: "s4", JSON: `{"title":"four","createdAt":"not-a-date"}`},
+	}
+	if err := db.Records.BatchInsert(ctx, records); err != nil {
+		t.Fatalf("insert records: %v", err)
+	}
+	if requireValid {
+		markRecordsValid(t, ctx, db, records)
+	}
+
+	gqlSchema, err := schema.NewBuilder(registry, schema.WithTypedRecordsRequireValid(requireValid)).Build()
+	if err != nil {
+		t.Fatalf("build schema: %v", err)
+	}
+	repoCtx := resolver.WithRepositories(ctx, &resolver.Repositories{Records: db.Records, Actors: db.Actors, Lexicons: db.Lexicons})
+	return &filterTestEnv{db: db, schema: gqlSchema, ctx: repoCtx}
+}
+
+func sparseConnection(t *testing.T, result *graphql.Result) (uris []string, startCursor, endCursor string) {
+	t.Helper()
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL errors: %v", result.Errors)
+	}
+	conn := result.Data.(map[string]interface{})["testSparse"].(map[string]interface{})
+	for _, edge := range conn["edges"].([]interface{}) {
+		uris = append(uris, getNodeField(t, edge, "uri").(string))
+	}
+	pageInfo := conn["pageInfo"].(map[string]interface{})
+	startCursor, _ = pageInfo["startCursor"].(string)
+	endCursor, _ = pageInfo["endCursor"].(string)
+	return uris, startCursor, endCursor
+}
+
+// Whenever the Lexicon declares createdAt as a datetime, sorting uses
+// record_created_at, required or not and validated or not. Records without a
+// parseable createdAt stay in the connection as the oldest, and Relay cursors
+// taken on them keep paging in both directions.
+func TestCreatedAtColumn_OptionalCreatedAtKeepsUndatedRecords(t *testing.T) {
+	for _, mode := range []struct {
+		name         string
+		requireValid bool
+	}{
+		{"validated reads", true},
+		{"unvalidated reads", false},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			env := setupSparseCreatedAtEnv(t, mode.requireValid)
+			s1, s2, s3, s4 := sparseURIs["s1"], sparseURIs["s2"], sparseURIs["s3"], sparseURIs["s4"]
+
+			tests := []struct {
+				direction string
+				want      []string
+			}{
+				// Undated records are the oldest: last when DESC, first when ASC,
+				// ordered by uri in the sort direction.
+				{"DESC", []string{s2, s1, s4, s3}},
+				{"ASC", []string{s3, s4, s1, s2}},
+			}
+			for _, tt := range tests {
+				t.Run(tt.direction, func(t *testing.T) {
+					for _, pageSize := range []int{1, 3} {
+						var forward []string
+						after := ""
+						for i := 0; i < 10; i++ {
+							afterArg := ""
+							if after != "" {
+								afterArg = fmt.Sprintf(`, after: %q`, after)
+							}
+							page, _, end := sparseConnection(t, env.runQuery(fmt.Sprintf(`{ testSparse(sortBy: createdAt, sortDirection: %s, first: %d%s) {
+								edges { node { uri } } pageInfo { startCursor endCursor } } }`, tt.direction, pageSize, afterArg)))
+							if len(page) == 0 {
+								break
+							}
+							forward = append(forward, page...)
+							after = end
+						}
+						assertStrings(t, fmt.Sprintf("forward pages of %d", pageSize), forward, tt.want)
+
+						var backward []string
+						before := ""
+						for i := 0; i < 10; i++ {
+							beforeArg := ""
+							if before != "" {
+								beforeArg = fmt.Sprintf(`, before: %q`, before)
+							}
+							page, start, _ := sparseConnection(t, env.runQuery(fmt.Sprintf(`{ testSparse(sortBy: createdAt, sortDirection: %s, last: %d%s) {
+								edges { node { uri } } pageInfo { startCursor endCursor } } }`, tt.direction, pageSize, beforeArg)))
+							if len(page) == 0 {
+								break
+							}
+							backward = append(append([]string{}, page...), backward...)
+							before = start
+						}
+						assertStrings(t, fmt.Sprintf("backward pages of %d", pageSize), backward, tt.want)
+					}
+				})
+			}
+		})
+	}
+}
+
+// A cursor from before this change that sat on a record with no createdAt
+// carried an empty value. It keeps working as a cursor on the undated rows.
+func TestCreatedAtColumn_EmptyCursorValueContinuesAmongUndatedRecords(t *testing.T) {
+	env := setupSparseCreatedAtEnv(t, true)
+	got, _, _ := sparseConnection(t, env.runQuery(fmt.Sprintf(`{ testSparse(sortBy: createdAt, sortDirection: DESC, first: 5, after: %q) {
+		edges { node { uri } } pageInfo { startCursor endCursor } } }`, legacyCursor("", sparseURIs["s4"]))))
+	assertStrings(t, "after undated s4", got, []string{sparseURIs["s3"]})
+}
+
 func assertStrings(t *testing.T, label string, got, want []string) {
 	t.Helper()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
