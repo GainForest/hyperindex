@@ -1,4 +1,0 @@
-kind: fixed
-body: Startup no longer fails when the saved Lexicon set contains query, procedure, subscription, or permission-set Lexicons. These non-record documents are skipped with a warning because they are never used for indexing or record validation; malformed documents and unknown main definition types still fail startup.
-custom:
-  Affects: operator
