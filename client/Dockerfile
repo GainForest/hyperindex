@@ -6,10 +6,13 @@ WORKDIR /app
 # Accept build-time env vars for Next.js (NEXT_PUBLIC_* are inlined at build time)
 # NEXT_PUBLIC_HYPERINDEX_URL: public/client-facing URL baked into the JS bundle
 # NEXT_PUBLIC_ADMIN_DIDS: client-side admin DID list used for UI gating
+# NEXT_PUBLIC_CLIENT_URL: public client origin used as the OAuth client_id base
 ARG NEXT_PUBLIC_HYPERINDEX_URL
 ARG NEXT_PUBLIC_ADMIN_DIDS
+ARG NEXT_PUBLIC_CLIENT_URL
 ENV NEXT_PUBLIC_HYPERINDEX_URL=$NEXT_PUBLIC_HYPERINDEX_URL
 ENV NEXT_PUBLIC_ADMIN_DIDS=$NEXT_PUBLIC_ADMIN_DIDS
+ENV NEXT_PUBLIC_CLIENT_URL=$NEXT_PUBLIC_CLIENT_URL
 
 # Copy package files
 COPY package.json package-lock.json* ./
